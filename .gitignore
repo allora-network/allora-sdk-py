@@ -1,0 +1,6 @@
+.tox/
+.omega.json
+*.sublime-project
+*.sublime-workspace
+*.pyc
+*.egg-info
