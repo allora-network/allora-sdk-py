@@ -1,6 +1,10 @@
 .tox/
+.mypy_cache/
 .omega.json
 *.sublime-project
 *.sublime-workspace
 *.pyc
 *.egg-info
+.DS_Store
+build/
+dist/

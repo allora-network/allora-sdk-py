@@ -5,10 +5,14 @@ env_list = ["lint", "type", "3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
 description = "run unit tests"
 deps = [
     "pytest>=8",
+    "pytest-asyncio",
     "pytest-sugar",
-    "-r{toxinidir}/requirements.txt"
+    "fastapi",
+    "starlette",
+    "httpx",
+    "-r{toxinidir}/pyproject.toml"
 ]
-commands = [["pytest", { replace = "posargs", default = ["tests"], extend = true }]]
+commands = "pytest" #[["pytest", { replace = "posargs", default = ["tests"], extend = true }]]
 
 [env.lint]
 description = "run linters"

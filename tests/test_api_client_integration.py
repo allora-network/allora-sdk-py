@@ -1,6 +1,6 @@
-import unittest
-import os
-from v2.api_client import (
+import pytest
+import pytest_asyncio
+from allora_sdk.v2.api_client import (
     AlloraAPIClient,
     ChainSlug,
     PricePredictionToken,
@@ -11,73 +11,89 @@ from v2.api_client import (
 
 DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
+@pytest_asyncio.fixture
+def client():
+    return AlloraAPIClient(chain_slug=ChainSlug.TESTNET)
 
-class TestAlloraAPIClientIntegration(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.client = AlloraAPIClient(
-            chain_slug=ChainSlug.TESTNET,
-            api_key=os.environ.get("ALLORA_API_KEY"),
-            base_api_url=os.environ.get("ALLORA_API_URL"),
-        )
+@pytest.mark.asyncio
+async def test_get_all_topics(client):
+    topics = await client.get_all_topics()
 
-    def test_get_all_topics(self):
-        topics = self.client.get_all_topics()
-        self.assertIsInstance(topics, list)
-        self.assertGreater(len(topics), 0)
+    assert isinstance(topics, list)
+    assert len(topics) > 0
 
-        # Check the first topic
-        first_topic = topics[0]
-        self.assertIsInstance(first_topic, AlloraTopic)
-        self.assertIsInstance(first_topic.topic_id, int)
-        self.assertIsInstance(first_topic.topic_name, str)
-        self.assertTrue(first_topic.topic_name)  # Ensure it's not empty
+    topic = topics[0]
+    assert isinstance(topic, AlloraTopic)
+    assert isinstance(topic.topic_id, int)
+    assert isinstance(topic.topic_name, str)
+    assert topic.topic_name, "Topic name should not be empty"
 
-        # Optionally, check other fields if they're always expected to be present
-        # self.assertIsInstance(first_topic.description, str)
-        self.assertIsInstance(first_topic.epoch_length, int)
-        self.assertIsInstance(first_topic.is_active, bool)
+    assert isinstance(topic.epoch_length, int)
+    assert isinstance(topic.ground_truth_lag, int)
+    assert isinstance(topic.worker_submission_window, int)
+    assert isinstance(topic.worker_count, int)
+    assert isinstance(topic.reputer_count, int)
+    assert isinstance(topic.total_staked_allo, float)
+    assert isinstance(topic.total_emissions_allo, float)
 
-    def test_get_inference_by_topic_id(self):
-        topics = self.client.get_all_topics()
-        if not topics:
-            self.skipTest("No topics available for testing")
+    assert isinstance(topic.is_active, bool)
+    if topic.description is not None:
+        assert isinstance(topic.description, str)
 
-        inference = self.client.get_inference_by_topic_id(topics[0].topic_id)
-        self.assertIsInstance(inference, AlloraInference)
-        self.assertIsInstance(inference.signature, str)
-        self.assertTrue(inference.signature)  # Ensure it's not empty
+@pytest.mark.asyncio
+async def test_get_inference_by_topic_id(client):
+    topics = await client.get_all_topics()
+    if not topics:
+        pytest.skip("No topics available for testing")
 
-        # Check inference_data
-        self.assertIsInstance(inference.inference_data.network_inference, str)
-        self.assertIsInstance(
-            inference.inference_data.network_inference_normalized, str
-        )
-        self.assertIsInstance(inference.inference_data.topic_id, str)
-        self.assertIsInstance(inference.inference_data.timestamp, int)
+    inference = await client.get_inference_by_topic_id(topics[0].topic_id)
 
-    def test_get_price_prediction(self):
-        prediction = self.client.get_price_prediction(
-            PricePredictionToken.BTC, PricePredictionTimeframe.EIGHT_HOURS
-        )
-        self.assertIsInstance(prediction, AlloraInference)
-        self.assertIsInstance(prediction.signature, str)
-        self.assertTrue(prediction.signature)  # Ensure it's not empty
+    assert isinstance(inference, AlloraInference)
+    assert isinstance(inference.signature, str)
+    assert inference.signature, "Signature should not be empty"
 
-        # Check inference_data for price prediction
-        self.assertIsInstance(prediction.inference_data.network_inference, str)
-        self.assertIsInstance(
-            prediction.inference_data.network_inference_normalized, str
-        )
-        self.assertIsInstance(prediction.inference_data.topic_id, str)
-        self.assertIsInstance(prediction.inference_data.timestamp, int)
+    data = inference.inference_data
+    assert isinstance(data.network_inference, str)
+    assert isinstance(data.network_inference_normalized, str)
+    assert isinstance(data.topic_id, str)
+    assert isinstance(data.timestamp, int)
 
-        # Additional checks specific to price prediction
-        self.assertIn(
-            "confidence_interval_percentiles", prediction.inference_data.__dict__
-        )
-        self.assertIn("confidence_interval_values", prediction.inference_data.__dict__)
+    assert isinstance(data.confidence_interval_percentiles, list)
+    assert isinstance(data.confidence_interval_values, list)
+    assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
 
+@pytest.mark.asyncio
+async def test_get_price_prediction(client):
+    prediction = await client.get_price_prediction(
+        PricePredictionToken.BTC,
+        PricePredictionTimeframe.EIGHT_HOURS
+    )
 
-if __name__ == "__main__":
-    unittest.main()
+    assert isinstance(prediction, AlloraInference)
+    assert isinstance(prediction.signature, str)
+    assert prediction.signature, "Signature should not be empty"
+
+    data = prediction.inference_data
+    assert isinstance(data.network_inference, str)
+    assert isinstance(data.network_inference_normalized, str)
+    assert isinstance(data.topic_id, str)
+    assert isinstance(data.timestamp, int)
+
+    assert isinstance(data.confidence_interval_percentiles, list)
+    assert all(isinstance(p, str) for p in data.confidence_interval_percentiles)
+    assert isinstance(data.confidence_interval_values, list)
+    assert all(isinstance(v, str) for v in data.confidence_interval_values)
+
+    assert isinstance(data.confidence_interval_percentiles_normalized, list)
+    assert isinstance(data.confidence_interval_values_normalized, list)
+    assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
+
+@pytest.mark.asyncio
+async def test_get_price_prediction_different_assets(client):
+    for token in [PricePredictionToken.BTC, PricePredictionToken.ETH]:
+        for timeframe in [PricePredictionTimeframe.FIVE_MIN, PricePredictionTimeframe.EIGHT_HOURS]:
+            prediction = await client.get_price_prediction(token, timeframe)
+            assert isinstance(prediction, AlloraInference)
+            assert prediction.inference_data.network_inference.isdigit()
+            assert float(prediction.inference_data.network_inference_normalized) > 0
+
