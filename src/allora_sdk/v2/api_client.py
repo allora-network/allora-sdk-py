@@ -14,12 +14,12 @@ class ChainID(str, Enum):
     MAINNET = "allora-mainnet-1"
 
 
-class PricePredictionToken(str, Enum):
+class PriceInferenceToken(str, Enum):
     BTC = "BTC"
     ETH = "ETH"
 
 
-class PricePredictionTimeframe(str, Enum):
+class PriceInferenceTimeframe(str, Enum):
     FIVE_MIN = "5m"
     EIGHT_HOURS = "8h"
 
@@ -140,20 +140,20 @@ class AlloraAPIClient:
         )
 
         if not response.data.inference_data:
-            raise ValueError("Failed to fetch price prediction")
+            raise ValueError("Failed to fetch price inference")
         return response.data
 
-    async def get_price_prediction(
+    async def get_price_inference(
         self,
-        asset: PricePredictionToken,
-        timeframe: PricePredictionTimeframe,
+        asset: PriceInferenceToken,
+        timeframe: PriceInferenceTimeframe,
         signature_format: SignatureFormat = SignatureFormat.ETHEREUM_SEPOLIA,
     ) -> AlloraInference:
         """
-        Fetches a price prediction for a specific asset and timeframe from the Allora API.
+        Fetches a price inference for a specific asset and timeframe from the Allora API.
 
-        :param asset: The asset to get price prediction for
-        :param timeframe: The timeframe to get price prediction for
+        :param asset: The asset to get price inference for
+        :param timeframe: The timeframe to get price inference for
         :param signature_format: The signature format to use
         :return: The inference data
         :raises: requests.RequestException if the API request fails
@@ -164,7 +164,7 @@ class AlloraAPIClient:
         )
 
         if not response.data.inference_data:
-            raise ValueError("Failed to fetch price prediction")
+            raise ValueError("Failed to fetch price inference")
         return response.data
 
     def get_request_url(self, endpoint: str) -> str:

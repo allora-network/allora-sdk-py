@@ -3,8 +3,8 @@ import pytest_asyncio
 from allora_sdk.v2.api_client import (
     AlloraAPIClient,
     ChainSlug,
-    PricePredictionToken,
-    PricePredictionTimeframe,
+    PriceInferenceToken,
+    PriceInferenceTimeframe,
     AlloraTopic,
     AlloraInference,
 )
@@ -63,17 +63,17 @@ async def test_get_inference_by_topic_id(client):
     assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
 
 @pytest.mark.asyncio
-async def test_get_price_prediction(client):
-    prediction = await client.get_price_prediction(
-        PricePredictionToken.BTC,
-        PricePredictionTimeframe.EIGHT_HOURS
+async def test_get_price_inference(client):
+    inference = await client.get_price_inference(
+        PriceInferenceToken.BTC,
+        PriceInferenceTimeframe.EIGHT_HOURS
     )
 
-    assert isinstance(prediction, AlloraInference)
-    assert isinstance(prediction.signature, str)
-    assert prediction.signature, "Signature should not be empty"
+    assert isinstance(inference, AlloraInference)
+    assert isinstance(inference.signature, str)
+    assert inference.signature, "Signature should not be empty"
 
-    data = prediction.inference_data
+    data = inference.inference_data
     assert isinstance(data.network_inference, str)
     assert isinstance(data.network_inference_normalized, str)
     assert isinstance(data.topic_id, str)
@@ -89,11 +89,11 @@ async def test_get_price_prediction(client):
     assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
 
 @pytest.mark.asyncio
-async def test_get_price_prediction_different_assets(client):
-    for token in [PricePredictionToken.BTC, PricePredictionToken.ETH]:
-        for timeframe in [PricePredictionTimeframe.FIVE_MIN, PricePredictionTimeframe.EIGHT_HOURS]:
-            prediction = await client.get_price_prediction(token, timeframe)
-            assert isinstance(prediction, AlloraInference)
-            assert prediction.inference_data.network_inference.isdigit()
-            assert float(prediction.inference_data.network_inference_normalized) > 0
+async def test_get_price_inference_different_assets(client):
+    for token in [PriceInferenceToken.BTC, PriceInferenceToken.ETH]:
+        for timeframe in [PriceInferenceTimeframe.FIVE_MIN, PriceInferenceTimeframe.EIGHT_HOURS]:
+            inference = await client.get_price_inference(token, timeframe)
+            assert isinstance(inference, AlloraInference)
+            assert inference.inference_data.network_inference.isdigit()
+            assert float(inference.inference_data.network_inference_normalized) > 0
 
