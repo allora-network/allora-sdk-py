@@ -1,6 +1,6 @@
 [project]
 name = "allora_sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
     "aiohttp",
     "annotated-types==0.7.0",
