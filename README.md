@@ -20,8 +20,8 @@ tox
 from allora_sdk.v2.api_client import (
     AlloraAPIClient,
     ChainSlug,
-    PricePredictionToken,
-    PricePredictionTimeframe,
+    PriceInferenceToken,
+    PriceInferenceTimeframe,
     AlloraTopic,
     AlloraInference,
 )
@@ -72,7 +72,7 @@ result = await client.get_inference_by_topic_id(topics[0].topic_id)
 print(f'{topics[0].topic_name} price inference: {result.inference_data.network_inference_normalized}')
 
 # Fetch inferences by asset and timeframe
-result = await client.get_price_prediction(PricePredictionToken.BTC, PricePredictionTimeframe.EIGHT_HOURS)
+result = await client.get_price_inference(PriceInferenceToken.BTC, PriceInferenceTimeframe.EIGHT_HOURS)
 print(f'{topics[0].topic_name} price inference: {result.inference_data.network_inference_normalized}')
 ```
 
