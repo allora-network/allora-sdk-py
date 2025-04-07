@@ -113,7 +113,10 @@ class AlloraAPIClient:
         continuation_token: Optional[str] = None
 
         while True:
-            response = await self.fetch_api_response(f"allora/{self.chain_id}/topics", TopicsResponse)
+            url_str = f"allora/{self.chain_id}/topics"
+            if continuation_token:
+                url_str += f"?continuation_token={continuation_token}"
+            response = await self.fetch_api_response(url_str, TopicsResponse)
             all_topics.extend(response.data.topics)
             continuation_token = response.data.continuation_token
             if not continuation_token:
