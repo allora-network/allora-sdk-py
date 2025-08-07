@@ -1,4 +1,5 @@
 .tox/
+.venv/
 .mypy_cache/
 .omega.json
 *.sublime-project

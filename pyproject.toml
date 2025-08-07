@@ -2,34 +2,39 @@
 name = "allora_sdk"
 version = "0.1.0"
 dependencies = [
-    "aiohttp",
-    "annotated-types==0.7.0",
-    "cachetools==5.5.0",
-    "certifi==2024.12.14",
-    "chardet==5.2.0",
-    "charset-normalizer==3.4.1",
-    "colorama==0.4.6",
-    "distlib==0.3.9",
-    "filelock==3.16.1",
-    "idna==3.10",
-    "packaging==24.2",
-    "platformdirs==4.3.6",
-    "pluggy==1.5.0",
-    "pydantic==2.10.4",
-    "pydantic_core==2.27.2",
-    "pyproject-api==1.8.0",
-    "requests==2.32.3",
-    "tox==4.23.2",
-    "typing_extensions==4.12.2",
-    "urllib3==2.3.0",
-    "virtualenv==20.28.1",
+    "aiohttp ~= 3.12.15",
+    "annotated-types ~= 0.7.0",
+    "cachetools ~= 5.5.0",
+    "certifi ~= 2024.12.14",
+    "chardet ~= 5.2.0",
+    "charset-normalizer ~= 3.4.1",
+    "colorama ~= 0.4.6",
+    "distlib ~= 0.3.9",
+    "filelock ~= 3.16.1",
+    "idna ~= 3.10",
+    "packaging ~= 24.2",
+    "platformdirs ~= 4.3.6",
+    "pluggy ~= 1.5.0",
+    "pydantic ~= 2.10.4",
+    "pydantic_core ~= 2.27.2",
+    "pyproject-api ~= 1.8.0",
+    "requests ~= 2.32.3",
+    "tox ~= 4.23.2",
+    "typing_extensions ~= 4.12.2",
+    "urllib3 ~= 2.3.0",
+    "cosmpy>=0.11.1",
+    "websockets>=15.0.1",
+    "grpclib>=0.4.8",
+    "betterproto==2.0.0b7",
+    "cosmos>=0.1.93.3",
 ]
 authors = [
-    { name="spooktheducks", email="spooktheducks@protonmail.com" },
+    { name = "spooktheducks", email = "spooktheducks@protonmail.com" },
+    { name = "gh-allora", email = "gregory@alloralabs.xyz" },
 ]
 description = "Allora Network SDK"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",

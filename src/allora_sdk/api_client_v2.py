@@ -28,7 +28,7 @@ class SignatureFormat(str, Enum):
     ETHEREUM_SEPOLIA = "ethereum-11155111"
 
 
-class AlloraTopic(BaseModel):
+class TopicAPI(BaseModel):
     topic_id: int
     topic_name: str
     description: Optional[str] = None
@@ -44,7 +44,7 @@ class AlloraTopic(BaseModel):
     updated_at: str
 
 
-class AlloraInferenceData(BaseModel):
+class InferenceDataAPI3(BaseModel):
     network_inference: str
     network_inference_normalized: str
     confidence_interval_percentiles: List[str]
@@ -92,7 +92,7 @@ class AlloraAPIClient:
         self,
         chain_slug: Optional[ChainSlug] = None,
         api_key: Optional[str] = "UP-8cbc632a67a84ac1b4078661",
-        base_api_url: Optional[str] = "https://api.upshot.xyz/v2",
+        base_api_url: Optional[str] = "https://api.allora.network/v2",
         fetcher: Fetcher = DefaultFetcher(),
     ):
         self.chain_id = (ChainID.TESTNET if chain_slug == ChainSlug.TESTNET else ChainID.MAINNET).value
