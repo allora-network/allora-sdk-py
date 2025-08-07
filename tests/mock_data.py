@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.testclient import TestClient
-from allora_sdk.v2.api_client import Fetcher
+from allora_sdk.api_client import Fetcher
 
 class MockServer:
     def __init__(self):
