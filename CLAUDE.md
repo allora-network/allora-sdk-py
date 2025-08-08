@@ -141,6 +141,7 @@ else:
 
 ```python
 from allora_sdk.protobuf_client.proto.emissions.v9 import EventScoresSet
+from allora_sdk.protobuf_client.client_websocket_events import EventAttributeCondition
 
 # Listen for score events and submit new inferences
 async def on_scores_set(events):
@@ -148,15 +149,24 @@ async def on_scores_set(events):
     for event in events:
         print(f"Topic {event.topic_id} scores updated at block {event.block_height}")
         # Submit new inference for next epoch
-        # await client.transactions.submit_worker_payload(...)
+        # await client.emissions.insert_worker_payload(...)
 
-# Subscribe to typed events
+# Subscribe to typed events (starts WebSocket connection automatically)
 await client.events.subscribe_new_block_events_typed(
     EventScoresSet,
     [EventAttributeCondition("topic_id", "CONTAINS", "13")],
     on_scores_set
 )
+
+# No need to call client.start_event_subscription() - it happens automatically!
 ```
+
+### Event System Design
+
+- **Idiomatic Auto-Start**: First call to any `events.subscribe*()` method automatically starts the WebSocket connection
+- **Persistent Connection**: Connection stays open even if all subscriptions are removed (for performance)
+- **Clean Shutdown**: Call `await client.close()` to properly close WebSocket and gRPC connections
+- **Automatic Reconnection**: WebSocket automatically reconnects on connection loss with exponential backoff
 
 ## API Design Patterns
 

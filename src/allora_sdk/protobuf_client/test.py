@@ -19,8 +19,8 @@ async def main():
     # print(f"balance: {client.get_balance()}")
 
     topic_id = 13
-
-    await client.start_event_subscription()
+    
+    # Note: Event subscription starts automatically on first subscribe call
     
     def handle_untyped_events(events: list):
         print(f"GENERIC HANDLE: Received {len(events)} filtered events")

@@ -350,10 +350,12 @@ class AlloraWebsocketSubscriber:
         
         self.running = True
         await self._connect()
-        
-        # Start the event loop
-        asyncio.create_task(self._event_loop())
-        logger.info("Event subscriber started")
+
+    async def _ensure_started(self):
+        """Ensure the event subscription service is started (idiomatic auto-start)."""
+        if not self.running:
+            logger.info("🚀 Auto-starting event subscription service...")
+            await self.start()
     
     async def stop(self):
         """Stop the event subscription service."""
@@ -387,6 +389,9 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Auto-start the event subscription service if not already running
+        await self._ensure_started()
+        
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"sub_{self._subscription_id_counter}"
@@ -776,6 +781,9 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Auto-start the event subscription service if not already running
+        await self._ensure_started()
+        
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"block_events_{self._subscription_id_counter}"
@@ -828,6 +836,9 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Auto-start the event subscription service if not already running
+        await self._ensure_started()
+        
         logger.info(f"🔧 Creating typed subscription for {event_class}")
         
         if not subscription_id:
