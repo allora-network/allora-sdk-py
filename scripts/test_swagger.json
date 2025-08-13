@@ -1,0 +1,73 @@
+{
+  "paths": {
+    "/emissions/v9/reputers_stakes/{topicId}": {
+      "get": {
+        "operationId": "QueryService_GetMultiReputerStakeInTopic",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/emissionsv9GetMultiReputerStakeInTopicResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "topicId",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "format": "uint64"
+          },
+          {
+            "name": "addresses",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "QueryService"
+        ]
+      }
+    },
+    "/emissions/v9/params": {
+      "get": {
+        "operationId": "QueryService_GetParams",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/emissionsv9GetParamsResponse"
+            }
+          }
+        },
+        "parameters": [],
+        "tags": [
+          "QueryService"
+        ]
+      }
+    },
+    "/mint/v5/params": {
+      "get": {
+        "operationId": "QueryService_GetParams",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/mintv5GetParamsResponse"
+            }
+          }
+        },
+        "parameters": [],
+        "tags": [
+          "QueryService"
+        ]
+      }
+    }
+  }
+}

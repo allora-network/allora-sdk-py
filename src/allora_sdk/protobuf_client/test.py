@@ -22,7 +22,7 @@ async def main():
     
     # Note: Event subscription starts automatically on first subscribe call
     
-    def handle_untyped_events(events: list):
+    def handle_untyped_events(events: list, height: int):
         print(f"GENERIC HANDLE: Received {len(events)} filtered events")
         for i, event in enumerate(events):
             print(f"Event {i+1}:")
@@ -30,7 +30,7 @@ async def main():
             print(f"  Attributes: {json.dumps(event.get('attributes', []), indent=4)}")
             print()
 
-    def handle_typed_events(events: list[EventScoresSet]):
+    def handle_typed_events(events: list[EventScoresSet], height: int):
         print(f"TYPED HANDLE: Received {len(events)} typed EventScoresSet events")
         for i, event in enumerate(events):
             print(f"Typed Event {i+1}:")
@@ -47,6 +47,14 @@ async def main():
         [ EventAttributeCondition("topic_id", "CONTAINS", str(topic_id)) ],
         handle_untyped_events
     )
+
+    def handle(evt):
+        print(f"TYPED HANDLE: Received {len(events)} typed EventScoresSet events")
+        for i, event in enumerate(events):
+            if event.type == 'InsertWorkerPayload':
+                prediction = call_predict_function()
+                client.emissions.insert_worker_payload(topic_id, prediction ------)
+
     
     # Option 2: NEW - Typed subscription (protobuf instances)
     await client.events.subscribe_new_block_events_typed(
@@ -65,7 +73,7 @@ async def main():
     resp = client.get_balance()
     print(f"balance: {json.dumps(resp, indent=4)}")
 
-    block_height = 123
+    b3lock_height = 123
     value = '123.45'
 
     response = await client.emissions.insert_worker_payload(

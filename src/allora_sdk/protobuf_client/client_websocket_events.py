@@ -10,18 +10,39 @@ import json
 import logging
 import importlib
 import inspect
-from typing import Dict, List, Callable, Any, Literal, Optional, Set, Union, Type, TypeVar
+from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
-from websockets import ClientConnection
-import aiohttp
 import betterproto
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel, Field
+
+@runtime_checkable
+class WebSocketLike(Protocol):
+    """Protocol used to mock real websocket connection in testing."""
+
+    @property
+    def close_code(self) -> int | None: ...
+
+    async def send(
+        self,
+        message: websockets.Data | Iterable[websockets.Data] | AsyncIterable[websockets.Data],
+        text: bool | None = None,
+    ): ...
+    async def recv(self, decode: bool | None = None) -> websockets.Data: ...
+    async def ping(self, data: websockets.Data | None = None) -> Awaitable[float]: ...
+    async def close(self) -> Any: ...
+
+# Abstracts the concrete type of a connection function, used mainly for testing.
+ConnectFn = Callable[[str], Awaitable[WebSocketLike]]
+
+async def default_websocket_connect(url: str) -> WebSocketLike:
+    return await websockets.connect(url, ping_interval=20, ping_timeout=10)
+
+
 
 T = TypeVar('T', bound=betterproto.Message)
-
 
 class NewBlockEventsData(BaseModel):
     height: str
@@ -102,32 +123,29 @@ class EventRegistry:
             self._discover_event_classes()
             logger.info(f"✅ Event registry initialized with {len(self._event_map)} event types")
     
-    def _discover_event_classes(self):
+    def _discover_event_classes(self) -> None:
         """Auto-discover Event classes from emissions protobuf modules."""
-        versions = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9']
+        versions: List[str] = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9']
         
         for version in versions:
             try:
                 module_name = f"allora_sdk.protobuf_client.proto.emissions.{version}"
                 module = importlib.import_module(module_name)
                 
-                # Find all Event classes in the module
-                for name, obj in inspect.getmembers(module):
+                event_classes = [
+                    (name, obj) for name, obj in inspect.getmembers(module)
                     if (inspect.isclass(obj) and 
                         name.startswith('Event') and 
                         hasattr(obj, '__annotations__') and
-                        issubclass(obj, betterproto.Message)):
+                        issubclass(obj, betterproto.Message))
+                ]
+                
+                for name, obj in event_classes:
+                    event_type = f"emissions.{version}.{name}"
+                    self._event_map[event_type] = obj
                         
-                        # Create the full event type name (e.g., "emissions.v9.EventScoresSet")
-                        event_type = f"emissions.{version}.{name}"
-                        self._event_map[event_type] = obj
-                        logger.debug(f"Registered event type: {event_type} -> {obj}")
-                        
-            except ImportError as e:
-                logger.warning(f"Could not import {module_name}: {e}")
+            except ImportError:
                 continue
-        
-        logger.info(f"Discovered {len(self._event_map)} event types across all versions")
     
     def get_event_class(self, event_type: str) -> Optional[Type[betterproto.Message]]:
         """Get the protobuf class for an event type string."""
@@ -141,11 +159,17 @@ class EventRegistry:
         """Check if an event type is registered."""
         return event_type in self._event_map
 
+class ParseError(Exception):
+    pass
+
+
 class EventMarshaler:
-    """Marshals JSON event attributes to protobuf Event instances."""
+    """Marshals JSON event attributes to protobuf Event instances with schema-driven parsing."""
     
-    def __init__(self, registry: EventRegistry):
+    def __init__(self, registry: EventRegistry, *, strict: bool = False):
         self.registry = registry
+        self.strict = strict
+        self._parser_cache: Dict[Type[betterproto.Message], Dict[str, Callable[[Any], Any]]] = {}
     
     def marshal_event(self, event_json: Dict[str, Any]) -> Optional[betterproto.Message]:
         """
@@ -174,7 +198,9 @@ class EventMarshaler:
         attributes = event_json.get('attributes', [])
         logger.info(f"📊 Processing {len(attributes)} attributes")
         
-        field_values = self._parse_attributes(attributes, event_class)
+        # Build parser table for the target event class
+        resolved_annotations = self._get_resolved_annotations(event_class)
+        field_values = self._parse_attributes(attributes, event_class, resolved_annotations)
         logger.info(f"🔧 Parsed field values: {field_values}")
         
         try:
@@ -187,74 +213,80 @@ class EventMarshaler:
             logger.error(f"   Field values: {field_values}")
             return None
     
-    def _parse_attributes(self, attributes: List[Dict[str, Any]], event_class: Type[betterproto.Message]) -> Dict[str, Any]:
-        """Parse JSON attributes array into protobuf field values."""
-        field_values = {}
-        
-        # Get field annotations from the protobuf class
-        field_annotations = getattr(event_class, '__annotations__', {})
-        logger.info(f"📝 Protobuf class fields: {list(field_annotations.keys())}")
-        
+    def _parse_attributes(self, attributes: List[Dict[str, Any]], event_class: Type[betterproto.Message], field_annotations: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse JSON attributes array into protobuf field values using a per-class parser table."""
+        parsers = self._get_parsers_for_class(event_class, field_annotations)
+        field_values: Dict[str, Any] = {}
         for attr in attributes:
             key = attr.get('key')
-            value = attr.get('value')
-            
-            if not key or value is None:
+            raw_value = attr.get('value')
+            if not key or raw_value is None:
                 continue
-            
-            # Skip fields that don't exist in the protobuf class (metadata fields)
-            if key not in field_annotations:
-                logger.info(f"⚠️ Skipping metadata field '{key}' (not in protobuf schema)")
-                continue
-            
-            # Convert JSON string value to appropriate Python type
-            parsed_value = self._parse_attribute_value(key, value, field_annotations)
-            if parsed_value is not None:
-                field_values[key] = parsed_value
-        
-        return field_values
-    
-    def _parse_attribute_value(self, field_name: str, json_value: str, field_annotations: Dict[str, Any]) -> Any:
-        """Parse a single attribute value from JSON string to Python type."""
-        try:
-            # Get the expected field type from protobuf annotations
-            field_type = field_annotations.get(field_name)
-            logger.debug(f"🔍 Field '{field_name}' type: {field_type}, value: '{json_value}'")
-            
-            # Handle JSON-encoded values (common in blockchain events)
-            if json_value.startswith('"') and json_value.endswith('"'):
-                # Simple quoted string - remove quotes first
-                unquoted_value = json_value[1:-1]
-                
-                # If field type is int and the unquoted value is numeric, convert to int
-                if field_type is int and (unquoted_value.isdigit() or (unquoted_value.startswith('-') and unquoted_value[1:].isdigit())):
-                    return int(unquoted_value)
+            parser = parsers.get(key)
+            if parser is None:
+                if self.strict:
+                    raise ParseError(f"Unknown field '{key}' for {event_class.__name__}")
                 else:
-                    return unquoted_value
-                    
-            elif json_value.startswith('[') and json_value.endswith(']'):
-                # JSON array - parse it
-                parsed = json.loads(json_value)
-                return parsed if isinstance(parsed, list) else [parsed]
-            elif json_value in ('true', 'false'):
-                # Boolean values
-                return json_value == 'true'
-            elif json_value.isdigit() or (json_value.startswith('-') and json_value[1:].isdigit()):
-                # Integer values
-                return int(json_value)
-            elif self._is_float(json_value):
-                # Float values  
-                return float(json_value)
-            else:
-                # Try parsing as JSON first, fall back to string
-                try:
-                    return json.loads(json_value)
-                except json.JSONDecodeError:
-                    return json_value
-                    
-        except (json.JSONDecodeError, ValueError) as e:
+                    logger.debug(f"Ignoring unknown field '{key}' for {event_class.__name__}")
+                    continue
+            try:
+                field_values[key] = parser(raw_value)
+            except Exception as e:
+                message = f"Failed to parse field '{key}' as {type(parser).__name__}: {e}"
+                if self.strict:
+                    raise ParseError(message)
+                else:
+                    logger.warning(message)
+                    # Leave original value if lenient
+                    field_values[key] = raw_value
+        return field_values
+
+    def _get_resolved_annotations(self, message_cls: Type[betterproto.Message]) -> Dict[str, Any]:
+        """Resolve forward-referenced type annotations to actual classes."""
+        try:
+            import typing as _typing
+            import importlib as _importlib
+            module = _importlib.import_module(message_cls.__module__)
+            return _typing.get_type_hints(message_cls, globalns=vars(module))
+        except Exception:
+            return getattr(message_cls, '__annotations__', {})
+    
+    def _parse_attribute_value(self, field_name: str, json_value: Any, field_annotations: Dict[str, Any]) -> Any:
+        """Parse a single attribute using the parser derived from annotations."""
+        expected = field_annotations.get(field_name)
+        parser = self._build_parser(expected)
+        try:
+            return parser(json_value)
+        except Exception as e:
+            if self.strict:
+                raise
             logger.warning(f"Failed to parse attribute {field_name}='{json_value}': {e}")
-            return json_value  # Return as string if parsing fails
+            return json_value
+
+    def _instantiate_message(self, message_cls: Type[betterproto.Message], data: Dict[str, Any]) -> betterproto.Message:
+        """Instantiate a betterproto message from a plain dict, coercing field types."""
+        try:
+            annotations: Dict[str, Any] = getattr(message_cls, '__annotations__', {})
+            coerced: Dict[str, Any] = {}
+            for key, value in data.items():
+                expected_type = annotations.get(key)
+                # Coerce simple scalars
+                if expected_type is int and isinstance(value, str) and (value.isdigit() or (value.startswith('-') and value[1:].isdigit())):
+                    coerced[key] = int(value)
+                elif expected_type is float and isinstance(value, str) and self._is_float(value):
+                    coerced[key] = float(value)
+                else:
+                    # Nested message handling
+                    import inspect as _inspect
+                    if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto.Message) and isinstance(value, dict):
+                        coerced[key] = self._instantiate_message(expected_type, value)
+                    else:
+                        coerced[key] = value
+            return message_cls(**coerced)
+        except Exception as e:
+            logger.warning(f"Failed to instantiate message {message_cls} from {data}: {e}")
+            # Fallback to direct construction; may raise later if incompatible
+            return message_cls(**data)
     
     def _is_float(self, value: str) -> bool:
         """Check if string represents a float."""
@@ -263,6 +295,119 @@ class EventMarshaler:
             return '.' in value or 'e' in value.lower()
         except ValueError:
             return False
+
+    def _strip_quotes(self, s: str) -> str:
+        if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+            return s[1:-1]
+        return s
+
+    def _get_parsers_for_class(self, message_cls: Type[betterproto.Message], annotations: Dict[str, Any]) -> Dict[str, Callable[[Any], Any]]:
+        if message_cls in self._parser_cache:
+            return self._parser_cache[message_cls]
+        parsers: Dict[str, Callable[[Any], Any]] = {}
+        for field_name, expected_type in annotations.items():
+            parsers[field_name] = self._build_parser(expected_type)
+        self._parser_cache[message_cls] = parsers
+        return parsers
+
+    def _build_parser(self, expected_type: Any) -> Callable[[Any], Any]:
+        import typing as _typing
+        import inspect as _inspect
+
+        origin = _typing.get_origin(expected_type)
+        args = _typing.get_args(expected_type)
+
+        # Handle List[T]
+        if origin in (list, List) and args:
+            elem_parser = self._build_parser(args[0])
+
+            def parse_list(v: Any) -> List[Any]:
+                if isinstance(v, str):
+                    s = self._strip_quotes(v)
+                    if s.startswith('[') and s.endswith(']'):
+                        parsed = json.loads(s)
+                    else:
+                        if self.strict:
+                            raise ParseError(f"Expected JSON array string, got '{v}'")
+                        parsed = [s]
+                elif isinstance(v, list):
+                    parsed = v
+                else:
+                    if self.strict:
+                        raise ParseError(f"Expected list for {expected_type}, got {type(v)}")
+                    parsed = [v]
+                return [elem_parser(elem) for elem in parsed]
+
+            return parse_list
+
+        # Handle nested message
+        if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto.Message):
+
+            def parse_message(v: Any) -> betterproto.Message:
+                if isinstance(v, dict):
+                    return self._instantiate_message(expected_type, v)
+                if isinstance(v, str):
+                    s = self._strip_quotes(v)
+                    if (s.startswith('{') and s.endswith('}')) or (s.startswith('[') and s.endswith(']')):
+                        parsed = json.loads(s)
+                        if isinstance(parsed, dict):
+                            return self._instantiate_message(expected_type, parsed)
+                raise ParseError(f"Cannot parse value for {expected_type}: {v}")
+
+            return parse_message
+
+        # Handle scalars
+        if expected_type is int:
+
+            def parse_int(v: Any) -> int:
+                if isinstance(v, int):
+                    return v
+                if isinstance(v, str):
+                    s = self._strip_quotes(v)
+                    if s.isdigit() or (s.startswith('-') and s[1:].isdigit()):
+                        return int(s)
+                raise ParseError(f"Invalid int: {v}")
+
+            return parse_int
+
+        if expected_type is float:
+
+            def parse_float(v: Any) -> float:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                if isinstance(v, str):
+                    s = self._strip_quotes(v)
+                    if self._is_float(s) or s.isdigit() or (s.startswith('-') and s[1:].isdigit()):
+                        return float(s)
+                raise ParseError(f"Invalid float: {v}")
+
+            return parse_float
+
+        if expected_type is bool:
+
+            def parse_bool(v: Any) -> bool:
+                if isinstance(v, bool):
+                    return v
+                if isinstance(v, str):
+                    if v == 'true':
+                        return True
+                    if v == 'false':
+                        return False
+                raise ParseError(f"Invalid bool: {v}")
+
+            return parse_bool
+
+        if expected_type is str:
+
+            def parse_str(v: Any) -> str:
+                if isinstance(v, str):
+                    return self._strip_quotes(v)
+                return str(v)
+
+            return parse_str
+
+        # Fallback: identity
+        return lambda v: v
 
 class EventFilter:
     """Event filter for subscription queries."""
@@ -319,6 +464,16 @@ class EventFilter:
         return EventFilter().event_type('Tx')
     
 
+
+GenericSyncCallbackFn  = Callable[[Dict[str, Any], int], None]
+GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
+GenericCallbackFn      = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
+
+TypedSyncCallbackFn  = Callable[[T, int], None]
+TypedAsyncCallbackFn = Callable[[T, int], Awaitable[None]]
+TypedCallbackFn      = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
+
+
 class AlloraWebsocketSubscriber:
     """
     WebSocket-based event subscriber for Allora blockchain events.
@@ -327,10 +482,11 @@ class AlloraWebsocketSubscriber:
     filtering, and callback management.
     """
     
-    def __init__(self, client):
+    def __init__(self, url: str, connect_fn: ConnectFn = default_websocket_connect):
         """Initialize event subscriber with Allora client."""
-        self.client = client
-        self.websocket: Optional[ClientConnection] = None
+        self.url = url
+        self.connect_fn = connect_fn
+        self.websocket: Optional['WebSocketLike'] = None
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
         self.callbacks: Dict[str, List[Callable]] = {}
         self.running = False
@@ -349,7 +505,14 @@ class AlloraWebsocketSubscriber:
             return
         
         self.running = True
+        logger.info("🚀 Starting WebSocket event subscription service...")
+        
+        # Create event loop task
+        self._event_task = asyncio.create_task(self._event_loop())
+        logger.info("✅ Event loop task created")
+        
         await self._connect()
+
 
     async def _ensure_started(self):
         """Ensure the event subscription service is started (idiomatic auto-start)."""
@@ -360,6 +523,14 @@ class AlloraWebsocketSubscriber:
     async def stop(self):
         """Stop the event subscription service."""
         self.running = False
+        
+        # Cancel event loop task if it exists
+        if hasattr(self, '_event_task') and self._event_task:
+            self._event_task.cancel()
+            try:
+                await self._event_task
+            except asyncio.CancelledError:
+                pass
         
         # Unsubscribe from all subscriptions
         for subscription_id in list(self.subscriptions.keys()):
@@ -375,7 +546,7 @@ class AlloraWebsocketSubscriber:
     async def subscribe(
         self,
         event_filter: EventFilter,
-        callback: Callable[[Dict[str, Any]], None],
+        callback: GenericCallbackFn,
         subscription_id: Optional[str] = None
     ) -> str:
         """
@@ -383,7 +554,7 @@ class AlloraWebsocketSubscriber:
         
         Args:
             event_filter: Filter defining which events to receive
-            callback: Function to call when matching events arrive
+            callback: Function to call for each matching event (event, block_height)
             subscription_id: Optional custom subscription ID
             
         Returns:
@@ -437,12 +608,8 @@ class AlloraWebsocketSubscriber:
         attempts = 0
         while attempts < self.max_reconnect_attempts and self.running:
             try:
-                logger.info(f"Connecting to {self.client.config.websocket_endpoint}")
-                self.websocket = await websockets.connect(
-                    self.client.config.websocket_endpoint,
-                    ping_interval=20,
-                    ping_timeout=10
-                )
+                logger.info(f"Connecting to {self.url}")
+                self.websocket = await self.connect_fn(self.url)
                 logger.info("WebSocket connected")
                 
                 # Resubscribe to all active subscriptions
@@ -464,7 +631,6 @@ class AlloraWebsocketSubscriber:
     async def _send_subscription(self, subscription_id: str, query: str):
         """Send subscription request."""
         if not self.websocket or self.websocket.close_code:
-            logger.error("WebSocket not connected")
             return
         
         request = {
@@ -475,10 +641,7 @@ class AlloraWebsocketSubscriber:
         }
         
         try:
-            logger.info(f"📤 Sending subscription request: {json.dumps(request, indent=2)}")
             await self.websocket.send(json.dumps(request))
-            # Don't mark as active here - wait for confirmation
-            logger.info(f"✅ Successfully sent subscription request for {subscription_id}")
         except Exception as e:
             logger.error(f"❌ Failed to send subscription {subscription_id}: {e}")
     
@@ -497,12 +660,13 @@ class AlloraWebsocketSubscriber:
         try:
             await self.websocket.send(json.dumps(request))
             self.subscriptions[subscription_id]["active"] = False
-            logger.debug(f"Sent unsubscribe: {request}")
+            pass  # Unsubscribe request sent successfully
         except Exception as e:
             logger.error(f"Failed to unsubscribe {subscription_id}: {e}")
     
     async def _event_loop(self):
         """Main event processing loop."""
+        logger.info(f"🚀 Starting event loop (running={self.running})")
         while self.running:
             try:
                 if not self.websocket or self.websocket.close_code:
@@ -510,13 +674,16 @@ class AlloraWebsocketSubscriber:
                     await self._connect()
                     continue
                 
+                logger.debug(f"🔄 Event loop waiting for message...")
+                
                 # Wait for message with timeout
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
                         timeout=30.0
                     )
-                    await self._handle_message(message)
+                    logger.info(f"📥 Received WebSocket message ({len(message)} bytes)")
+                    await self._handle_message(str(message))
                     
                 except asyncio.TimeoutError:
                     # Send ping to keep connection alive
@@ -532,70 +699,60 @@ class AlloraWebsocketSubscriber:
                     
             except Exception as e:
                 logger.error(f"Event loop error: {e}")
+                import traceback
+                logger.error(f"Event loop traceback: {traceback.format_exc()}")
                 await asyncio.sleep(1.0)
     
     async def _handle_message(self, message: str):
         """Handle incoming WebSocket message."""
         try:
+            logger.info(f"📨 Processing message of length {len(message)}")
             data = json.loads(message)
-            data2 = json.dumps(data, indent=4)  # Pretty print JSON for debugging
-            logger.debug(f"Received WebSocket message: {data2}")
-            
-            # Enhanced logging for debugging
             message_id = data.get("id")
-            has_result = "result" in data
-            has_result_data = data.get("result", {}).get("data") is not None
-            has_events = data.get("result", {}).get("data", {}).get("value", {}).get("events") is not None if has_result_data else False
-            
-            logger.info(f"🔍 Message analysis: ID={message_id}, has_result={has_result}, has_result_data={has_result_data}, has_events={has_events}")
+            logger.info(f"🆔 Message ID: {message_id}")
             
             # Handle subscription confirmations
             if data.get("result", {}).get("data") is None and "id" in data:
                 subscription_id = data["id"]
-                logger.info(f"✅ Identified as subscription confirmation for: {subscription_id}")
                 if subscription_id in self.subscriptions:
-                    logger.info(f"✅ Subscription {subscription_id} confirmed and found in subscriptions")
-                    # Mark subscription as active
                     self.subscriptions[subscription_id]["active"] = True
-                else:
-                    logger.warning(f"❌ Subscription {subscription_id} confirmed but not found in subscriptions!")
                 return
-
-            logger.info("🧩 Processing as event message...")
             
             # Try to parse as structured JSONRPCResponse
             events = None
+            block_height = None
             message_id = data.get("id")
             
             try:
+                logger.debug(f"🔍 Attempting structured parsing with JSONRPCResponse")
                 msg = JSONRPCResponse.model_validate(data)
-                logger.info(f"✅ Parsed structured response successfully")
-                
-                # Extract events from NewBlockEvents
                 if (isinstance(msg.result, JSONRPCQueryResult) and 
                     isinstance(msg.result.data, NewBlockEventsDataFrame)):
                     events = msg.result.data.value.events
-                    logger.info(f"📦 Extracted {len(events)} events from structured response")
+                    block_height = int(msg.result.data.value.height) if msg.result.data.value.height else None
+                    logger.debug(f"✅ Structured parsing successful: {len(events)} events, height {block_height}")
                 else:
-                    logger.info(f"❌ Structured response doesn't match expected NewBlockEvents format")
-                    
-            except Exception as parse_error:
-                logger.info(f"❌ Failed to parse as structured response: {parse_error}")
+                    events = None
+                    block_height = None
+                    logger.debug(f"⚠️ Structured parsing failed: wrong result type")
+            except Exception as e:
+                logger.debug(f"🔄 Structured parsing failed ({e}), falling back to manual extraction")
                 # Fall back to manual extraction
-                
-                # Manual extraction as fallback
-                events = data.get("result", {}).get("data", {}).get("value", {}).get("events")
-                if events is not None:
-                    logger.info(f"📦 Manual extraction found {len(events)} events")
-                else:
-                    logger.warning("❌ Manual extraction found no events")
+                result_data = data.get("result", {}).get("data", {}).get("value", {})
+                events = result_data.get("events")
+                height_str = result_data.get("height")
+                logger.debug(f"📊 Manual extraction: {len(events) if events else 0} events, height: {height_str}")
+                try:
+                    block_height = int(height_str) if height_str else None
+                except (ValueError, TypeError):
+                    block_height = None
             
             # Dispatch events if found
             if events is not None:
-                logger.info(f"🚀 Dispatching {len(events)} events with message_id={message_id}")
-                await self._dispatch_events(events, message_id)
+                logger.debug(f"🚀 Dispatching {len(events)} events to subscription {message_id}")
+                await self._dispatch_events(events, message_id, block_height)
             else:
-                logger.warning("❌ No events found to dispatch")
+                logger.debug(f"⚠️ No events to dispatch for message {message_id}")
             
             # Handle errors
             if "error" in data:
@@ -603,171 +760,175 @@ class AlloraWebsocketSubscriber:
                 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse message: {e}")
+            logger.error(f"Message content (first 500 chars): {message[:500]}")
         except Exception as e:
             logger.error(f"Error handling message: {e}")
+            import traceback
+            logger.error(f"Message handling traceback: {traceback.format_exc()}")
+            logger.error(f"Message content (first 500 chars): {message[:500]}")
     
-    async def _dispatch_events(self, event_data: List[Dict[str, Any]], target_subscription_id: Optional[str] = None):
-        """Dispatch event to registered callbacks."""
-        logger.info(f"📨 _dispatch_events called with {len(event_data)} events, target_id={target_subscription_id}")
+    async def _dispatch_events(
+        self,
+        event_data: List[Dict[str, Any]],
+        target_subscription_id: Optional[str] = None,
+        block_height: Optional[int] = None,
+    ) -> None:
+        """Dispatch events to registered callbacks based on subscription matching."""
+        if not target_subscription_id:
+            return
         
-        # Log subscription and callback status
-        logger.info(f"📋 Total subscriptions: {len(self.subscriptions)}")
-        logger.info(f"📞 Total callbacks: {len(self.callbacks)}")
-        
-        # Find all subscriptions that should receive these events
-        matching_subscriptions = []
-        
-        if target_subscription_id:
-            # Find the target subscription's query
-            target_query = None
-            if target_subscription_id in self.subscriptions:
-                target_query = self.subscriptions[target_subscription_id]["query"]
-                logger.info(f"🔍 Target subscription query: {target_query}")
-                
-                # Find ALL subscriptions with the same query (including the target)
-                for subscription_id, subscription_info in self.subscriptions.items():
-                    if (subscription_info.get("query") == target_query and 
-                        subscription_info.get("active", False) and
-                        subscription_id in self.callbacks):
-                        matching_subscriptions.append(subscription_id)
-                        logger.info(f"🎯 Found matching subscription: {subscription_id}")
+        if target_subscription_id not in self.subscriptions:
+            return
             
-            if not matching_subscriptions:
-                logger.warning(f"❌ No active subscriptions found for target {target_subscription_id}")
-        else:
-            # Fallback: dispatch to all active subscriptions
-            for subscription_id in self.callbacks.keys():
-                if subscription_id in self.subscriptions:
-                    is_active = self.subscriptions[subscription_id].get("active", False)
-                    if is_active:
-                        matching_subscriptions.append(subscription_id)
-                    logger.info(f"📊 Subscription {subscription_id}: active={is_active}")
+        target_query: str = self.subscriptions[target_subscription_id]["query"]
         
-        logger.info(f"🔄 Dispatching to {len(matching_subscriptions)} matching subscriptions: {matching_subscriptions}")
+        matching_subscriptions: List[str] = [
+            sub_id for sub_id, sub_info in self.subscriptions.items()
+            if (sub_info.get("query") == target_query and 
+                sub_info.get("active", False) and
+                sub_id in self.callbacks)
+        ]
+        
+        if not matching_subscriptions:
+            return
         
         for subscription_id in matching_subscriptions:
-            await self._dispatch_to_subscription(subscription_id, event_data)
+            await self._dispatch_to_subscription(subscription_id, event_data, block_height)
     
-    async def _dispatch_to_subscription(self, subscription_id: str, event_data: List[Dict[str, Any]]):
-        """Dispatch events to a specific subscription, applying filters as needed."""
-        logger.info(f"🏃 _dispatch_to_subscription called for {subscription_id}")
+    async def _dispatch_to_subscription(
+        self,
+        subscription_id: str,
+        event_data: List[Dict[str, Any]],
+        block_height: Optional[int] = None,
+    ) -> None:
+        """Dispatch events to a specific subscription with filtering and type marshaling."""
+        if not event_data:
+            return
         
         subscription_info = self.subscriptions.get(subscription_id)
         if not subscription_info:
-            logger.warning(f"❌ No subscription info found for {subscription_id}")
             return
-        
-        callbacks = self.callbacks.get(subscription_id, [])
-        subscription_type = subscription_info.get("subscription_type", "tendermint_query")
-        
-        logger.info(f"📋 Subscription {subscription_id}: type={subscription_type}, callbacks={len(callbacks)}")
-        
+            
+        callbacks = self.callbacks.get(subscription_id)
         if not callbacks:
-            logger.warning(f"❌ No callbacks registered for subscription {subscription_id}")
+            return
+            
+        subscription_type = subscription_info.get("subscription_type")
+        if not subscription_type:
             return
         
         if subscription_type == "NewBlockEvents":
-            # Apply client-side event name filtering (dual-level filtering)
-            event_name = subscription_info.get("event_name")
-            logger.info(f"🔍 NewBlockEvents filtering: event_name={event_name}, event_data_count={len(event_data)}")
-            
-            if event_name and event_data:
-                # Filter events by event name (the Tendermint query already filtered by attributes)
-                filtered_events = []
-                for i, event in enumerate(event_data):
-                    event_type = event.get("type")
-                    logger.info(f"🧪 Event {i}: type='{event_type}' vs expected='{event_name}'")
-                    if event_type == event_name:
-                        filtered_events.append(event)
-                        logger.info(f"✅ Event {i} matched!")
-                
-                logger.info(f"🎯 Filtered {len(filtered_events)} matching events from {len(event_data)} total")
-                
-                # Only call callbacks if we have matching events
-                if filtered_events:
-                    for j, callback in enumerate(callbacks):
-                        logger.info(f"📞 Calling callback {j} for {len(filtered_events)} events")
-                        try:
-                            loop = asyncio.get_event_loop()
-                            await loop.run_in_executor(None, callback, filtered_events)
-                            logger.info(f"✅ Successfully called block events callback {j} for subscription {subscription_id}")
-                        except Exception as e:
-                            logger.error(f"❌ Block events callback error for {subscription_id}: {e}")
-                else:
-                    logger.warning(f"❌ No events matched event_name '{event_name}' for subscription {subscription_id}")
-            else:
-                logger.warning(f"❌ Missing event_name or event_data: name={event_name}, data={bool(event_data)}")
-                    
+            await self._handle_block_events(subscription_id, subscription_info, callbacks, event_data, block_height)
         elif subscription_type == "TypedNewBlockEvents":
-            # Apply client-side filtering and marshal to protobuf instances
-            event_name = subscription_info.get("event_name")
-            event_class = subscription_info.get("event_class")
-            logger.info(f"🔍 TypedNewBlockEvents filtering: event_name={event_name}, event_class={event_class}")
-            
-            if event_name and event_class and event_data:
-                # Filter events by event name and marshal to protobuf instances
-                typed_events = []
-                for i, event in enumerate(event_data):
-                    event_type = event.get("type")
-                    logger.info(f"🧪 Typed Event {i}: type='{event_type}' vs expected='{event_name}'")
-                    if event_type == event_name:
-                        # Marshal JSON event to protobuf instance
-                        logger.info(f"🔄 Marshaling event {i} to protobuf...")
-                        typed_event = self.event_marshaler.marshal_event(event)
-                        if typed_event:
-                            typed_events.append(typed_event)
-                            logger.info(f"✅ Successfully marshaled event {i}")
-                        else:
-                            logger.warning(f"❌ Failed to marshal event {i}: {event.get('type')}")
-                
-                logger.info(f"🎯 Marshaled {len(typed_events)} typed events from {len(event_data)} total")
-                
-                # Only call callbacks if we have successfully marshaled events
-                if typed_events:
-                    for j, callback in enumerate(callbacks):
-                        logger.info(f"📞 Calling typed callback {j} for {len(typed_events)} events")
-                        try:
-                            loop = asyncio.get_event_loop()
-                            await loop.run_in_executor(None, callback, typed_events)
-                            logger.info(f"✅ Successfully called typed block events callback {j} for subscription {subscription_id}")
-                        except Exception as e:
-                            logger.error(f"❌ Typed block events callback error for {subscription_id}: {e}")
-                else:
-                    logger.warning(f"❌ No events successfully marshaled for subscription {subscription_id}")
-            else:
-                logger.warning(f"❌ Missing requirements: name={event_name}, class={event_class}, data={bool(event_data)}")
-                    
+            await self._handle_typed_block_events(subscription_id, subscription_info, callbacks, event_data, block_height)
         else:
-            # Regular tendermint query subscription - pass all events
-            for callback in callbacks:
+            await self._handle_generic_events(subscription_id, callbacks, event_data, block_height)
+    
+    async def _handle_block_events(
+        self,
+        subscription_id: str,
+        subscription_info: Dict[str, Any],
+        callbacks: List[Callable],
+        event_data: List[Dict[str, Any]],
+        block_height: Optional[int],
+    ) -> None:
+        """Handle NewBlockEvents subscription type."""
+        event_name = subscription_info.get("event_name")
+        if not event_name:
+            return
+            
+        events = [ e for e in event_data if e.get("type") == event_name ]
+        if not events:
+            return
+            
+        await self._execute_callbacks(callbacks, events, block_height, subscription_id)
+    
+    async def _handle_typed_block_events(
+        self,
+        subscription_id: str,
+        subscription_info: Dict[str, Any],
+        callbacks: List[Callable],
+        event_data: List[Dict[str, Any]],
+        block_height: Optional[int],
+    ) -> None:
+        """Handle TypedNewBlockEvents subscription type with protobuf marshaling."""
+        event_name = subscription_info.get("event_name")
+        event_class = subscription_info.get("event_class")
+        if not (event_name and event_class):
+            return
+        
+        logger.debug(f"🔍 Looking for events with type='{event_name}' in {len(event_data)} events")
+        logger.debug(f"📊 Available event types: {[e.get('type') for e in event_data]}")
+            
+        events = [ e for e in event_data if e.get("type") == event_name ]
+        logger.debug(f"🎯 Found {len(events)} matching events after type filter")
+        
+        events = [ self.event_marshaler.marshal_event(e) for e in events ]
+        events = [ e for e in events if e is not None ]
+        logger.debug(f"📦 Successfully marshaled {len(events)} events")
+        
+        if not events:
+            logger.warning(f"⚠️ No events to dispatch for subscription {subscription_id}")
+            return
+            
+        await self._execute_callbacks(callbacks, events, block_height, subscription_id)
+    
+    async def _handle_generic_events(
+        self,
+        subscription_id: str,
+        callbacks: List[Callable],
+        event_data: List[Dict[str, Any]],
+        block_height: Optional[int],
+    ) -> None:
+        """Handle generic tendermint query subscriptions."""
+        await self._execute_callbacks(callbacks, event_data, block_height, subscription_id)
+    
+    async def _execute_callbacks(
+        self,
+        callbacks: List[Callable],
+        events: List[Any],
+        block_height: Optional[int],
+        subscription_id: str,
+    ) -> None:
+        """Execute callbacks for each event, handling errors gracefully."""
+        for callback in callbacks:
+            for event in events:
                 try:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, callback, event_data)
-                    logger.debug(f"Called callback for subscription {subscription_id}")
+                    logger.debug(f"🔥 Executing callback for subscription {subscription_id}")
+                    # Check if callback is async
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(event, block_height)
+                    else:
+                        # Run sync callback in executor
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, callback, event, block_height)
+                    logger.debug(f"✅ Callback executed successfully for {subscription_id}")
                 except Exception as e:
                     logger.error(f"Callback error for {subscription_id}: {e}")
+                    import traceback
+                    logger.error(f"Callback traceback: {traceback.format_exc()}")
     
     # Convenience methods for common subscriptions
     
-    async def subscribe_to_new_blocks(self, callback: Callable[[Dict[str, Any]], None]) -> str:
+    async def subscribe_to_new_blocks(self, callback: GenericCallbackFn) -> str:
         """Subscribe to new block events."""
         return await self.subscribe(EventFilter.new_blocks(), callback)
     
-    async def subscribe_to_transactions(self, callback: Callable[[Dict[str, Any]], None]) -> str:
+    async def subscribe_to_transactions(self, callback: GenericCallbackFn) -> str:
         """Subscribe to transaction events."""
         return await self.subscribe(EventFilter.transactions(), callback)
     
-    async def subscribe_to_address_activity(self, address: str, callback: Callable[[Dict[str, Any]], None]) -> str:
+    async def subscribe_to_address_activity(self, address: str, callback: GenericCallbackFn) -> str:
         """Subscribe to activity for a specific address."""
         event_filter = EventFilter.transactions().sender(address)
         return await self.subscribe(event_filter, callback)
     
     async def subscribe_new_block_events(
-        self, 
+        self,
         event_name: str,
-        event_attribute_conditions: List[EventAttributeCondition], 
-        callback: Callable[[List[Dict[str, Any]]], None],
-        subscription_id: Optional[str] = None
+        event_attribute_conditions: List[EventAttributeCondition],
+        callback: GenericCallbackFn,
+        subscription_id: Optional[str] = None,
     ) -> str:
         """
         Subscribe to specific events within NewBlockEvents.
@@ -775,7 +936,7 @@ class AlloraWebsocketSubscriber:
         Args:
             event_name: The specific event type to filter for (e.g., "emissions.v9.EventEMAScoresSet")
             event_attribute_conditions: List of attribute conditions to apply
-            callback: Function to call with filtered events (list of matching events)
+            callback: Function to call for each matching event (event, block_height)
             subscription_id: Optional custom subscription ID
             
         Returns:
@@ -818,11 +979,11 @@ class AlloraWebsocketSubscriber:
         return subscription_id
     
     async def subscribe_new_block_events_typed(
-        self, 
+        self,
         event_class: Type[T],
-        event_attribute_conditions: List[EventAttributeCondition], 
-        callback: Callable[[List[T]], None],
-        subscription_id: Optional[str] = None
+        event_attribute_conditions: List[EventAttributeCondition],
+        callback: TypedCallbackFn,
+        subscription_id: Optional[str] = None,
     ) -> str:
         """
         Subscribe to specific events within NewBlockEvents with typed protobuf callbacks.
@@ -830,7 +991,7 @@ class AlloraWebsocketSubscriber:
         Args:
             event_class: The protobuf Event class to subscribe to (e.g., EventScoresSet)
             event_attribute_conditions: List of attribute conditions to apply
-            callback: Function to call with typed protobuf events (list of protobuf instances)
+            callback: Function to call for each typed protobuf event (event, block_height)
             subscription_id: Optional custom subscription ID
             
         Returns:
@@ -899,14 +1060,24 @@ class AlloraWebsocketSubscriber:
         logger.info(f"🔍 Looking for event type for class: {event_class}")
         logger.info(f"📊 Registry has {len(self.event_registry._event_map)} registered types")
         
+        # First try direct class match
         for event_type, registered_class in self.event_registry._event_map.items():
             logger.debug(f"  Checking {event_type} -> {registered_class}")
             if registered_class == event_class:
-                logger.info(f"✅ Found match: {event_class} -> {event_type}")
+                logger.info(f"✅ Found exact match: {event_class} -> {event_type}")
+                return event_type
+        
+        # Try matching by class name if no exact match
+        class_name = event_class.__name__
+        logger.info(f"🔍 No exact match, trying class name matching for: {class_name}")
+        
+        for event_type, registered_class in self.event_registry._event_map.items():
+            if registered_class.__name__ == class_name:
+                logger.info(f"✅ Found name match: {class_name} -> {event_type}")
                 return event_type
         
         logger.warning(f"❌ No event type found for class {event_class}")
-        logger.info(f"📋 Available registered classes: {[cls.__name__ for cls in self.event_registry._event_map.values()][:10]}")
+        logger.info(f"📋 Available registered classes: {[f'{et} -> {cls.__name__}' for et, cls in list(self.event_registry._event_map.items())[:10]]}")
         return None
 
 

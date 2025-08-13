@@ -16,56 +16,51 @@ class AlloraNetworkConfig:
     """Configuration for Allora blockchain networks."""
     
     chain_id: str
-    rpc_endpoint: str
-    rest_endpoint: str
-    websocket_endpoint: str
+    url: str
+    websocket_url: str
     fee_denom: str = "uallo"
-    fee_minimum_gas_price: float = 0.025
+    fee_minimum_gas_price: float = 10.0
     
     @classmethod
     def testnet(cls) -> 'AlloraNetworkConfig':
         """Get Allora testnet configuration."""
         return cls(
             chain_id="allora-testnet-1",
-            rpc_endpoint="rest+https://allora-rpc.testnet.allora.network",
-            rest_endpoint="https://allora-api.testnet.allora.network",
-            websocket_endpoint="wss://allora-rpc.testnet.allora.network/websocket",
+            url="rest+https://allora-api.testnet.allora.network",
+            websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
             fee_denom="uallo",
-            fee_minimum_gas_price=0.025
+            fee_minimum_gas_price=10.0
         )
-    
+
     @classmethod
     def mainnet(cls) -> 'AlloraNetworkConfig':
         """Get Allora mainnet configuration."""
         return cls(
             chain_id="allora-mainnet-1",
-            rpc_endpoint="rest+https://allora-rpc.mainnet.allora.network",
-            rest_endpoint="https://allora-api.mainnet.allora.network",
-            websocket_endpoint="wss://allora-rpc.mainnet.allora.network/websocket",
+            url="rest+https://allora-rpc.mainnet.allora.network",
+            websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
             fee_denom="uallo",
-            fee_minimum_gas_price=0.025
+            fee_minimum_gas_price=10.0
         )
-    
+
     @classmethod
     def local(cls, port: int = 26657) -> 'AlloraNetworkConfig':
         """Get local development configuration."""
         return cls(
             chain_id="allora-local",
-            rpc_endpoint=f"http://localhost:{port}",
-            rest_endpoint=f"http://localhost:{port + 1}",
-            websocket_endpoint=f"ws://localhost:{port}/websocket",
+            url=f"http://localhost:{port}",
+            websocket_url=f"ws://localhost:{port}/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=0.0
         )
-    
+
     @classmethod
     def from_env(cls) -> 'AlloraNetworkConfig':
         """Create configuration from environment variables."""
         return cls(
             chain_id=os.getenv("ALLORA_CHAIN_ID", "allora-testnet-1"),
-            rpc_endpoint=os.getenv("ALLORA_RPC_ENDPOINT", "https://allora-rpc.testnet.allora.network:443"),
-            rest_endpoint=os.getenv("ALLORA_REST_ENDPOINT", "https://allora-api.testnet.allora.network"),
-            websocket_endpoint=os.getenv("ALLORA_WEBSOCKET_ENDPOINT", "wss://allora-rpc.testnet.allora.network:443/websocket"),
+            url=os.getenv("ALLORA_RPC_ENDPOINT", "https://allora-rpc.testnet.allora.network:443"),
+            websocket_url=os.getenv("ALLORA_WEBSOCKET_ENDPOINT", "wss://allora-rpc.testnet.allora.network:443/websocket"),
             fee_denom=os.getenv("ALLORA_FEE_DENOM", "uallo"),
             fee_minimum_gas_price=float(os.getenv("ALLORA_FEE_MIN_GAS_PRICE", "0.025"))
         )
@@ -74,7 +69,7 @@ class AlloraNetworkConfig:
         """Convert to cosmpy NetworkConfig."""
         return NetworkConfig(
             chain_id=self.chain_id,
-            url=self.rpc_endpoint,
+            url=self.url,
             fee_minimum_gas_price=self.fee_minimum_gas_price,
             fee_denomination=self.fee_denom,
             staking_denomination=self.fee_denom

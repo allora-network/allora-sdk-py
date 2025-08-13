@@ -23,7 +23,7 @@ The Allora Network Python SDK is a comprehensive async client library for intera
 - `EventRegistry`: Auto-discovers protobuf Event classes for type-safe event handling
 - `AlloraQueries`: Blockchain query interface (queries, balances, account info, etc.)
 
-#### HTTP API (`api_client_v2`)  
+#### HTTP API (`api_client_v2`)
 - `AlloraAPIClient`: HTTP client for topics, inferences, and price predictions
 - `AlloraTopic`: Model for network topics with metadata
 - `AlloraInference`: Model for inference data with confidence intervals
@@ -89,89 +89,164 @@ The project uses a dual testing approach:
 
 The mock testing framework in `tests/mock_data.py` provides a `MockServer` class that can simulate API responses and pagination scenarios.
 
-## Transaction API Usage
 
-### Worker Payload Submission
+## Coding Style Guidelines
 
-The SDK supports submitting worker inferences to the Allora network via blockchain transactions:
-
-```python
-from allora_sdk.protobuf_client.client import ProtobufClient
-
-# Initialize client with wallet
-client = ProtobufClient.testnet(private_key="your_hex_private_key")
-# or 
-client = ProtobufClient.testnet(mnemonic="your mnemonic phrase")
-
-# Submit inference for a topic
-response = await client.transactions.submit_worker_payload(
-    topic_id=13,
-    inference_value="42.5",
-    memo="My inference submission"
-)
-
-print(f"Transaction hash: {response.txhash}")
-print(f"Success: {response.code == 0}")
-```
-
-### Advanced Usage
+### Structure and Control Flow
+- **Minimize indentation**: Prefer early returns over nested blocks. Avoid nested try/catch and nested if statements.
+- **Guard clauses**: Use guard clauses at the beginning of functions to handle edge cases and exit early.
+- **Single responsibility**: Each function should have one clear purpose.
 
 ```python
-# Submit with forecast elements
-response = await client.transactions.submit_worker_payload(
-    topic_id=13,
-    inference_value="42.5",
-    forecast_elements=[
-        {"inferer": "allo1abc123...", "value": "43.0"},
-        {"inferer": "allo1def456...", "value": "41.8"}
-    ],
-    extra_data=b"custom_metadata",
-    proof="proof_string",
-    gas_limit=400000
-)
+# Preferred - early returns, minimal nesting
+def process_events(events: List[Dict[str, Any]]) -> List[ProcessedEvent]:
+    if not events:
+        return []
+    
+    filtered = [ e for e in events if e.get("type") == "target_type" ]
+    if not filtered:
+        return []
+    
+    return [ ProcessedEvent.from_dict(e) for e in filtered ]
 
-# Check transaction status
-if response.code == 0:
-    print(f"✅ Transaction successful: {response.txhash}")
-else:
-    print(f"❌ Transaction failed: {response.raw_log}")
+# Avoid - nested blocks
+def process_events_bad(events: List[Dict[str, Any]]) -> List[ProcessedEvent]:
+    if events:
+        filtered = []
+        for e in events:
+            if e.get("type") == "target_type":
+                filtered.append(e)
+        if filtered:
+            results = []
+            for e in filtered:
+                results.append(ProcessedEvent.from_dict(e))
+            return results
+    return []
 ```
 
-### Event Listening + Transaction Flow
+### Comprehensions and Data Processing
+- **Use comprehensions liberally**: Even multiple comprehensions in succession for complex transformations.
+- **Chain comprehensions**: It's acceptable to do multiple passes for clarity.
 
 ```python
-from allora_sdk.protobuf_client.proto.emissions.v9 import EventScoresSet
-from allora_sdk.protobuf_client.client_websocket_events import EventAttributeCondition
-
-# Listen for score events and submit new inferences
-async def on_scores_set(events):
-    print(f"Received {len(events)} score events")
-    for event in events:
-        print(f"Topic {event.topic_id} scores updated at block {event.block_height}")
-        # Submit new inference for next epoch
-        # await client.emissions.insert_worker_payload(...)
-
-# Subscribe to typed events (starts WebSocket connection automatically)
-await client.events.subscribe_new_block_events_typed(
-    EventScoresSet,
-    [EventAttributeCondition("topic_id", "CONTAINS", "13")],
-    on_scores_set
-)
-
-# No need to call client.start_event_subscription() - it happens automatically!
+# Preferred - clear, functional style, using same list variable name
+events = websocket_data.get("events", [])
+events = [ e for e in events if e.get("type") == target_type ]
+events = [ marshal_event(e) for e in events ]
+events = [ e for e in events if e is not None ]
 ```
 
-### Event System Design
+### Type Safety and Documentation
+- **Strong typing always**: Use type hints on all functions, variables, and class attributes.
+- **Prefer structured types**: Use dataclasses, Pydantic models, or NamedTuple over dictionaries.
+- **Convert external data**: Transform incoming dictionaries from external packages into typed objects.
+- **Use enums**: For constants and fixed sets of values.
+- **Leverage generics**: Use TypeVar and Generic for reusable, type-safe code.
+- **Avoid Any/Unknown**: Only use when absolutely necessary for external library compatibility.
 
-- **Idiomatic Auto-Start**: First call to any `events.subscribe*()` method automatically starts the WebSocket connection
-- **Persistent Connection**: Connection stays open even if all subscriptions are removed (for performance)
-- **Clean Shutdown**: Call `await client.close()` to properly close WebSocket and gRPC connections
-- **Automatic Reconnection**: WebSocket automatically reconnects on connection loss with exponential backoff
+```python
+from enum import Enum
+from typing import Optional, List, Generic, TypeVar
+from dataclasses import dataclass
 
-## API Design Patterns
+class EventType(Enum):
+    SCORES_SET = "scores_set"
+    INFERENCE_RECEIVED = "inference_received"
 
-- All API methods are async and return typed Pydantic models
-- Error handling raises `ValueError` for API-level errors and lets `aiohttp` exceptions bubble up for network issues
-- Pagination is handled automatically in `get_all_topics()` method
-- Default API key and base URL are provided but can be overridden via constructor or environment variables
-- Signature formats are configurable via `SignatureFormat` enum (currently supports Ethereum Sepolia)
+@dataclass
+class ProcessedEvent:
+    event_type: EventType
+    topic_id: int
+    block_height: Optional[int]
+    data: Dict[str, Any]
+    
+    @classmethod
+    def from_websocket_data(cls, raw_data: Dict[str, Any]) -> Optional['ProcessedEvent']:
+        """Convert raw WebSocket data to typed ProcessedEvent."""
+        event_type_str = raw_data.get("type")
+        if not event_type_str:
+            return None
+            
+        try:
+            event_type = EventType(event_type_str)
+        except ValueError:
+            return None
+            
+        return cls(
+            event_type=event_type,
+            topic_id=int(raw_data.get("topic_id", 0)),
+            block_height=raw_data.get("block_height"),
+            data=raw_data
+        )
+```
+
+### Documentation Standards
+- **Document all public functions**: Provide comprehensive docstrings with arguments and return values for public functions.
+- **Document all classes**: Include purpose, usage patterns, and key methods.
+- **One-line docs for private functions**: At minimum, explain what the function does.
+- **Use standard formats**: Follow Google or NumPy docstring conventions.
+- **Don't comment excessively within function bodies**: If your code is elegant, it doesn't need explanations of what's happening every few statements.  Lean on writing elegant, expressive code.  Name your variables and functions well.  Break up logic into coherent, understandable units (which doesn't mean you should break every big piece of code into tons of functions!  Sometimes it's a subtler form of organization that wins the day).
+- **If a function or class might need more extensive documentation**, perhaps in the form of examples or further discussion, add a `docs/` folder and start documenting things there in greater depth.
+- **The README** should mainly just contain a description of the package, a quickstart example, and a link to the `docs/` folder if you created one (keep in mind that this README will be rendered on Github).
+
+Example of public function documentation:
+
+```python
+def subscribe_new_block_events(
+    self, 
+    event_name: str,
+    conditions: List[EventAttributeCondition], 
+    callback: Callable[[Dict[str, Any], Optional[int]], None],
+) -> str:
+    """
+    Subscribe to specific blockchain events with filtering.
+    
+    This method creates a WebSocket subscription that filters events by name
+    and attributes, calling the provided callback for each matching event.
+    
+    Args:
+        event_name: The specific event type (e.g., "emissions.v9.EventScoresSet")
+        conditions: List of attribute filters to apply
+        callback: Function called for each event (event_data, block_height)
+        
+    Returns:
+        Subscription ID for managing the subscription
+    """
+
+def _parse_websocket_message(self, raw_message: str) -> Optional[ParsedMessage]:
+    """Parse incoming WebSocket message into structured data."""
+```
+
+### Development Practices
+- **Use your Pyright tool extensively**: Use your pyright tool call frequently to catch type errors and understand third-party packages.  Your memorized information could be out of date!
+- **4-space indentation**: Always use 4 spaces, never tabs.
+- **Avoid inheritance**: Prefer composition unless required by external libraries.  Write code that's more like Go or Zig and less like Java or C++.  Python has its own style, but its flexibility gives us the option to bend that style in one direction or another.
+- **Minimal logging**: Log errors when appropriate, but avoid verbose success/debug logs. Let users add debugging when needed.
+- **Prefer simplicity**: Choose Go/Zig-style simplicity over Java/C++ complexity. Favor explicit over implicit.
+
+### Error Handling
+- **Explicit error handling**: Return None or raise specific exceptions rather than broad try/catch blocks.
+- **Domain-specific exceptions**: Create custom exception types for different error categories.
+- **Early validation**: Validate inputs at function entry points.
+
+```python
+class AlloraClientError(Exception):
+    """Base exception for Allora client errors."""
+    pass
+
+class SubscriptionError(AlloraClientError):
+    """Raised when event subscription operations fail."""
+    pass
+
+def create_subscription(self, event_filter: EventFilter) -> str:
+    """Create new event subscription, returning subscription ID."""
+    if not self.websocket_connected:
+        raise SubscriptionError("WebSocket not connected")
+        
+    if not event_filter.conditions:
+        raise SubscriptionError("Event filter cannot be empty")
+        
+    subscription_id = self._generate_subscription_id()
+    # ... rest of implementation
+    return subscription_id
+```

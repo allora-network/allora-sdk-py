@@ -16,22 +16,22 @@ from .proto.mint.v5 import (
 
 logger = logging.getLogger(__name__)
 
-class MintClient:
-    def __init__(self, client: LedgerClient, grpc_channel: Channel, wallet: LocalWallet | None, config: AlloraNetworkConfig):
-        self.client = client
-        self.wallet = wallet
-        if wallet:
-            self.txs = TxManager(wallet=wallet, client=client, config=config)
-        self.query = MintQuerySvc(grpc_channel)
+# class MintClient:
+#     def __init__(self, client: LedgerClient):
+#         self.client = client
+#         self.wallet = wallet
+#         # if wallet:
+#             # self.txs = TxManager(wallet=wallet, client=client, config=config, proto_client=proto_client)
+#         self.query = MintQuerySvc(grpc_channel)
 
-    async def params(self):
-        return await self.query.params(MintGetParamsRequest())
+#     async def params(self):
+#         return await self.query.params(MintGetParamsRequest())
 
-    async def emission_info(self):
-        return await self.query.emission_info(MintEmissionInfoRequest())
+#     async def emission_info(self):
+#         return await self.query.emission_info(MintEmissionInfoRequest())
 
-    async def inflation(self):
-        return await self.query.inflation(MintInflationRequest())
+#     async def inflation(self):
+#         return await self.query.inflation(MintInflationRequest())
 
 
 

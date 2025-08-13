@@ -8,20 +8,30 @@ and provides Allora-specific functionality for interacting with the blockchain.
 import logging
 import os
 from typing import Optional, Dict
+import asyncio
 
-from cosmpy.aerial.client import LedgerClient, ValidatorStatus
-from cosmpy.aerial.types import Account
+import certifi
+from cosmpy.aerial.client import LedgerClient, RestClient, ValidatorStatus
+from cosmpy.aerial.urls import Protocol, parse_url
+from cosmpy.aerial.types import Account, Block
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
+import grpc
 from grpclib.client import Channel
 
-from .client_emissions import EmissionsClient
-from .client_mint import MintClient
+from allora_sdk.protobuf_client.proto.cometbft.types.v2 import BlockId
+from .protos.cosmos.base.tendermint.v1beta1 import Block
+import allora_sdk.protobuf_client.protos.emissions.v9 as emissions_v9
+import allora_sdk.protobuf_client.protos.mint.v5 as mint_v5
+
+from .client_emissions import EmissionsClient, EmissionsRestQueryClient
 
 from .config import AlloraNetworkConfig, DEFAULT_TESTNET_CONFIG
-from .events import AlloraWebsocketSubscriber
-from .queries import AlloraQueries
+from .client_websocket_events import AlloraWebsocketSubscriber
 from .utils import AlloraUtils
+from .tx_manager import TxManager
+from .protos.cosmos.base.tendermint.v1beta1 import ServiceStub as TendermintQuerySvc, GetLatestBlockRequest
+from .protos.cosmos.auth.v1beta1 import BaseAccount, QueryAccountInfoRequest, QueryAccountResponse, QueryStub as AuthQuerySvc, QueryAccountRequest
 
 logger = logging.getLogger(__name__)
 
@@ -56,24 +66,37 @@ class ProtobufClient:
         
         # Set up network configuration
         self.config = config or self._get_default_config()
-        self.grpc_channel = Channel(host="100.126.144.65", port=9090, ssl=False)
-        
+
         # Initialize cosmpy client
         self.ledger_client = LedgerClient(cfg=self.config.to_cosmpy_config())
-        
+
         # Initialize wallet if credentials provided
         self.wallet: Optional[LocalWallet] = None
         if private_key or mnemonic:
             self._initialize_wallet(private_key, mnemonic)
 
-        # Set up gRPC services
-        self.emissions = EmissionsClient(wallet=self.wallet, client=self.ledger_client, grpc_channel=self.grpc_channel, config=self.config)
-        self.mint = MintClient(wallet=self.wallet, client=self.ledger_client, grpc_channel=self.grpc_channel, config=self.config)
-        
-        # Initialize submodules
-        self.queries = AlloraQueries(self)
-        self.events = AlloraWebsocketSubscriber(self)
+        parsed_url = parse_url(self.config.url)
+
+        if parsed_url.protocol == Protocol.GRPC:
+            # self.grpc_channel = Channel(host="100.126.144.65", port=9090, ssl=False)
+            if parsed_url.secure:
+                with open(certifi.where(), "rb") as f:
+                    trusted_certs = f.read()
+                credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
+                self.grpc_client = grpc.secure_channel(parsed_url.host_and_port, credentials)
+            else:
+                self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
+
+            # Set up gRPC services
+            emissions = emissions_v9.QueryServiceStub(self.grpc_client)
+        else:
+            # Set up REST (Cosmos-LCD) services
+            emissions = EmissionsRestQueryClient(RestClient(parsed_url.rest_url))
+
+        self.tx_manager = TxManager(wallet=self.wallet, client=self.ledger_client, config=self.config)
+        self.events = AlloraWebsocketSubscriber(self.config.websocket_url)
         self.utils = AlloraUtils(self)
+        self.emissions = EmissionsClient(query_client=emissions, tx_manager=self.tx_manager)
         
         logger.info(f"Initialized Allora client for {self.config.chain_id}")
 
@@ -125,8 +148,9 @@ class ProtobufClient:
     
 
     def get_latest_block(self):
-        """Get latest block information."""
-        return self.ledger_client.query_latest_block()
+        req = GetLatestBlockRequest()
+        resp = self.ledger_client.tendermint.GetLatestBlock(req)
+        return resp
 
     
     def get_balance(self, address: Optional[str] = None, denom: Optional[str] = None) -> Dict[str, int]:
@@ -155,7 +179,7 @@ class ProtobufClient:
             return {}
     
 
-    def get_account_info(self, address: Optional[str] = None) -> Account:
+    async def get_account_info(self, address: Optional[str] = None):
         """
         Get account information including sequence number.
 
@@ -168,6 +192,8 @@ class ProtobufClient:
         if not address and not self.wallet:
             raise ValueError("Address required when no wallet is configured")
         
+        # Prefer gRPC auth service to fetch account metadata, then return cosmpy Account for compatibility
+        # target = address or str(self.wallet.address())
         return self.ledger_client.query_account(self.wallet.address())
 
 
