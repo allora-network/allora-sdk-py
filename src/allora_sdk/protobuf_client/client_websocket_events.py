@@ -12,7 +12,7 @@ import importlib
 import inspect
 from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
-import betterproto
+import betterproto2
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def default_websocket_connect(url: str) -> WebSocketLike:
 
 
 
-T = TypeVar('T', bound=betterproto.Message)
+T = TypeVar('T', bound=betterproto2.Message)
 
 class NewBlockEventsData(BaseModel):
     height: str
@@ -110,7 +110,7 @@ class EventRegistry:
     """Registry for mapping event type strings to protobuf Event classes."""
     
     _instance = None
-    _event_map: Dict[str, Type[betterproto.Message]] = {}
+    _event_map: Dict[str, Type[betterproto2.Message]] = {}
     
     def __new__(cls):
         if cls._instance is None:
@@ -119,9 +119,9 @@ class EventRegistry:
     
     def __init__(self):
         if not self._event_map:
-            logger.info("🔍 Discovering event classes from protobuf modules...")
+            logger.debug("🔍 Discovering event classes from protobuf modules...")
             self._discover_event_classes()
-            logger.info(f"✅ Event registry initialized with {len(self._event_map)} event types")
+            logger.debug(f"✅ Event registry initialized with {len(self._event_map)} event types")
     
     def _discover_event_classes(self) -> None:
         """Auto-discover Event classes from emissions protobuf modules."""
@@ -129,7 +129,7 @@ class EventRegistry:
         
         for version in versions:
             try:
-                module_name = f"allora_sdk.protobuf_client.proto.emissions.{version}"
+                module_name = f"allora_sdk.protobuf_client.protos.emissions.{version}"
                 module = importlib.import_module(module_name)
                 
                 event_classes = [
@@ -137,17 +137,20 @@ class EventRegistry:
                     if (inspect.isclass(obj) and 
                         name.startswith('Event') and 
                         hasattr(obj, '__annotations__') and
-                        issubclass(obj, betterproto.Message))
+                        issubclass(obj, betterproto2.Message))
                 ]
+                if len(event_classes) == 0:
+                    logger.debug(f"no event classes in {module_name}")
                 
                 for name, obj in event_classes:
                     event_type = f"emissions.{version}.{name}"
                     self._event_map[event_type] = obj
                         
-            except ImportError:
+            except ImportError as err:
+                print(f"ImportError: {err}")
                 continue
     
-    def get_event_class(self, event_type: str) -> Optional[Type[betterproto.Message]]:
+    def get_event_class(self, event_type: str) -> Optional[Type[betterproto2.Message]]:
         """Get the protobuf class for an event type string."""
         return self._event_map.get(event_type)
     
@@ -169,9 +172,9 @@ class EventMarshaler:
     def __init__(self, registry: EventRegistry, *, strict: bool = False):
         self.registry = registry
         self.strict = strict
-        self._parser_cache: Dict[Type[betterproto.Message], Dict[str, Callable[[Any], Any]]] = {}
+        self._parser_cache: Dict[Type[betterproto2.Message], Dict[str, Callable[[Any], Any]]] = {}
     
-    def marshal_event(self, event_json: Dict[str, Any]) -> Optional[betterproto.Message]:
+    def marshal_event(self, event_json: Dict[str, Any]) -> Optional[betterproto2.Message]:
         """
         Convert a JSON event to a protobuf Event instance.
         
@@ -182,7 +185,7 @@ class EventMarshaler:
             Protobuf event instance or None if type not registered
         """
         event_type = event_json.get('type')
-        logger.info(f"🔄 Marshaling event: {event_type}")
+        logger.debug(f"🔄 Marshaling event: {event_type}")
         
         if not event_type:
             logger.warning("❌ Event JSON missing 'type' field")
@@ -193,27 +196,27 @@ class EventMarshaler:
             logger.warning(f"❌ No protobuf class registered for event type: {event_type}")
             return None
         
-        logger.info(f"✅ Found protobuf class: {event_class.__name__}")
+        logger.debug(f"✅ Found protobuf class: {event_class.__name__}")
         
         attributes = event_json.get('attributes', [])
-        logger.info(f"📊 Processing {len(attributes)} attributes")
+        logger.debug(f"📊 Processing {len(attributes)} attributes")
         
         # Build parser table for the target event class
         resolved_annotations = self._get_resolved_annotations(event_class)
         field_values = self._parse_attributes(attributes, event_class, resolved_annotations)
-        logger.info(f"🔧 Parsed field values: {field_values}")
+        logger.debug(f"🔧 Parsed field values: {field_values}")
         
         try:
             # Create protobuf instance with parsed field values
             instance = event_class(**field_values)
-            logger.info(f"✅ Successfully created {event_class.__name__} instance")
+            logger.debug(f"✅ Successfully created {event_class.__name__} instance")
             return instance
         except Exception as e:
             logger.error(f"❌ Failed to create {event_class.__name__} instance: {e}")
             logger.error(f"   Field values: {field_values}")
             return None
     
-    def _parse_attributes(self, attributes: List[Dict[str, Any]], event_class: Type[betterproto.Message], field_annotations: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_attributes(self, attributes: List[Dict[str, Any]], event_class: Type[betterproto2.Message], field_annotations: Dict[str, Any]) -> Dict[str, Any]:
         """Parse JSON attributes array into protobuf field values using a per-class parser table."""
         parsers = self._get_parsers_for_class(event_class, field_annotations)
         field_values: Dict[str, Any] = {}
@@ -241,7 +244,7 @@ class EventMarshaler:
                     field_values[key] = raw_value
         return field_values
 
-    def _get_resolved_annotations(self, message_cls: Type[betterproto.Message]) -> Dict[str, Any]:
+    def _get_resolved_annotations(self, message_cls: Type[betterproto2.Message]) -> Dict[str, Any]:
         """Resolve forward-referenced type annotations to actual classes."""
         try:
             import typing as _typing
@@ -263,7 +266,7 @@ class EventMarshaler:
             logger.warning(f"Failed to parse attribute {field_name}='{json_value}': {e}")
             return json_value
 
-    def _instantiate_message(self, message_cls: Type[betterproto.Message], data: Dict[str, Any]) -> betterproto.Message:
+    def _instantiate_message(self, message_cls: Type[betterproto2.Message], data: Dict[str, Any]) -> betterproto2.Message:
         """Instantiate a betterproto message from a plain dict, coercing field types."""
         try:
             annotations: Dict[str, Any] = getattr(message_cls, '__annotations__', {})
@@ -278,7 +281,7 @@ class EventMarshaler:
                 else:
                     # Nested message handling
                     import inspect as _inspect
-                    if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto.Message) and isinstance(value, dict):
+                    if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto2.Message) and isinstance(value, dict):
                         coerced[key] = self._instantiate_message(expected_type, value)
                     else:
                         coerced[key] = value
@@ -301,7 +304,7 @@ class EventMarshaler:
             return s[1:-1]
         return s
 
-    def _get_parsers_for_class(self, message_cls: Type[betterproto.Message], annotations: Dict[str, Any]) -> Dict[str, Callable[[Any], Any]]:
+    def _get_parsers_for_class(self, message_cls: Type[betterproto2.Message], annotations: Dict[str, Any]) -> Dict[str, Callable[[Any], Any]]:
         if message_cls in self._parser_cache:
             return self._parser_cache[message_cls]
         parsers: Dict[str, Callable[[Any], Any]] = {}
@@ -341,9 +344,9 @@ class EventMarshaler:
             return parse_list
 
         # Handle nested message
-        if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto.Message):
+        if _inspect.isclass(expected_type) and issubclass(expected_type, betterproto2.Message):
 
-            def parse_message(v: Any) -> betterproto.Message:
+            def parse_message(v: Any) -> betterproto2.Message:
                 if isinstance(v, dict):
                     return self._instantiate_message(expected_type, v)
                 if isinstance(v, str):
@@ -499,32 +502,25 @@ class AlloraWebsocketSubscriber:
         self.event_marshaler = EventMarshaler(self.event_registry)
         
     async def start(self):
-        """Start the event subscription service."""
         if self.running:
             logger.warning("Event subscriber already running")
             return
         
         self.running = True
-        logger.info("🚀 Starting WebSocket event subscription service...")
+        logger.debug("🚀 Starting WebSocket event subscription service...")
         
-        # Create event loop task
         self._event_task = asyncio.create_task(self._event_loop())
-        logger.info("✅ Event loop task created")
-        
         await self._connect()
 
 
     async def _ensure_started(self):
-        """Ensure the event subscription service is started (idiomatic auto-start)."""
         if not self.running:
-            logger.info("🚀 Auto-starting event subscription service...")
+            logger.debug("🚀 Auto-starting event subscription service...")
             await self.start()
     
     async def stop(self):
-        """Stop the event subscription service."""
         self.running = False
         
-        # Cancel event loop task if it exists
         if hasattr(self, '_event_task') and self._event_task:
             self._event_task.cancel()
             try:
@@ -532,16 +528,14 @@ class AlloraWebsocketSubscriber:
             except asyncio.CancelledError:
                 pass
         
-        # Unsubscribe from all subscriptions
         for subscription_id in list(self.subscriptions.keys()):
             await self._unsubscribe(subscription_id)
         
-        # Close WebSocket connection
         if self.websocket:
             await self.websocket.close()
             self.websocket = None
         
-        logger.info("Event subscriber stopped")
+        logger.debug("Event subscriber stopped")
     
     async def subscribe(
         self,
@@ -586,13 +580,13 @@ class AlloraWebsocketSubscriber:
         if self.websocket and not self.websocket.close_code:
             await self._send_subscription(subscription_id, query)
         
-        logger.info(f"Subscribed to events: {query} (ID: {subscription_id})")
+        logger.debug(f"Subscribed to events: {query} (ID: {subscription_id})")
         return subscription_id
     
     async def unsubscribe(self, subscription_id: str):
         """Unsubscribe from events."""
         if subscription_id not in self.subscriptions:
-            logger.warning(f"Subscription {subscription_id} not found")
+            logger.debug(f"Subscription {subscription_id} not found")
             return
         
         await self._unsubscribe(subscription_id)
@@ -601,16 +595,16 @@ class AlloraWebsocketSubscriber:
         self.subscriptions.pop(subscription_id, None)
         self.callbacks.pop(subscription_id, None)
         
-        logger.info(f"Unsubscribed from {subscription_id}")
+        logger.debug(f"Unsubscribed from {subscription_id}")
     
     async def _connect(self):
         """Establish WebSocket connection."""
         attempts = 0
         while attempts < self.max_reconnect_attempts and self.running:
             try:
-                logger.info(f"Connecting to {self.url}")
+                logger.debug(f"Connecting to {self.url}")
                 self.websocket = await self.connect_fn(self.url)
-                logger.info("WebSocket connected")
+                logger.debug("WebSocket connected")
                 
                 # Resubscribe to all active subscriptions
                 for subscription_id, info in self.subscriptions.items():
@@ -666,7 +660,7 @@ class AlloraWebsocketSubscriber:
     
     async def _event_loop(self):
         """Main event processing loop."""
-        logger.info(f"🚀 Starting event loop (running={self.running})")
+        logger.debug(f"🚀 Starting event loop (running={self.running})")
         while self.running:
             try:
                 if not self.websocket or self.websocket.close_code:
@@ -676,7 +670,6 @@ class AlloraWebsocketSubscriber:
                 
                 logger.debug(f"🔄 Event loop waiting for message...")
                 
-                # Wait for message with timeout
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
@@ -1055,7 +1048,7 @@ class AlloraWebsocketSubscriber:
         logger.info(f"✅ Completed typed subscription: {event_name} -> {event_class.__name__} (ID: {subscription_id})")
         return subscription_id
     
-    def _get_event_type_from_class(self, event_class: Type[betterproto.Message]) -> Optional[str]:
+    def _get_event_type_from_class(self, event_class: Type[betterproto2.Message]) -> Optional[str]:
         """Get the event type string from a protobuf class."""
         logger.info(f"🔍 Looking for event type for class: {event_class}")
         logger.info(f"📊 Registry has {len(self.event_registry._event_map)} registered types")

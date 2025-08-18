@@ -10,13 +10,15 @@ import argparse
 import ast
 import importlib
 import inspect
-import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, get_type_hints
 import logging
+import yaml
+
+import betterproto2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +36,7 @@ class SwaggerParameter:
 
 @dataclass
 class HttpRoute:
-    """HTTP route information extracted from Swagger JSON."""
+    """HTTP route information extracted from Swagger YAML."""
     method: str  # GET, POST, etc.
     path: str    # /emissions/v9/params
     operation_id: str
@@ -62,16 +64,16 @@ class ProtobufModule:
 
 
 class SwaggerParser:
-    """Parses Swagger JSON to extract HTTP route information."""
+    """Parses Swagger YAML to extract HTTP route information."""
     
     def __init__(self, swagger_path: str):
         with open(swagger_path, 'r') as f:
-            self.swagger_data = json.load(f)
+            self.swagger_data = yaml.safe_load(f)
         self.routes_by_operation_id: Dict[str, HttpRoute] = {}
         self._parse_routes()
     
     def _parse_routes(self):
-        """Parse all routes from swagger JSON."""
+        """Parse all routes from swagger YAML."""
         paths = self.swagger_data.get('paths', {})
         
         for path, methods in paths.items():
@@ -105,12 +107,16 @@ class SwaggerParser:
                 
         logger.info(f"Parsed {len(self.routes_by_operation_id)} routes from Swagger")
     
-    def get_route_for_method(self, method_name: str, module_name: str) -> Optional[HttpRoute]:
+    def get_route_for_method(self, method_name: str, module_name: str, service_class_name: str = "QueryService") -> Optional[HttpRoute]:
         """Get HTTP route for a protobuf method."""
         # Convert method name to operation ID pattern
         # e.g., get_multi_reputer_stake_in_topic -> QueryService_GetMultiReputerStakeInTopic
+        # or simulate -> Service_Simulate (for cosmos.tx.v1beta1)
         pascal_method = self._to_pascal_case(method_name)
-        operation_id = f"QueryService_{pascal_method}"
+        
+        # Extract service name from class name (remove 'Stub' suffix)
+        service_name = service_class_name.replace('Stub', '') if service_class_name.endswith('Stub') else service_class_name
+        operation_id = f"{service_name}_{pascal_method}"
         
         return self.routes_by_operation_id.get(operation_id)
     
@@ -136,10 +142,23 @@ class ProtobufAnalyzer:
                 import_path = f"{self.base_import_path}.{tag.replace('.', '.')}"
                 module = importlib.import_module(import_path)
                 
-                # Look for QueryServiceStub class
-                if hasattr(module, 'QueryServiceStub'):
-                    stub_class = getattr(module, 'QueryServiceStub')
-                    methods = self._analyze_service_class(stub_class, tag, import_path)
+                # Look for *ServiceStub class
+                stub_class = None
+                all_stubs = []
+                for attr_name in dir(module):
+                    if attr_name.endswith('ServiceStub'):
+                        all_stubs.append(attr_name)
+                        if 'Query' in attr_name:
+                            stub_class = getattr(module, attr_name)
+                        # Fallback to any ServiceStub if no QueryServiceStub found
+                        elif stub_class is None:
+                            stub_class = getattr(module, attr_name)
+                
+                
+                if stub_class:
+                    # Find the actual stub class name for service prefix determination  
+                    stub_class_name = stub_class.__name__
+                    methods = self._analyze_service_class(stub_class, tag, import_path, stub_class_name)
                     
                     pb_module = ProtobufModule(
                         name=tag,
@@ -157,10 +176,10 @@ class ProtobufAnalyzer:
                 
         return modules
     
-    def _analyze_service_class(self, stub_class: Any, module_name: str, import_path: str) -> List[ServiceMethod]:
-        """Analyze a QueryServiceStub class to extract method information."""
+    def _analyze_service_class(self, stub_class: Any, module_name: str, import_path: str, stub_class_name: str) -> List[ServiceMethod]:
+        """Analyze a ServiceStub class to extract method information."""
         methods = []
-        
+
         # Get all methods that don't start with underscore
         for method_name in dir(stub_class):
             if method_name.startswith('_'):
@@ -194,13 +213,15 @@ class ProtobufAnalyzer:
                     continue
                 
                 # Generate gRPC path (this is a convention)
-                grpc_path = f"/{module_name}.QueryService/{self._to_pascal_case(method_name)}"
+                # Extract service name from stub class name (remove 'Stub' suffix)
+                service_name = stub_class_name.replace('Stub', '') if stub_class_name.endswith('Stub') else stub_class_name
+                grpc_path = f"/{module_name}.{service_name}/{self._to_pascal_case(method_name)}"
                 
                 # Try to get HTTP route from Swagger if available
                 http_route = None
                 if self.swagger_parser:
-                    http_route = self.swagger_parser.get_route_for_method(method_name, module_name)
-                
+                    http_route = self.swagger_parser.get_route_for_method(method_name, module_name, stub_class_name)
+
                 service_method = ServiceMethod(
                     name=method_name,
                     request_type=request_type,
@@ -266,12 +287,16 @@ class RestClientGenerator:
     """Generates REST client code from protobuf module information."""
     
     def __init__(self):
-        self.generated_classes = []
+        self.generated_exports = []  # List of (filename, class_name, protocol_name) tuples
         
     def generate_client(self, module: ProtobufModule) -> str:
         """Generate REST client code for a protobuf module."""
         class_name = self._get_client_class_name(module.name)
         protocol_name = self._get_protocol_name(module.name)
+        filename = f"{module.name.replace('.', '_')}_rest_client"
+        
+        # Track generated exports for __init__.py
+        self.generated_exports.append((filename, class_name, protocol_name))
         
         # Generate imports
         imports = self._generate_imports(module)
@@ -288,7 +313,8 @@ class RestClientGenerator:
         """Generate import statements for the module."""
         imports = [
             "from typing import Protocol, runtime_checkable",
-            "from cosmpy.common.rest_client import RestClient",
+            "import requests",
+            "import json",
         ]
         
         # Import all request/response types
@@ -317,61 +343,85 @@ class RestClientGenerator:
             f"class {protocol_name}(Protocol):",
         ]
         
-        for method in module.methods:
-            method_sig = f"    def {method.name}(self, message: {method.request_type}) -> {method.response_type}: ..."
-            lines.append(method_sig)
+        # Only include methods with Swagger routes
+        methods_with_routes = [m for m in module.methods if m.http_route is not None]
+        if not methods_with_routes:
+            # Add pass statement for empty protocols
+            lines.append("    pass")
+        else:
+            for method in methods_with_routes:
+                if method.http_route and len(method.http_route.parameters) == 0:
+                    method_sig = f"    def {method.name}(self, message: {method.request_type} | None = None) -> {method.response_type}: ..."
+                else:
+                    method_sig = f"    def {method.name}(self, message: {method.request_type}) -> {method.response_type}: ..."
+                lines.append(method_sig)
             
         return "\n".join(lines)
     
     def _generate_rest_client_class(self, module: ProtobufModule, class_name: str, protocol_name: str) -> str:
         """Generate the REST client class."""
-        api_url = f"/{module.name}"
         
         lines = [
             f"class {class_name}({protocol_name}):",
             f'    """{module.name.title()} REST client."""',
             "",
-            f'    API_URL = "{api_url}"',
-            "",
-            "    def __init__(self, rest_api: RestClient):",
+            "    def __init__(self, base_url: str):",
             '        """',
             "        Initialize REST client.",
             "",
-            "        :param rest_api: RestClient api",
+            "        :param base_url: Base URL for the REST API",
             '        """',
-            "        self._rest_api = rest_api",
+            "        self.base_url = base_url.rstrip('/')",
+            "        self.session = requests.Session()",
+            "",
+            "    def __del__(self):",
+            '        """Clean up session on deletion."""',
+            "        if hasattr(self, 'session'):",
+            "            self.session.close()",
             "",
         ]
         
-        # Generate methods
-        for method in module.methods:
+        # Generate methods (only for methods with Swagger routes)
+        methods_with_routes = [m for m in module.methods if m.http_route is not None]
+        for method in methods_with_routes:
             method_lines = self._generate_method(method)
             lines.extend(method_lines)
             lines.append("")
+        
+        # Log methods without routes
+        methods_without_routes = [m for m in module.methods if m.http_route is None]
+        if methods_without_routes:
+            logger.info(f"  Skipped {len(methods_without_routes)} methods without Swagger routes: {', '.join([m.name for m in methods_without_routes[:5]])}{('...' if len(methods_without_routes) > 5 else '')}")
             
         return "\n".join(lines)
     
     def _generate_method(self, method: ServiceMethod) -> List[str]:
         """Generate a single REST client method."""
-        lines = [
-            f"    def {method.name}(self, message: {method.request_type}) -> {method.response_type}:",
-        ]
-        
+
         if not method.http_route:
-            # No swagger information - generate a placeholder
-            lines.extend([
-                f"        # TODO: No Swagger route found for {method.name}",
-                f"        # Implement the correct REST endpoint",
-                f"        raise NotImplementedError(f'REST endpoint for {method.name} not implemented')"
-            ])
-            return lines
-        
+            raise Exception(f"no swagger route found for {method.name}")
+
+            # # No swagger information - generate a placeholder
+            # lines.extend([
+            #     f"        # TODO: No Swagger route found for {method.name}",
+            #     f"        # Implement the correct REST endpoint",
+            #     f"        raise NotImplementedError(f'REST endpoint for {method.name} not implemented')"
+            # ])
+            # return lines
+
         route = method.http_route
-        
-        # Build path with path parameters
         path = route.path
         path_params = [p for p in route.parameters if p.location == "path"]
         query_params = [p for p in route.parameters if p.location == "query"]
+
+        if len(route.parameters) == 0:
+            lines = [
+                f"    def {method.name}(self, message: {method.request_type} | None = None) -> {method.response_type}:",
+            ]
+        else:
+            lines = [
+                f"    def {method.name}(self, message: {method.request_type}) -> {method.response_type}:",
+            ]
         
         # Convert swagger path parameters to Python f-string format
         # e.g., {topicId} -> {message.topic_id}
@@ -382,11 +432,12 @@ class RestClientGenerator:
             python_param = f"{{message.{field_name}}}"
             path = path.replace(swagger_param, python_param)
         
+        # Build the full URL
+        lines.append(f'        url = self.base_url + f"{path}"')
+        
         # Handle query parameters
         if query_params:
-            lines.append("        # Build query parameters")
             lines.append("        params = {}")
-            
             for param in query_params:
                 field_name = self._camel_to_snake(param.name)
                 if param.is_array:
@@ -401,13 +452,15 @@ class RestClientGenerator:
                     ])
             
             lines.extend([
-                f'        json_response = self._rest_api.get(f"{path}", params=params)',
-                f"        return {method.response_type}().from_json(json_response)"
+                "        response = self.session.get(url, params=params)",
+                "        response.raise_for_status()",
+                f"        return {method.response_type}().from_json(response.text)"
             ])
         else:
             lines.extend([
-                f'        json_response = self._rest_api.get(f"{path}")',
-                f"        return {method.response_type}().from_json(json_response)"
+                "        response = self.session.get(url)",
+                "        response.raise_for_status()",
+                f"        return {method.response_type}().from_json(response.text)"
             ])
         
         return lines
@@ -427,6 +480,31 @@ class RestClientGenerator:
         """Get the protocol interface name."""
         parts = module_name.split('.')
         return f"{''.join(p.title() for p in parts)}QueryLike"
+    
+    def generate_init_file(self) -> str:
+        """Generate __init__.py file with exports for all generated clients."""
+        if not self.generated_exports:
+            return ""
+        
+        # Generate import statements
+        import_lines = []
+        all_exports = []
+        
+        for filename, class_name, protocol_name in self.generated_exports:
+            import_lines.append(f"from .{filename} import {class_name}, {protocol_name}")
+            all_exports.extend([class_name, protocol_name])
+        
+        # Generate __all__ list
+        all_list = "[\n"
+        for export in all_exports:
+            all_list += f'    "{export}",\n'
+        all_list += "]"
+        
+        # Combine into final file content
+        content = "\n".join(import_lines)
+        content += "\n\n__all__ = " + all_list + "\n"
+        
+        return content
 
 
 def main():
@@ -451,8 +529,8 @@ def main():
         help="Base import path for protobuf modules"
     )
     parser.add_argument(
-        "--swagger-json",
-        help="Path to Swagger 2.0 JSON file for HTTP route information"
+        "--swagger-yaml",
+        help="Path to Swagger 2.0 YAML file for HTTP route information"
     )
     
     args = parser.parse_args()
@@ -461,10 +539,10 @@ def main():
     output_dir = Path(args.out)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Parse Swagger JSON if provided
+    # Parse Swagger YAML if provided
     swagger_parser = None
-    if args.swagger_json:
-        swagger_parser = SwaggerParser(args.swagger_json)
+    if args.swagger_yaml:
+        swagger_parser = SwaggerParser(args.swagger_yaml)
     
     # Discover and analyze modules
     analyzer = ProtobufAnalyzer(args.base_import_path, swagger_parser)
@@ -491,6 +569,14 @@ def main():
             f.write(client_code)
             
         logger.info(f"Generated {output_file}")
+    
+    # Generate __init__.py file with exports
+    init_content = generator.generate_init_file()
+    if init_content:
+        init_file = output_dir / "__init__.py"
+        with open(init_file, 'w') as f:
+            f.write(init_content)
+        logger.info(f"Generated {init_file}")
     
     logger.info(f"Generated REST clients for {len(modules)} modules in {output_dir}")
 

@@ -26,7 +26,10 @@ class AlloraNetworkConfig:
         """Get Allora testnet configuration."""
         return cls(
             chain_id="allora-testnet-1",
-            url="rest+https://allora-api.testnet.allora.network",
+            # url="grpc+http://65.108.224.166:26757",
+            # url="grpc+http://allora-grpc.polkachu.com:26790",
+            url="grpc+http://100.126.144.65:9090",
+            # url="grpc+http://100.126.144.65:9090",
             websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=10.0

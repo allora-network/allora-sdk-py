@@ -1,12 +1,12 @@
 
 
-COSMOS_SDK_DIR := ../../cosmos-sdk/proto
+COSMOS_SDK_DIR := ./proto-deps/cosmos-sdk/proto
+COSMOS_PROTO_DIR := ./proto-deps/cosmos-proto/proto
 GOGOPROTO_DIR := ./proto-deps/gogoproto
 GOOGLEAPIS_DIR := ./proto-deps/googleapis
-COSMOS_PROTO_DIR := ./proto-deps/cosmos-proto/proto
 ALLORA_CHAIN_DIR := ../allora-chain
-ALLORA_PROTOS_DIR := src/allora_sdk/protobuf_client/protos
-REST_CLIENT_OUT_DIR := src/allora_sdk/protobuf_client/rest
+ALLORA_PROTOS_DIR := ./src/allora_sdk/protobuf_client/protos
+REST_CLIENT_OUT_DIR := ./src/allora_sdk/rest
 
 ########################################
 ### Generate protos and grpc files
@@ -61,26 +61,33 @@ generate_init_py_files: generate_proto_types
 generate_rest_clients: $(ALLORA_CHAIN_DIR)
 	rm -rf $(REST_CLIENT_OUT_DIR)
 
-	python scripts/generate_rest_client.py \
-	    --out ./src/allora_sdk/rest/ \
-	    --include-tags emissions.v9 mint.v5 \
-	    --swagger-json $(ALLORA_CHAIN_DIR)/openapi/allora.swagger.json
+	python scripts/generate_rest_client_from_protos.py \
+		--out $(REST_CLIENT_OUT_DIR) \
+		--include-tags emissions.v9 mint.v5 cosmos.tx cosmos.base.tendermint.v1beta1 cosmos.auth.v1beta1 cosmos.bank.v1beta1 \
+		--proto-files-dirs $(ALLORA_CHAIN_DIR)/x $(COSMOS_SDK_DIR) \
+		--include-dirs $(ALLORA_CHAIN_DIR)/x/emissions/proto \
+					   $(ALLORA_CHAIN_DIR)/x/mint/proto \
+					   $(COSMOS_SDK_DIR) \
+					   $(COSMOS_PROTO_DIR) \
+					   $(GOGOPROTO_DIR) \
+					   $(GOOGLEAPIS_DIR)
 
-# 	python scripts/generate_rest_client_from_openapi.py \
-# 		--spec $(ALLORA_CHAIN_DIR)/openapi/allora.swagger.json \
-# 		--out src/allora_sdk/rest/generated_client.py \
-# 		--include-tags emissions.v9 mint.v5
+# 	python scripts/generate_rest_client_from_protos.py \
+# 		--out $(REST_CLIENT_OUT_DIR) \
+# 		--include-tags cosmos.tx cosmos.base.tendermint.v1beta1 \
+# 		--proto-files-dir $(COSMOS_SDK_DIR) \
+# 		--include-dirs $(COSMOS_SDK_DIR) \
+# 					   $(COSMOS_PROTO_DIR) \
+# 					   $(GOGOPROTO_DIR) \
+# 					   $(GOOGLEAPIS_DIR)
 
-	touch src/allora_sdk/rest/__init__.py
-# 	npx @openapitools/openapi-generator-cli generate \
-# 		-i $(ALLORA_CHAIN_DIR)/openapi/allora.swagger.json \
-# 		-g python -o src/allora_sdk/protobuf_client/rest \
-# 		--additional-properties=packageName=.,generateSourceCodeOnly=true \
-# 		--skip-validate-spec
+	touch $(REST_CLIENT_OUT_DIR)/__init__.py
 
 git_clone_dependencies:
 	rm -rf ./proto-deps
 	mkdir -p ./proto-deps
-	git clone --depth 1 https://github.com/cosmos/gogoproto --single-branch --branch=main ./proto-deps/gogoproto
-	git clone --depth 1 https://github.com/cosmos/cosmos-proto --single-branch --branch=main ./proto-deps/cosmos-proto
+	git clone --depth 1 https://github.com/cosmos/gogoproto --single-branch --branch=v1.7.0 ./proto-deps/gogoproto
+	git clone --depth 1 https://github.com/cosmos/cosmos-proto --single-branch --branch=v1.0.0-beta.5 ./proto-deps/cosmos-proto
+	git clone --depth 1 https://github.com/cosmos/cosmos-sdk --single-branch --branch=v0.50.13 ./proto-deps/cosmos-sdk
 	git clone --depth 1 https://github.com/googleapis/googleapis --single-branch --branch=master ./proto-deps/googleapis
+

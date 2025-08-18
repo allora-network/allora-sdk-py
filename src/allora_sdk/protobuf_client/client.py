@@ -8,30 +8,28 @@ and provides Allora-specific functionality for interacting with the blockchain.
 import logging
 import os
 from typing import Optional, Dict
-import asyncio
 
 import certifi
-from cosmpy.aerial.client import LedgerClient, RestClient, ValidatorStatus
+from cosmpy.aerial.client import LedgerClient, ValidatorStatus
 from cosmpy.aerial.urls import Protocol, parse_url
-from cosmpy.aerial.types import Account, Block
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
 import grpc
-from grpclib.client import Channel
 
-from allora_sdk.protobuf_client.proto.cometbft.types.v2 import BlockId
-from .protos.cosmos.base.tendermint.v1beta1 import Block
+from allora_sdk.protobuf_client.client_mint import MintClient
+import allora_sdk.protobuf_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
+import allora_sdk.protobuf_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
+import allora_sdk.protobuf_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
+import allora_sdk.protobuf_client.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
 import allora_sdk.protobuf_client.protos.emissions.v9 as emissions_v9
 import allora_sdk.protobuf_client.protos.mint.v5 as mint_v5
+import allora_sdk.rest as rest
 
-from .client_emissions import EmissionsClient, EmissionsRestQueryClient
-
+from .client_emissions import EmissionsClient
 from .config import AlloraNetworkConfig, DEFAULT_TESTNET_CONFIG
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .utils import AlloraUtils
 from .tx_manager import TxManager
-from .protos.cosmos.base.tendermint.v1beta1 import ServiceStub as TendermintQuerySvc, GetLatestBlockRequest
-from .protos.cosmos.auth.v1beta1 import BaseAccount, QueryAccountInfoRequest, QueryAccountResponse, QueryStub as AuthQuerySvc, QueryAccountRequest
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +47,7 @@ class ProtobufClient:
         config: Optional[AlloraNetworkConfig] = None,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ):
         """
         Initialize the Allora blockchain client.
@@ -60,9 +58,7 @@ class ProtobufClient:
             mnemonic: Mnemonic phrase for generating wallet.
             debug: Enable debug logging.
         """
-        self.debug = debug
-        if debug:
-            logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(level=log_level)
         
         # Set up network configuration
         self.config = config or self._get_default_config()
@@ -78,7 +74,6 @@ class ProtobufClient:
         parsed_url = parse_url(self.config.url)
 
         if parsed_url.protocol == Protocol.GRPC:
-            # self.grpc_channel = Channel(host="100.126.144.65", port=9090, ssl=False)
             if parsed_url.secure:
                 with open(certifi.where(), "rb") as f:
                     trusted_certs = f.read()
@@ -88,15 +83,41 @@ class ProtobufClient:
                 self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
 
             # Set up gRPC services
-            emissions = emissions_v9.QueryServiceStub(self.grpc_client)
+            emissions: rest.EmissionsV9QueryServiceLike = emissions_v9.QueryServiceStub(self.grpc_client)
+            mint: rest.MintV5QueryServiceLike = mint_v5.QueryServiceStub(self.grpc_client)
+            self.tx: rest.CosmosTxV1Beta1ServiceLike = cosmos_tx_v1beta1.ServiceStub(self.grpc_client)
+            self.tendermint: rest.CosmosBaseTendermintV1Beta1ServiceLike = tendermint_v1beta1.ServiceStub(self.grpc_client)
+            self.auth = cosmos_auth_v1beta1.QueryStub(self.grpc_client)
+            self.bank = cosmos_bank_v1beta1.QueryStub(self.grpc_client)
         else:
             # Set up REST (Cosmos-LCD) services
-            emissions = EmissionsRestQueryClient(RestClient(parsed_url.rest_url))
+            emissions: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
+            mint: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
+            self.tx: rest.CosmosTxV1Beta1ServiceLike = rest.CosmosTxV1Beta1RestServiceClient(parsed_url.rest_url)
+            self.tendermint: rest.CosmosBaseTendermintV1Beta1ServiceLike = rest.CosmosBaseTendermintV1Beta1RestServiceClient(parsed_url.rest_url)
+            self.auth: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
+            self.bank: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
 
-        self.tx_manager = TxManager(wallet=self.wallet, client=self.ledger_client, config=self.config)
+        tendermint = tendermint_v1beta1.ServiceStub(self.grpc_client)
+
+        # self._response = self._client.wait_for_query_tx(
+        #     self.tx_hash, timeout=timeout, poll_period=poll_period
+        # )
+        # assert self._response is not None
+        # self._response.ensure_successful()
+
+        self.tx_manager = TxManager(
+            wallet=self.wallet,
+            tx_client=self.tx,
+            auth_client=self.auth,
+            bank_client=self.bank,
+            config=self.config,
+        )
         self.events = AlloraWebsocketSubscriber(self.config.websocket_url)
         self.utils = AlloraUtils(self)
         self.emissions = EmissionsClient(query_client=emissions, tx_manager=self.tx_manager)
+        self.mint = MintClient(query_client=mint)
+        # self.cosmos_tx = CosmosTxClient(query_client=cosmos_tx)
         
         logger.info(f"Initialized Allora client for {self.config.chain_id}")
 
@@ -148,9 +169,10 @@ class ProtobufClient:
     
 
     def get_latest_block(self):
-        req = GetLatestBlockRequest()
-        resp = self.ledger_client.tendermint.GetLatestBlock(req)
-        return resp
+        resp = self.tendermint.get_latest_block(tendermint_v1beta1.GetLatestBlockRequest())
+        if resp is None or resp.block is None:
+            raise Exception('could not get latest block')
+        return resp.block
 
     
     def get_balance(self, address: Optional[str] = None, denom: Optional[str] = None) -> Dict[str, int]:
@@ -212,10 +234,10 @@ class ProtobufClient:
 
     async def close(self):
         """Close client and cleanup resources."""
-        logger.info("Closing Allora client")
+        logger.debug("Closing Allora client")
         if self.events:
             await self.events.stop()
-        self.grpc_channel.close()
+        self.grpc_client.close()
 
 
     @classmethod
@@ -223,10 +245,10 @@ class ProtobufClient:
         cls,
         mnemonic: str,
         config: Optional[AlloraNetworkConfig] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ) -> 'ProtobufClient':
         """Create client from mnemonic phrase."""
-        return cls(config=config, mnemonic=mnemonic, debug=debug)
+        return cls(config=config, mnemonic=mnemonic, log_level=log_level,)
     
 
     @classmethod
@@ -234,10 +256,10 @@ class ProtobufClient:
         cls,
         private_key: str,
         config: Optional[AlloraNetworkConfig] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ) -> 'ProtobufClient':
         """Create client from private key."""
-        return cls(config=config, private_key=private_key, debug=debug)
+        return cls(config=config, private_key=private_key, log_level=log_level,)
     
 
     @classmethod
@@ -245,14 +267,14 @@ class ProtobufClient:
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ) -> 'ProtobufClient':
         """Create client for testnet."""
         return cls(
             config=AlloraNetworkConfig.testnet(),
             private_key=private_key,
             mnemonic=mnemonic,
-            debug=debug
+            log_level=log_level,
         )
     
 
@@ -261,14 +283,14 @@ class ProtobufClient:
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ) -> 'ProtobufClient':
         """Create client for mainnet."""
         return cls(
             config=AlloraNetworkConfig.mainnet(),
             private_key=private_key,
             mnemonic=mnemonic,
-            debug=debug
+            log_level=log_level,
         )
     
     @classmethod
@@ -277,14 +299,14 @@ class ProtobufClient:
         port: int = 26657,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        debug: bool = False
+        log_level: logging._Level = logging.INFO,
     ) -> 'ProtobufClient':
         """Create client for local development."""
         return cls(
             config=AlloraNetworkConfig.local(port),
             private_key=private_key,
             mnemonic=mnemonic,
-            debug=debug
+            log_level=log_level,
         )
 
 

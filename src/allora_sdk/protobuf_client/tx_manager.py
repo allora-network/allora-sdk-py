@@ -1,39 +1,87 @@
 from enum import Enum
+import time
+from cosmpy.aerial.client.utils import ensure_timedelta
+import grpc
+import requests
+from datetime import datetime, timedelta
 import logging
 import traceback
-from typing import Any, Optional
-from cosmpy.aerial.client import LedgerClient, TxResponse
+from typing import Any, Optional, Union
+
+from cosmpy.aerial.client import LedgerClient, TxResponse as TxResponseCosmPy
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
-from google.protobuf.any_pb2 import Any as ProtobufAny
 
 from allora_sdk.protobuf_client.config import AlloraNetworkConfig
+from allora_sdk.protobuf_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
+from allora_sdk.protobuf_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from allora_sdk.protobuf_client.protos.cosmos.base.abci.v1beta1 import TxResponse
+from allora_sdk.protobuf_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest
+from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
+from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
+from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
+
+
+# # Forward declare to avoid circular import
+# from typing import TYPE_CHECKING
+# if TYPE_CHECKING:
+#     from allora_sdk.protobuf_client.client_cosmos_tx import CosmosTxClient
 
 logger = logging.getLogger(__name__)
 
-# Fee tier options for user-friendly transaction submission
 class FeeTier(Enum):
-    ECO      = "eco"           # Minimum fees, slower confirmation
-    STANDARD = "standard" # Balanced fees and speed
-    PRIORITY = "priority" # Higher fees, faster confirmation
+    ECO      = "eco"
+    STANDARD = "standard"
+    PRIORITY = "priority"
 
-# Custom exceptions for better error handling
 class TxError(Exception):
     """Base exception for transaction errors."""
-    pass
+    def __init__(self, codespace: str, code: int, message: str, tx_hash: str):
+        self.codespace = codespace
+        self.code = code
+        self.message = message
+        self.tx_hash = tx_hash
 
-class InsufficientBalanceError(TxError):
+    def __str__(self):
+        return f"TxError: codespace={self.codespace} code={self.code} tx_hash={self.tx_hash} {self.message}"
+
+class InsufficientBalanceError(Exception):
     """Raised when account doesn't have enough balance for fees."""
     pass
 
-class OutOfGasError(TxError):
+class OutOfGasError(Exception):
     """Raised when transaction runs out of gas."""
     pass
 
-class AccountSequenceMismatchError(TxError):
+class InsufficientFeesError(Exception):
+    pass
+
+class AccountSequenceMismatchError(Exception):
     """Raised when account sequence is out of sync."""
     pass
+
+class TxNotFoundError(Exception):
+    pass
+
+class TxTimeoutError(Exception):
+    pass
+
+# class TxResponse(TxResponseCosmPy):
+#     def __init__(self, data: dict):
+#         super().__init__(
+#             hash = data.get("txhash", ""),
+#             height = int(data.get("height", 0)),
+#             raw_log = data.get("raw_log", ""),
+#             code = int(data.get("code", 99999)),
+#             gas_used = int(data.get("gas_used", 99999)),
+#             gas_wanted = int(data.get("gas_wanted", 99999)),
+#             logs=[],
+#             events={},
+#             timestamp = datetime.fromisoformat(data.get("timestamp", "")),
+#         )
+#         self.codespace = data.get("codespace", "unknown")
+
 
 
 class TxManager:
@@ -41,12 +89,20 @@ class TxManager:
     def __init__(
         self,
         wallet: LocalWallet,
-        client: LedgerClient,
+        tx_client: CosmosTxV1Beta1ServiceLike,
+        auth_client: CosmosAuthV1Beta1QueryLike,
+        bank_client: CosmosBankV1Beta1QueryLike,
         config: AlloraNetworkConfig,
+        query_interval_secs: int = 2,
+        query_timeout_secs: int = 5,
     ):
         self.wallet = wallet
-        self.client = client
+        self.tx_client = tx_client
+        self.auth_client = auth_client
+        self.bank_client = bank_client
         self.config = config
+        self.query_interval_secs = query_interval_secs
+        self.query_timeout_secs = query_timeout_secs
 
         self._default_gas_limits = {
             "/emissions.v9.InsertWorkerPayloadRequest": 250000,
@@ -70,7 +126,7 @@ class TxManager:
         max_retries: int = 2
     ) -> TxResponse:
         if self.wallet is None:
-            raise TxError('No wallet configured. Initialize client with private key or mnemonic.')
+            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
         await self._pre_flight_checks()
 
@@ -80,21 +136,24 @@ class TxManager:
                 return await self._submit_single_attempt(type_url, msg, gas_limit, fee_tier, gas_multiplier)
             except OutOfGasError:
                 if attempt == max_retries:
-                    raise TxError("Transaction failed after multiple attempts due to insufficient gas")
-                logger.warning(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
+                    raise Exception("Transaction failed after multiple attempts due to insufficient gas")
+                logger.debug(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
                 continue
             except AccountSequenceMismatchError:
                 if attempt == max_retries:
                     raise
-                logger.warning("Account sequence mismatch, retrying...")
+                logger.debug("Account sequence mismatch, retrying...")
                 continue
+            except TxError:
+                # Don't retry on-chain errors - re-raise immediately
+                raise
             except Exception as e:
                 # Don't retry on other types of errors
-                logger.error(f"Transaction failed: {str(e)}")
-                logger.error(f"Full traceback: {traceback.format_exc()}")
-                raise TxError(f"Transaction failed: {str(e)}")
+                logger.debug(f"Transaction failed: {str(e)}")
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+                raise Exception(f"Transaction failed: {str(e)}")
 
-        raise TxError("Transaction failed after maximum retries")
+        raise Exception("Transaction failed after maximum retries")
 
     async def _submit_single_attempt(
         self,
@@ -116,132 +175,158 @@ class TxManager:
         fee = await self._calculate_optimal_fee(gas_limit, fee_tier)
 
         try:
-            account_info = self.client.query_account(self.wallet.address())
-            logger.debug(f"Account info: seq={account_info.sequence}, num={account_info.number}")
+            resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+            if resp.info is None:
+                raise Exception('account_info query response is none')
+            info = resp.info
+            logger.debug(f"Account info: seq={info.sequence}, num={info.account_number}")
 
-            logger.debug("Sealing transaction...")
             tx.seal(
-                signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=account_info.sequence)],
+                signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence) ],
                 fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
             )
-            logger.debug("Transaction sealed successfully")
 
-            logger.debug("Signing transaction...")
             tx.sign(
                 signer=self.wallet.signer(),
                 chain_id=self.config.chain_id,
-                account_number=account_info.number,
+                account_number=info.account_number,
             )
-            logger.debug("Transaction signed successfully")
 
-            logger.debug("Completing transaction...")
             tx.complete()
-            logger.debug("Transaction completed successfully")
+            assert tx.tx is not None
 
             logger.debug("Broadcasting transaction...")
-            broadcast_result = self.client.broadcast_tx(tx)
-            logger.debug(f"Got broadcast_result: {broadcast_result}")
-            logger.debug(f"broadcast_result type: {type(broadcast_result)}")
-            
-            if broadcast_result is None:
-                raise TxError('broadcast_tx returned None - check network connectivity')
-            
-            # Get the transaction hash from broadcast
-            tx_hash = broadcast_result.tx_hash
-            logger.info(f"📡 Transaction broadcast successful, hash: {tx_hash}")
-            logger.info("⏳ Waiting for transaction to be included in block...")
-            
-            # Wait for the transaction to be included in a block
-            import datetime
-            timeout = datetime.timedelta(seconds=30)  # 30 second timeout
-            poll_period = datetime.timedelta(seconds=1)  # Poll every 1 second
-            
-            # Try to wait for completion, but handle parsing errors gracefully
-            try:
-                completed_tx = broadcast_result.wait_to_complete(timeout=timeout, poll_period=poll_period)
-                logger.info(f"✅ Transaction included in block!")
-                
-                if completed_tx is None or completed_tx.response is None:
-                    raise TxError('Final transaction response is None after waiting')
 
-                response = completed_tx.response
-                
-                # Log full response details for debugging
-                logger.debug(f"📋 Transaction Response Details:")
-                logger.debug(f"   - Code: {response.code}")
-                logger.debug(f"   - Raw Log: {response.raw_log}")
-                logger.debug(f"   - TX Hash: {response.txhash}")
-                if hasattr(response, 'gas_used'):
-                    logger.debug(f"   - Gas Used: {response.gas_used}")
-                if hasattr(response, 'gas_wanted'):
-                    logger.debug(f"   - Gas Wanted: {response.gas_wanted}")
-                
-            except Exception as e:
-                # If we get a parsing error, the transaction might still have succeeded
-                # Check if it's a descriptor/parsing error
-                if "Can not find message descriptor" in str(e) or "Failed to parse" in str(e):
-                    logger.warning(f"Transaction likely succeeded but cosmpy can't parse response: {e}")
-                    
-                    # Try to fetch the raw transaction to get real status
-                    try:
-                        import requests
-                        tx_url = f"{self.config.url.replace('rest+https://', 'https://')}/cosmos/tx/v1beta1/txs/{tx_hash}"
-                        logger.debug(f"🔍 Attempting to fetch raw transaction: {tx_url}")
-                        resp = requests.get(tx_url, timeout=10)
-                        if resp.status_code == 200:
-                            tx_data = resp.json()
-                            if 'tx_response' in tx_data:
-                                tx_resp = tx_data['tx_response']
-                                logger.warning(f"🔍 RAW TRANSACTION STATUS:")
-                                logger.warning(f"   - Code: {tx_resp.get('code', 'unknown')}")
-                                logger.warning(f"   - Raw Log: {tx_resp.get('raw_log', 'unknown')}")
-                                logger.warning(f"   - Gas Used: {tx_resp.get('gas_used', 'unknown')}")
-                                logger.warning(f"   - Gas Wanted: {tx_resp.get('gas_wanted', 'unknown')}")
-                                
-                                # If code != 0, it failed
-                                if tx_resp.get('code', 0) != 0:
-                                    logger.error(f"❌ Transaction FAILED with code {tx_resp.get('code')}")
-                                    logger.error(f"❌ Failure reason: {tx_resp.get('raw_log', 'unknown')}")
-                                    raise TxError(f"Transaction failed: {tx_resp.get('raw_log', 'unknown')}")
-                                else:
-                                    logger.info(f"✅ Transaction SUCCEEDED according to raw query!")
-                        else:
-                            logger.warning(f"Could not fetch transaction details (HTTP {resp.status_code})")
-                    except Exception as fetch_e:
-                        logger.warning(f"Failed to fetch raw transaction details: {fetch_e}")
-                    
-                    logger.info(f"✅ Transaction hash {tx_hash} was submitted successfully!")
-                    logger.info("📋 Check transaction status manually if needed")
-                    
-                    # Create a minimal successful response for the client
-                    class MockResponse:
-                        code = 0
-                        raw_log = "Transaction submitted successfully (parsing skipped due to cosmpy descriptor issue)"
-                        txhash = tx_hash
-                        
-                    return MockResponse()
-                else:
-                    # Re-raise other types of errors
-                    raise
+            req = BroadcastTxRequest(
+                tx_bytes=tx.tx.SerializeToString(),
+                mode=BroadcastMode.SYNC,
+            )
+            
+            broadcast_result = self.tx_client.broadcast_tx(req)
 
-            if response.code != 0:
-                # Parse common error types
-                if "out of gas" in response.raw_log.lower():
-                    raise OutOfGasError(f"Transaction ran out of gas: {response.raw_log}")
-                elif "account sequence mismatch" in response.raw_log.lower():
-                    raise AccountSequenceMismatchError(f"Sequence mismatch: {response.raw_log}")
-                else:
-                    raise TxError(f"Transaction failed (code {response.code}): {response.raw_log}")
+            if broadcast_result is None or broadcast_result.tx_response is None:
+                raise Exception('broadcast_tx returned None - check network connectivity')
 
-            return response
+            tx_hash = broadcast_result.tx_response.txhash
+            logger.debug("⏳ Waiting for transaction to be included in block...")
 
-        except (OutOfGasError, AccountSequenceMismatchError):
-            # Re-raise these for retry logic
-            raise
+            timeout     = timedelta(seconds=30)
+            poll_period = timedelta(seconds=1)
+
+            resp = self.wait_for_tx(hash=tx_hash, timeout=timeout, poll_period=poll_period)
+            assert resp.tx_response is not None
+
+            logger.debug(f"✅ Transaction included in block!")
+
+            # tx_response = self._try_fetch_raw_tx_response(tx_hash)
+
+            self._log_tx_response(resp.tx_response)
+
+            err = self._exception_from_tx_response(resp.tx_response)
+            if err is not None:
+                raise err
+            return resp.tx_response
+
         except Exception as e:
-            logger.error(f"Transaction submission error: {e}")
-            logger.error(f"Full traceback: {traceback.format_exc()}")
-            raise TxError(f"Failed to submit transaction: {str(e)}")
+            # If we get a parsing error, the transaction might still have succeeded
+            # Check if it's a descriptor/parsing error
+            # if "Can not find message descriptor" in str(e) or "Failed to parse" in str(e):
+            #     logger.debug(f"Transaction likely succeeded but cosmpy can't parse response: {e}")
+
+            #     tx_response = self._try_fetch_raw_tx_response(tx_hash)
+            #     self._log_tx_response(tx_response)
+
+            #     logger.debug(f"✅ Transaction SUCCEEDED according to raw query!")
+            #     return tx_response
+            # else:
+            # Re-raise other types of errors
+            raise
+
+    def wait_for_tx(self,
+        hash: str,
+        timeout: Optional[Union[int, float, timedelta]] = None,
+        poll_period: Optional[Union[int, float, timedelta]] = None,
+    ):
+        timeout     = ensure_timedelta(timeout)     if timeout     else timedelta(seconds=self.query_timeout_secs)
+        poll_period = ensure_timedelta(poll_period) if poll_period else timedelta(seconds=self.query_interval_secs)
+
+        start = datetime.now()
+        while True:
+            try:
+                return self.get_tx(hash)
+            except TxNotFoundError:
+                pass
+
+            delta = datetime.now() - start
+            if delta >= timeout:
+                raise TxTimeoutError()
+
+            time.sleep(poll_period.total_seconds())
+
+    def get_tx(self, hash: str):
+        try:
+            resp = self.tx_client.get_tx(GetTxRequest(hash=hash))
+            if resp is None or resp.tx_response is None:
+                raise TxNotFoundError()
+            return resp
+        except grpc.RpcError as e:
+            details = e.details()
+            if details is not None and "not found" in details:
+                raise TxNotFoundError() from e
+            raise
+        except RuntimeError as e:
+            details = str(e)
+            if "tx" in details and "not found" in details:
+                raise TxNotFoundError() from e
+            raise
+
+
+    # def _try_fetch_raw_tx_response(self, tx_hash: str):
+    #     try:
+    #         tx_url = f"{self.config.url.replace('rest+https://', 'https://')}/cosmos/tx/v1beta1/txs/{tx_hash}"
+    #         logger.debug(f"🔍 Attempting to fetch raw transaction: {tx_url}")
+    #         resp = requests.get(tx_url, timeout=10)
+    #         resp.raise_for_status()
+    #         tx_data = resp.json()
+    #         if 'tx_response' not in tx_data:
+    #             raise Exception('malformed tx result response')
+
+    #         tx_response = TxResponse(tx_data['tx_response'])
+    #         err = self._exception_from_tx_response(tx_response)
+    #         if err is not None:
+    #             raise err
+    #         return tx_response
+
+    #     except Exception as err:
+    #         raise Exception(f"Failed to fetch raw transaction details: {err}")
+
+    def _log_tx_response(self, resp: TxResponse):
+        logger.debug(f"📋 Transaction Response Details:")
+        logger.debug(f"   - Code: {resp.code}")
+        logger.debug(f"   - Raw Log: {resp.raw_log}")
+        logger.debug(f"   - Tx Hash: {resp.txhash}")
+        if hasattr(resp, 'gas_used'):
+            logger.debug(f"   - Gas Used: {resp.gas_used}")
+        if hasattr(resp, 'gas_wanted'):
+            logger.debug(f"   - Gas Wanted: {resp.gas_wanted}")
+
+    def _exception_from_tx_response(self, resp: TxResponse):
+        if resp.code == 0:
+            return None
+
+        if "out of gas" in resp.raw_log.lower():
+            return OutOfGasError(f"Transaction ran out of gas: {resp.raw_log}")
+        elif "account sequence mismatch" in resp.raw_log.lower():
+            return AccountSequenceMismatchError(f"Sequence mismatch: {resp.raw_log}")
+        elif "insufficient fees" in resp.raw_log.lower():
+            return InsufficientFeesError("insufficient fees")
+        else:
+            return TxError(
+                codespace=resp.codespace,
+                code=resp.code,
+                message=resp.raw_log,
+                tx_hash=resp.txhash
+            )
 
     async def _estimate_gas(self, type_url: str) -> int:
         """Estimate gas with safety margin based on message type."""
@@ -262,31 +347,31 @@ class TxManager:
     async def _pre_flight_checks(self):
         """Check account balance and other prerequisites."""
         if not self.wallet:
-            raise TxError("No wallet configured")
+            raise Exception("No wallet configured")
 
         try:
             # Check if account exists
-            account_info = self.client.query_account(self.wallet.address())
+            _ = self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
 
             # Check balance (estimate worst-case fee for checks)
-            balance = self.client.query_bank_balance(self.wallet.address(), self.config.fee_denom)
-            estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
+            resp = self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
+            if resp is not None and resp.balance is not None:
+                estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
 
-            if balance < estimated_fee:
-                raise InsufficientBalanceError(
-                    f"Insufficient balance: need at least {estimated_fee} {self.config.fee_denom}, "
-                    f"have {balance}. Please fund your wallet."
-                )
+                if int(resp.balance.amount) < estimated_fee:
+                    raise InsufficientBalanceError(
+                        f"Insufficient balance: need at least {estimated_fee} {self.config.fee_denom}, "
+                        f"have {resp.balance}. Please fund your wallet."
+                    )
 
-            # Warn if balance is getting low
-            if balance < estimated_fee * 5:
-                logger.warning(f"⚠️ Low balance warning: {balance} {self.config.fee_denom} remaining")
+                # Warn if balance is getting low
+                if int(resp.balance.amount) < estimated_fee * 5:
+                    logger.debug(f"⚠️ Low balance warning: {resp.balance} {self.config.fee_denom} remaining")
 
         except InsufficientBalanceError:
             raise
         except Exception as e:
-            logger.warning(f"Pre-flight check warning: {e}")
-            # Don't fail on pre-flight check errors, just warn
+            logger.debug(f"Pre-flight check warning: {e}")
 
 
     def _create_any_message(self, message, type_url: str):
@@ -328,3 +413,4 @@ class TxManager:
         wrapped_message = BetterprotoWrapper(message, type_url)
         logger.debug(f"Created wrapper for type_url: {type_url}")
         return wrapped_message
+

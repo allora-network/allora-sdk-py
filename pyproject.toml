@@ -3,7 +3,7 @@ name = "allora_sdk"
 version = "0.1.0"
 description = "Allora Network SDK"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "spooktheducks", email = "spook@alloralabs.xyz" },
     { name = "gh-allora", email = "gregory@alloralabs.xyz" },
@@ -26,8 +26,9 @@ dependencies = [
     "cosmpy >= 0.11.1",
     "websockets >= 15.0.1",
     "grpclib >= 0.4.8",
-    "betterproto == 2.0.0b7",
+    "betterproto2 ~= 0.7.0",
     "requests ~= 2.32",
+    "async-timeout>=5.0.1",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ codegen = [
     "grpcio-tools",
     "betterproto2-compiler",
     "openapi-python-client",
+    "pyyaml",
 ]
 
 [project.urls]
