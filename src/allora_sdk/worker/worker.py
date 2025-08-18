@@ -23,7 +23,7 @@ from allora_sdk.utils.timestamp_ordered_set import TimestampOrderedSet
 
 logger = logging.getLogger(__name__)
 
-from allora_sdk.protobuf_client.client import ProtobufClient
+from allora_sdk.protobuf_client.client import AlloraRPCClient
 from allora_sdk.protobuf_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.protobuf_client.protos.emissions.v9 import EventNetworkLossSet, IsWorkerRegisteredInTopicIdRequest
 from allora_sdk.protobuf_client.tx_manager import FeeTier, TxError
@@ -102,7 +102,7 @@ class AlloraWorker:
         mnemonic: Optional[str] = None,
         private_key: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        log_level: logging._Level = logging.INFO,
+        debug: bool = False,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -114,27 +114,28 @@ class AlloraWorker:
             mnemonic: Mnemonic phrase for wallet (optional)
             private_key: Private key for wallet (optional)
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            debug: Enable debug logging
+            log_level: `logging` package levels
         """
         self.topic_id = topic_id
         self.predict_fn = predict_fn
         self.key_file = key_file
         self.fee_tier = fee_tier
         self.submitted_nonces = TimestampOrderedSet()
-        
-        logging.basicConfig(level=log_level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        if debug:
+            logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        else:
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         
         # Initialize blockchain client
         if mnemonic:
-            self.client = ProtobufClient.testnet(mnemonic=mnemonic, debug=debug)
+            self.client = AlloraRPCClient.testnet(mnemonic=mnemonic, debug=debug)
         elif private_key:
-            self.client = ProtobufClient.testnet(private_key=private_key, debug=debug)
+            self.client = AlloraRPCClient.testnet(private_key=private_key, debug=debug)
         else:
             raise Exception('no private key or mnemonic specified')
         
         self.wallet = self.client.wallet
-        
-        # Worker state management
         self._ctx: Optional[WorkerContext] = None
         self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
         self._subscription_id: Optional[str] = None
@@ -243,13 +244,11 @@ class AlloraWorker:
             await self._cleanup(ctx)
 
     async def _run_with_context(self, ctx: WorkerContext) -> AsyncIterator[PredictionItem]:
-        # Start the polling task that checks for unfulfilled nonces and submits
-        # polling_task = asyncio.create_task(self._polling_worker(ctx))
-        # ctx.add_cleanup_task(polling_task)
+        polling = asyncio.create_task(self._polling_worker(ctx))
+        ctx.add_cleanup_task(polling)
 
         await self._listen()
 
-        # Register cleanup task for cancellation monitoring
         cleanup_task = asyncio.create_task(self._monitor_cancellation(ctx))
         ctx.add_cleanup_task(cleanup_task)
         
@@ -264,15 +263,14 @@ class AlloraWorker:
                         break
                     yield result
                 except asyncio.TimeoutError:
-                    continue  # Check cancellation and try again
+                    continue  # check cancellation and try again
                     
         except asyncio.CancelledError:
-            # Propagate cancellation
+            # propagate ctx cancellation
             raise
             
     async def _monitor_cancellation(self, ctx: WorkerContext):
         await ctx.wait_for_cancellation()
-        # When cancelled, put sentinel to unblock queue.get()
         if self._prediction_queue is not None:
             try:
                 self._prediction_queue.put_nowait(_StopQueue())
@@ -288,14 +286,17 @@ class AlloraWorker:
                 await self._maybe_submit_prediction(ctx)
             except asyncio.CancelledError:
                 self.stop()
-                return
+                break
+            except asyncio.TimeoutError:
+                pass
             except WorkerNotWhitelistedError:
                 logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
                 self.stop()
-                return
+                break
             except Exception as e:
                 pass
-            await asyncio.sleep(3 * 60)
+
+            await asyncio.sleep(10)
         
         logger.debug(f"🔄 Polling worker stopped for topic {self.topic_id}")
     
@@ -314,15 +315,18 @@ class AlloraWorker:
         if ctx is None or ctx.is_cancelled():
             return
 
-        logger.info(f"New epoch: topic={event.topic_id} height={height} nonce={height}")
+        logger.info(f"New epoch: topic={event.topic_id} height={height} nonce={height+1}")
         
         try:
-            await self._maybe_submit_prediction(ctx, height)
+            await self._maybe_submit_prediction(ctx, height+1)
         except Exception as e:
             logger.error(f"Error handling event: {e}")
 
 
     async def _maybe_submit_prediction(self, ctx: WorkerContext, nonce: Optional[int] = None):
+        if ctx.is_cancelled():
+            return
+
         can_submit_resp = self.client.emissions.query.can_submit_worker_payload(
             emissions_v9.CanSubmitWorkerPayloadRequest(
                 address=str(self.wallet.address()),
@@ -354,29 +358,30 @@ class AlloraWorker:
                 if isinstance(result, TxError):
                     if result.code == 78: # already submitted
                         self.submitted_nonces.add(nonce)
-                    elif "inference already submitted" in result.message:
+                    elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
                         self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, Exception):
                     logger.error(f"❌ Failed to submit for nonce {nonce}: {str(result)} {type(result)}")
 
                 elif result:
-                    logger.info(f"✅ Successfully submitted for nonce {nonce}")
+                    logger.info(f"✅ Successfully submitted for topic {self.topic_id} nonce {nonce}")
                     self.submitted_nonces.add(nonce)
 
             except Exception as e:
                 logger.error(f"Error submitting for nonce {nonce}: {e}")
 
             finally:
+                # disallow unbounded growth of the nonce tracking set with a reasonable default
                 self.submitted_nonces.prune_older_than(10 * 60)
+
+                # inform whatever is listening about the result
                 if (
-                    self._ctx is not None and
-                    self._ctx.is_cancelled() == False and
+                    ctx.is_cancelled() == False and
                     self._prediction_queue is not None and
                     result is not None
                 ):
                     await self._prediction_queue.put(result)
-
 
 
     async def _submit_prediction(self, nonce: int) -> PredictionItem:
@@ -412,7 +417,6 @@ class AlloraWorker:
     async def _cleanup(self, ctx: WorkerContext):
         logger.debug("Cleaning up worker resources")
         
-        # Unsubscribe from WebSocket
         if self._subscription_id:
             try:
                 await self.client.events.unsubscribe(self._subscription_id)
@@ -428,76 +432,67 @@ class AlloraWorker:
         
         logger.debug("Worker cleanup completed")
 
+
     def stop(self):
         """Manually stop the worker (useful in notebook environments)."""
         if self._ctx:
             logger.debug("Manually stopping worker")
             self._ctx.cancel()
 
-    async def __aenter__(self):
-        """Support async context manager usage."""
-        return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Ensure cleanup on context exit."""
-        self.stop()
-        if self._ctx:
-            # Give cleanup time to complete
-            await asyncio.sleep(0.1)
 
-    async def _debug_monitor_nonces(self, ctx: WorkerContext):
-        """TEMPORARY: Debug monitoring of unfulfilled nonces every 6 seconds."""
-        logger.info(f"🔍 Starting debug nonce monitoring for topic {self.topic_id}")
+    # async def _debug_monitor_nonces(self, ctx: WorkerContext):
+    #     """TEMPORARY: Debug monitoring of unfulfilled nonces every 6 seconds."""
+    #     logger.info(f"🔍 Starting debug nonce monitoring for topic {self.topic_id}")
 
-        while not ctx.is_cancelled():
-            try:
-                await asyncio.sleep(6)
+    #     while not ctx.is_cancelled():
+    #         try:
+    #             await asyncio.sleep(6)
 
-                if ctx.is_cancelled():
-                    break
+    #             if ctx.is_cancelled():
+    #                 break
 
-                # Query unfulfilled nonces for our topic
-                resp = self.client.emissions.query.get_unfulfilled_worker_nonces(
-                    emissions_v9.GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
-                )
-                nonces = [x.block_height for x in resp.nonces.nonces] if resp.nonces is not None else []
+    #             # Query unfulfilled nonces for our topic
+    #             resp = self.client.emissions.query.get_unfulfilled_worker_nonces(
+    #                 emissions_v9.GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
+    #             )
+    #             nonces = [x.block_height for x in resp.nonces.nonces] if resp.nonces is not None else []
 
-                # Also check if we can submit
-                can_submit_resp = self.client.emissions.query.can_submit_worker_payload(
-                    emissions_v9.CanSubmitWorkerPayloadRequest(
-                        address=str(self.wallet.address()),
-                        topic_id=self.topic_id,
-                    )
-                )
-                if not can_submit_resp.can_submit_worker_payload:
-                    return Exception(f"Worker not permitted to submit to topic {self.topic_id}")
+    #             # Also check if we can submit
+    #             can_submit_resp = self.client.emissions.query.can_submit_worker_payload(
+    #                 emissions_v9.CanSubmitWorkerPayloadRequest(
+    #                     address=str(self.wallet.address()),
+    #                     topic_id=self.topic_id,
+    #                 )
+    #             )
+    #             if not can_submit_resp.can_submit_worker_payload:
+    #                 return Exception(f"Worker not permitted to submit to topic {self.topic_id}")
 
-                # Get current block height for context via REST API
-                try:
-                    current_block = self.client.get_latest_block()
-                except Exception as e:
-                    logger.debug(f"Failed to get current block height: {e}")
-                    current_block = "unknown"
+    #             # Get current block height for context via REST API
+    #             try:
+    #                 current_block = self.client.get_latest_block()
+    #             except Exception as e:
+    #                 logger.debug(f"Failed to get current block height: {e}")
+    #                 current_block = "unknown"
 
-                logger.warning(f"🔍 DEBUG NONCE MONITORING (topic {self.topic_id}):")
-                logger.warning(f"   - Current block height: {current_block}")
-                logger.warning(f"   - Current unfulfilled nonces: {nonces}")
-                logger.warning(f"   - Can submit worker payload: {can_submit_resp.can_submit_worker_payload}")
-                logger.warning(f"   - Worker address: {str(self.wallet.address())}")
+    #             logger.warning(f"🔍 DEBUG NONCE MONITORING (topic {self.topic_id}):")
+    #             logger.warning(f"   - Current block height: {current_block}")
+    #             logger.warning(f"   - Current unfulfilled nonces: {nonces}")
+    #             logger.warning(f"   - Can submit worker payload: {can_submit_resp.can_submit_worker_payload}")
+    #             logger.warning(f"   - Worker address: {str(self.wallet.address())}")
 
-                if len(nonces) > 0:
-                    logger.warning(f"   - Available nonces to submit for: {nonces}")
-                    # Show how old the nonces are
-                    if current_block != "unknown":
-                        nonce_ages = [current_block - nonce for nonce in nonces]
-                        logger.warning(f"   - Nonce ages (blocks old): {nonce_ages}")
-                else:
-                    logger.warning(f"   - ⚠️  NO unfulfilled nonces available!")
+    #             if len(nonces) > 0:
+    #                 logger.warning(f"   - Available nonces to submit for: {nonces}")
+    #                 # Show how old the nonces are
+    #                 if current_block != "unknown":
+    #                     nonce_ages = [current_block - nonce for nonce in nonces]
+    #                     logger.warning(f"   - Nonce ages (blocks old): {nonce_ages}")
+    #             else:
+    #                 logger.warning(f"   - ⚠️  NO unfulfilled nonces available!")
 
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"Debug nonce monitoring error: {e}")
-                await asyncio.sleep(10)  # Shorter sleep on error
+    #         except asyncio.CancelledError:
+    #             break
+    #         except Exception as e:
+    #             logger.warning(f"Debug nonce monitoring error: {e}")
+    #             await asyncio.sleep(10)  # Shorter sleep on error
 
-        logger.info(f"🔍 Debug nonce monitoring stopped for topic {self.topic_id}")
+    #     logger.info(f"🔍 Debug nonce monitoring stopped for topic {self.topic_id}")

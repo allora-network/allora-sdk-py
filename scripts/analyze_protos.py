@@ -24,7 +24,7 @@ from google.api import annotations_pb2, http_pb2  # from googleapis-common-proto
 class HttpBinding:
     verb: str                    # "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "CUSTOM"
     path: str                    # "/emissions/v9/reputers_stakes/{topic_id}"
-    path_params: List[str]
+    path_params: List[str]       # params from the protobuf that are consumed by the path params (the rest go to the query params for GET requests)
     body: Optional[str]          # e.g., "*" or "resource", None if not set
     custom_kind: Optional[str]   # e.g., "REPORT" for custom; None otherwise
 
@@ -55,7 +55,11 @@ class ProtobufModule:
     services: Dict[str, ServiceInfo]
     messages: Dict[str, MessageInfo]
 
+
 class ProtobufModules:
+    """
+    Helper class to make consuming the outputs of analyze_proto less verbose
+    """
     def __init__(self, modules: Optional[Dict[str, ProtobufModule]] = None):
         self.modules = modules or {}
 
@@ -87,6 +91,7 @@ class ProtobufModules:
         return len(self.modules)
 
 def split_entity_name(full_path: str):
+    """Given a fully-qualified `full_path` like `emissions.v9.InsertWorkerPayload`, splits the module path and the type name"""
     parts = full_path.split('.')
     mod_name = '.'.join(parts[0 : len(parts)-1])
     entity_name = parts[len(parts)-1]
@@ -251,7 +256,7 @@ def analyze_proto(
     return ProtobufModules(modules)
 
 
-# ---------------------- CLI (example) ----------------------
+# ---------------------- CLI for rapid eyeball-testing of this layer ----------------------
 
 def _main(argv: Sequence[str]) -> int:
     import argparse

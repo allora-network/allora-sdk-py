@@ -1,7 +1,7 @@
 """
 Allora Protobuf Client
 
-This module provides the main ProtobufClient class which wraps cosmpy's LedgerClient
+This module provides the main AlloraRPCClient class which wraps cosmpy's LedgerClient
 and provides Allora-specific functionality for interacting with the blockchain.
 """
 
@@ -9,14 +9,13 @@ import logging
 import os
 from typing import Optional, Dict
 
+import grpc
 import certifi
 from cosmpy.aerial.client import LedgerClient, ValidatorStatus
 from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
-import grpc
 
-from allora_sdk.protobuf_client.client_mint import MintClient
 import allora_sdk.protobuf_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
 import allora_sdk.protobuf_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
 import allora_sdk.protobuf_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
@@ -26,6 +25,7 @@ import allora_sdk.protobuf_client.protos.mint.v5 as mint_v5
 import allora_sdk.rest as rest
 
 from .client_emissions import EmissionsClient
+from .client_mint import MintClient
 from .config import AlloraNetworkConfig, DEFAULT_TESTNET_CONFIG
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .utils import AlloraUtils
@@ -34,7 +34,7 @@ from .tx_manager import TxManager
 logger = logging.getLogger(__name__)
 
 
-class ProtobufClient:
+class AlloraRPCClient:
     """
     Main client for interacting with the Allora blockchain.
     
@@ -47,7 +47,7 @@ class ProtobufClient:
         config: Optional[AlloraNetworkConfig] = None,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        log_level: logging._Level = logging.INFO,
+        debug: bool = False
     ):
         """
         Initialize the Allora blockchain client.
@@ -58,7 +58,8 @@ class ProtobufClient:
             mnemonic: Mnemonic phrase for generating wallet.
             debug: Enable debug logging.
         """
-        logging.basicConfig(level=log_level)
+        if debug:
+            logging.basicConfig(level=logging.DEBUG)
         
         # Set up network configuration
         self.config = config or self._get_default_config()
@@ -245,10 +246,10 @@ class ProtobufClient:
         cls,
         mnemonic: str,
         config: Optional[AlloraNetworkConfig] = None,
-        log_level: logging._Level = logging.INFO,
-    ) -> 'ProtobufClient':
+        debug: bool = True,
+    ) -> 'AlloraRPCClient':
         """Create client from mnemonic phrase."""
-        return cls(config=config, mnemonic=mnemonic, log_level=log_level,)
+        return cls(config=config, mnemonic=mnemonic, debug=debug)
     
 
     @classmethod
@@ -256,10 +257,10 @@ class ProtobufClient:
         cls,
         private_key: str,
         config: Optional[AlloraNetworkConfig] = None,
-        log_level: logging._Level = logging.INFO,
-    ) -> 'ProtobufClient':
+        debug: bool = True,
+    ) -> 'AlloraRPCClient':
         """Create client from private key."""
-        return cls(config=config, private_key=private_key, log_level=log_level,)
+        return cls(config=config, private_key=private_key, debug=debug)
     
 
     @classmethod
@@ -267,14 +268,14 @@ class ProtobufClient:
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        log_level: logging._Level = logging.INFO,
-    ) -> 'ProtobufClient':
+        debug: bool = True,
+    ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
             config=AlloraNetworkConfig.testnet(),
             private_key=private_key,
             mnemonic=mnemonic,
-            log_level=log_level,
+            debug=debug
         )
     
 
@@ -283,14 +284,14 @@ class ProtobufClient:
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        log_level: logging._Level = logging.INFO,
-    ) -> 'ProtobufClient':
+        debug: bool = True,
+    ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
             config=AlloraNetworkConfig.mainnet(),
             private_key=private_key,
             mnemonic=mnemonic,
-            log_level=log_level,
+            debug=debug
         )
     
     @classmethod
@@ -299,14 +300,14 @@ class ProtobufClient:
         port: int = 26657,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
-        log_level: logging._Level = logging.INFO,
-    ) -> 'ProtobufClient':
+        debug: bool = True,
+    ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
             config=AlloraNetworkConfig.local(port),
             private_key=private_key,
             mnemonic=mnemonic,
-            log_level=log_level,
+            debug=debug
         )
 
 

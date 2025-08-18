@@ -23,11 +23,6 @@ from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1Que
 from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
 
 
-# # Forward declare to avoid circular import
-# from typing import TYPE_CHECKING
-# if TYPE_CHECKING:
-#     from allora_sdk.protobuf_client.client_cosmos_tx import CosmosTxClient
-
 logger = logging.getLogger(__name__)
 
 class FeeTier(Enum):
@@ -66,22 +61,6 @@ class TxNotFoundError(Exception):
 
 class TxTimeoutError(Exception):
     pass
-
-# class TxResponse(TxResponseCosmPy):
-#     def __init__(self, data: dict):
-#         super().__init__(
-#             hash = data.get("txhash", ""),
-#             height = int(data.get("height", 0)),
-#             raw_log = data.get("raw_log", ""),
-#             code = int(data.get("code", 99999)),
-#             gas_used = int(data.get("gas_used", 99999)),
-#             gas_wanted = int(data.get("gas_wanted", 99999)),
-#             logs=[],
-#             events={},
-#             timestamp = datetime.fromisoformat(data.get("timestamp", "")),
-#         )
-#         self.codespace = data.get("codespace", "unknown")
-
 
 
 class TxManager:
@@ -124,7 +103,7 @@ class TxManager:
         gas_limit: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         max_retries: int = 2
-    ) -> TxResponse:
+    ):
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
@@ -162,7 +141,7 @@ class TxManager:
         gas_limit: Optional[int],
         fee_tier: FeeTier,
         gas_multiplier: float
-    ) -> TxResponse:
+    ):
         any_message = self._create_any_message(msg, type_url)
 
         tx = Transaction()
@@ -174,73 +153,57 @@ class TxManager:
         gas_limit = int(gas_limit * gas_multiplier)
         fee = await self._calculate_optimal_fee(gas_limit, fee_tier)
 
-        try:
-            resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
-            if resp.info is None:
-                raise Exception('account_info query response is none')
-            info = resp.info
-            logger.debug(f"Account info: seq={info.sequence}, num={info.account_number}")
+        resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+        if resp.info is None:
+            raise Exception('account_info query response is none')
+        info = resp.info
+        logger.debug(f"Account info: seq={info.sequence}, num={info.account_number}")
 
-            tx.seal(
-                signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence) ],
-                fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
-            )
+        tx.seal(
+            signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence) ],
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+        )
 
-            tx.sign(
-                signer=self.wallet.signer(),
-                chain_id=self.config.chain_id,
-                account_number=info.account_number,
-            )
+        tx.sign(
+            signer=self.wallet.signer(),
+            chain_id=self.config.chain_id,
+            account_number=info.account_number,
+        )
 
-            tx.complete()
-            assert tx.tx is not None
+        tx.complete()
+        assert tx.tx is not None
 
-            logger.debug("Broadcasting transaction...")
+        logger.debug("Broadcasting transaction...")
 
-            req = BroadcastTxRequest(
-                tx_bytes=tx.tx.SerializeToString(),
-                mode=BroadcastMode.SYNC,
-            )
-            
-            broadcast_result = self.tx_client.broadcast_tx(req)
+        req = BroadcastTxRequest(
+            tx_bytes=tx.tx.SerializeToString(),
+            mode=BroadcastMode.SYNC,
+        )
 
-            if broadcast_result is None or broadcast_result.tx_response is None:
-                raise Exception('broadcast_tx returned None - check network connectivity')
+        broadcast_result = self.tx_client.broadcast_tx(req)
 
-            tx_hash = broadcast_result.tx_response.txhash
-            logger.debug("⏳ Waiting for transaction to be included in block...")
+        if broadcast_result is None or broadcast_result.tx_response is None:
+            raise Exception('broadcast_tx returned None - check network connectivity')
 
-            timeout     = timedelta(seconds=30)
-            poll_period = timedelta(seconds=1)
+        tx_hash = broadcast_result.tx_response.txhash
+        logger.debug("⏳ Waiting for transaction to be included in block...")
 
-            resp = self.wait_for_tx(hash=tx_hash, timeout=timeout, poll_period=poll_period)
-            assert resp.tx_response is not None
+        timeout     = timedelta(seconds=30)
+        poll_period = timedelta(seconds=1)
 
-            logger.debug(f"✅ Transaction included in block!")
+        resp = self.wait_for_tx(hash=tx_hash, timeout=timeout, poll_period=poll_period)
+        assert resp.tx_response is not None
 
-            # tx_response = self._try_fetch_raw_tx_response(tx_hash)
+        logger.debug(f"✅ Transaction included in block!")
 
-            self._log_tx_response(resp.tx_response)
+        self._log_tx_response(resp.tx_response)
 
-            err = self._exception_from_tx_response(resp.tx_response)
-            if err is not None:
-                raise err
-            return resp.tx_response
-
-        except Exception as e:
-            # If we get a parsing error, the transaction might still have succeeded
-            # Check if it's a descriptor/parsing error
-            # if "Can not find message descriptor" in str(e) or "Failed to parse" in str(e):
-            #     logger.debug(f"Transaction likely succeeded but cosmpy can't parse response: {e}")
-
-            #     tx_response = self._try_fetch_raw_tx_response(tx_hash)
-            #     self._log_tx_response(tx_response)
-
-            #     logger.debug(f"✅ Transaction SUCCEEDED according to raw query!")
-            #     return tx_response
-            # else:
-            # Re-raise other types of errors
-            raise
+        err = self._exception_from_tx_response(resp.tx_response)
+        if err is not None:
+            raise err
+        elif resp.tx_response is None:
+            raise Exception("tx_response is None")
+        return resp.tx_response
 
     def wait_for_tx(self,
         hash: str,
@@ -253,7 +216,7 @@ class TxManager:
         start = datetime.now()
         while True:
             try:
-                return self.get_tx(hash)
+                return self._get_tx(hash)
             except TxNotFoundError:
                 pass
 
@@ -263,7 +226,7 @@ class TxManager:
 
             time.sleep(poll_period.total_seconds())
 
-    def get_tx(self, hash: str):
+    def _get_tx(self, hash: str):
         try:
             resp = self.tx_client.get_tx(GetTxRequest(hash=hash))
             if resp is None or resp.tx_response is None:
@@ -281,25 +244,6 @@ class TxManager:
             raise
 
 
-    # def _try_fetch_raw_tx_response(self, tx_hash: str):
-    #     try:
-    #         tx_url = f"{self.config.url.replace('rest+https://', 'https://')}/cosmos/tx/v1beta1/txs/{tx_hash}"
-    #         logger.debug(f"🔍 Attempting to fetch raw transaction: {tx_url}")
-    #         resp = requests.get(tx_url, timeout=10)
-    #         resp.raise_for_status()
-    #         tx_data = resp.json()
-    #         if 'tx_response' not in tx_data:
-    #             raise Exception('malformed tx result response')
-
-    #         tx_response = TxResponse(tx_data['tx_response'])
-    #         err = self._exception_from_tx_response(tx_response)
-    #         if err is not None:
-    #             raise err
-    #         return tx_response
-
-    #     except Exception as err:
-    #         raise Exception(f"Failed to fetch raw transaction details: {err}")
-
     def _log_tx_response(self, resp: TxResponse):
         logger.debug(f"📋 Transaction Response Details:")
         logger.debug(f"   - Code: {resp.code}")
@@ -309,6 +253,7 @@ class TxManager:
             logger.debug(f"   - Gas Used: {resp.gas_used}")
         if hasattr(resp, 'gas_wanted'):
             logger.debug(f"   - Gas Wanted: {resp.gas_wanted}")
+
 
     def _exception_from_tx_response(self, resp: TxResponse):
         if resp.code == 0:
@@ -335,6 +280,7 @@ class TxManager:
         # Add 20% safety margin
         return int(base_gas * 1.2)
 
+
     async def _calculate_optimal_fee(self, gas_limit: int, fee_tier: FeeTier) -> Coin:
         """Calculate fee based on tier and network conditions."""
         base_price = self.config.fee_minimum_gas_price
@@ -344,8 +290,8 @@ class TxManager:
 
         return Coin(amount=fee_amount, denom=self.config.fee_denom)
 
+
     async def _pre_flight_checks(self):
-        """Check account balance and other prerequisites."""
         if not self.wallet:
             raise Exception("No wallet configured")
 
@@ -376,14 +322,10 @@ class TxManager:
 
     def _create_any_message(self, message, type_url: str):
         """
-        Convert a betterproto message to a format cosmpy can handle without double-wrapping.
-
-        Args:
-            message: Betterproto message instance
-            type_url: The type URL for the message
-
-        Returns:
-            Wrapper object that cosmpy can use for internal Any-wrapping
+        Convert a betterproto2 message to a format cosmpy can handle without double-wrapping.
+        This exists because we're still using cosmpy's transaction signing and serialization,
+        and therefore their protobufs, which are not betterproto2 protobufs.  The underlying
+        wire protocol is compatible, but the libraries/interfaces are not.
         """
         logger.debug(f"Creating message wrapper for type_url: {type_url}")
         
@@ -406,11 +348,9 @@ class TxManager:
                     def __init__(self, type_url: str):
                         # Remove leading slash for full_name format
                         self.full_name = type_url.lstrip('/')
-                        logger.debug(f"Mock descriptor created with full_name: {self.full_name}")
                         
                 return MockDescriptor(self._type_url)
         
         wrapped_message = BetterprotoWrapper(message, type_url)
-        logger.debug(f"Created wrapper for type_url: {type_url}")
         return wrapped_message
 

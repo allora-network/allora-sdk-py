@@ -11,7 +11,6 @@ authors = [
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -77,7 +76,7 @@ exclude = [
 
 [tool.tox]
 requires = ["tox>=4.19"]
-env_list = ["lint", "type", "3.13", "3.12", "3.11", "3.10", "3.9"]
+env_list = ["lint", "type", "3.13", "3.12", "3.11", "3.10"]
 
 [tool.tox.env_run_base]
 description = "Run tests"
