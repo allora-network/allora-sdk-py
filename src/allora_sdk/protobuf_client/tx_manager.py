@@ -64,7 +64,6 @@ class TxTimeoutError(Exception):
 
 
 class TxManager:
-
     def __init__(
         self,
         wallet: LocalWallet,

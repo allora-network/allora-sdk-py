@@ -356,6 +356,7 @@ class AlloraWorker:
             try:
                 result = await self._submit_prediction(nonce)
                 if isinstance(result, TxError):
+                    logger.error(f"❌ Error while submitting prediction: {str(result)} topic_id={self.topic_id} nonce={nonce}")
                     if result.code == 78: # already submitted
                         self.submitted_nonces.add(nonce)
                     elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
@@ -365,7 +366,8 @@ class AlloraWorker:
                     logger.error(f"❌ Failed to submit for nonce {nonce}: {str(result)} {type(result)}")
 
                 elif result:
-                    logger.info(f"✅ Successfully submitted for topic {self.topic_id} nonce {nonce}")
+                    logger.info(f"✅ Successfully submitted topic={self.topic_id} nonce={nonce}")
+                    logger.info(f"    - Transaction hash: {result.tx_result.txhash}")
                     self.submitted_nonces.add(nonce)
 
             except Exception as e:
@@ -406,12 +408,18 @@ class AlloraWorker:
                 nonce=nonce,
                 fee_tier=self.fee_tier
             )
-            
-            logger.debug(f"Successfully submitted prediction: {prediction}")
+
+            if resp.code != 0:
+                return TxError(
+                    codespace=resp.codespace,
+                    code=resp.code,
+                    tx_hash=resp.txhash,
+                    message=resp.raw_log,
+                )
+
             return PredictionResult(prediction=float(prediction), tx_result=resp)
             
         except Exception as err:
-            logger.error(f"Failed to submit prediction: {err}")
             return err
 
     async def _cleanup(self, ctx: WorkerContext):

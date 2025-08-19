@@ -101,12 +101,6 @@ class AlloraRPCClient:
 
         tendermint = tendermint_v1beta1.ServiceStub(self.grpc_client)
 
-        # self._response = self._client.wait_for_query_tx(
-        #     self.tx_hash, timeout=timeout, poll_period=poll_period
-        # )
-        # assert self._response is not None
-        # self._response.ensure_successful()
-
         self.tx_manager = TxManager(
             wallet=self.wallet,
             tx_client=self.tx,

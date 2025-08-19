@@ -9,4 +9,10 @@
 .DS_Store
 build/
 dist/
-protos/
+src/allora_sdk/protobuf_client/protos/
+# src/allora_sdk/rest/
+# __pycache__/
+proto-deps/
+
+
+

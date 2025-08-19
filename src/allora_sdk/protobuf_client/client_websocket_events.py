@@ -12,6 +12,7 @@ import importlib
 import inspect
 from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
+import traceback
 import betterproto2
 from pydantic import BaseModel
 
@@ -119,9 +120,7 @@ class EventRegistry:
     
     def __init__(self):
         if not self._event_map:
-            logger.debug("🔍 Discovering event classes from protobuf modules...")
             self._discover_event_classes()
-            logger.debug(f"✅ Event registry initialized with {len(self._event_map)} event types")
     
     def _discover_event_classes(self) -> None:
         """Auto-discover Event classes from emissions protobuf modules."""
@@ -185,7 +184,6 @@ class EventMarshaler:
             Protobuf event instance or None if type not registered
         """
         event_type = event_json.get('type')
-        logger.debug(f"🔄 Marshaling event: {event_type}")
         
         if not event_type:
             logger.warning("❌ Event JSON missing 'type' field")
@@ -196,10 +194,7 @@ class EventMarshaler:
             logger.warning(f"❌ No protobuf class registered for event type: {event_type}")
             return None
         
-        logger.debug(f"✅ Found protobuf class: {event_class.__name__}")
-        
         attributes = event_json.get('attributes', [])
-        logger.debug(f"📊 Processing {len(attributes)} attributes")
         
         # Build parser table for the target event class
         resolved_annotations = self._get_resolved_annotations(event_class)
@@ -209,7 +204,6 @@ class EventMarshaler:
         try:
             # Create protobuf instance with parsed field values
             instance = event_class(**field_values)
-            logger.debug(f"✅ Successfully created {event_class.__name__} instance")
             return instance
         except Exception as e:
             logger.error(f"❌ Failed to create {event_class.__name__} instance: {e}")
@@ -507,15 +501,13 @@ class AlloraWebsocketSubscriber:
             return
         
         self.running = True
-        logger.debug("🚀 Starting WebSocket event subscription service...")
-        
+
         self._event_task = asyncio.create_task(self._event_loop())
         await self._connect()
 
 
     async def _ensure_started(self):
         if not self.running:
-            logger.debug("🚀 Auto-starting event subscription service...")
             await self.start()
     
     async def stop(self):
@@ -535,8 +527,7 @@ class AlloraWebsocketSubscriber:
             await self.websocket.close()
             self.websocket = None
         
-        logger.debug("Event subscriber stopped")
-    
+
     async def subscribe(
         self,
         event_filter: EventFilter,
@@ -660,7 +651,6 @@ class AlloraWebsocketSubscriber:
     
     async def _event_loop(self):
         """Main event processing loop."""
-        logger.debug(f"🚀 Starting event loop (running={self.running})")
         while self.running:
             try:
                 if not self.websocket or self.websocket.close_code:
@@ -668,14 +658,11 @@ class AlloraWebsocketSubscriber:
                     await self._connect()
                     continue
                 
-                logger.debug(f"🔄 Event loop waiting for message...")
-                
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
                         timeout=30.0
                     )
-                    logger.info(f"📥 Received WebSocket message ({len(message)} bytes)")
                     await self._handle_message(str(message))
                     
                 except asyncio.TimeoutError:
@@ -699,10 +686,8 @@ class AlloraWebsocketSubscriber:
     async def _handle_message(self, message: str):
         """Handle incoming WebSocket message."""
         try:
-            logger.info(f"📨 Processing message of length {len(message)}")
             data = json.loads(message)
             message_id = data.get("id")
-            logger.info(f"🆔 Message ID: {message_id}")
             
             # Handle subscription confirmations
             if data.get("result", {}).get("data") is None and "id" in data:
@@ -717,24 +702,20 @@ class AlloraWebsocketSubscriber:
             message_id = data.get("id")
             
             try:
-                logger.debug(f"🔍 Attempting structured parsing with JSONRPCResponse")
                 msg = JSONRPCResponse.model_validate(data)
                 if (isinstance(msg.result, JSONRPCQueryResult) and 
                     isinstance(msg.result.data, NewBlockEventsDataFrame)):
                     events = msg.result.data.value.events
                     block_height = int(msg.result.data.value.height) if msg.result.data.value.height else None
-                    logger.debug(f"✅ Structured parsing successful: {len(events)} events, height {block_height}")
                 else:
                     events = None
                     block_height = None
-                    logger.debug(f"⚠️ Structured parsing failed: wrong result type")
+                    logger.error(f"⚠️ Structured parsing failed: wrong result type")
             except Exception as e:
-                logger.debug(f"🔄 Structured parsing failed ({e}), falling back to manual extraction")
                 # Fall back to manual extraction
                 result_data = data.get("result", {}).get("data", {}).get("value", {})
                 events = result_data.get("events")
                 height_str = result_data.get("height")
-                logger.debug(f"📊 Manual extraction: {len(events) if events else 0} events, height: {height_str}")
                 try:
                     block_height = int(height_str) if height_str else None
                 except (ValueError, TypeError):
@@ -742,10 +723,7 @@ class AlloraWebsocketSubscriber:
             
             # Dispatch events if found
             if events is not None:
-                logger.debug(f"🚀 Dispatching {len(events)} events to subscription {message_id}")
                 await self._dispatch_events(events, message_id, block_height)
-            else:
-                logger.debug(f"⚠️ No events to dispatch for message {message_id}")
             
             # Handle errors
             if "error" in data:
@@ -850,18 +828,11 @@ class AlloraWebsocketSubscriber:
         if not (event_name and event_class):
             return
         
-        logger.debug(f"🔍 Looking for events with type='{event_name}' in {len(event_data)} events")
-        logger.debug(f"📊 Available event types: {[e.get('type') for e in event_data]}")
-            
         events = [ e for e in event_data if e.get("type") == event_name ]
-        logger.debug(f"🎯 Found {len(events)} matching events after type filter")
-        
         events = [ self.event_marshaler.marshal_event(e) for e in events ]
         events = [ e for e in events if e is not None ]
-        logger.debug(f"📦 Successfully marshaled {len(events)} events")
         
         if not events:
-            logger.warning(f"⚠️ No events to dispatch for subscription {subscription_id}")
             return
             
         await self._execute_callbacks(callbacks, events, block_height, subscription_id)
@@ -887,7 +858,6 @@ class AlloraWebsocketSubscriber:
         for callback in callbacks:
             for event in events:
                 try:
-                    logger.debug(f"🔥 Executing callback for subscription {subscription_id}")
                     # Check if callback is async
                     if asyncio.iscoroutinefunction(callback):
                         await callback(event, block_height)
@@ -895,10 +865,8 @@ class AlloraWebsocketSubscriber:
                         # Run sync callback in executor
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, callback, event, block_height)
-                    logger.debug(f"✅ Callback executed successfully for {subscription_id}")
                 except Exception as e:
                     logger.error(f"Callback error for {subscription_id}: {e}")
-                    import traceback
                     logger.error(f"Callback traceback: {traceback.format_exc()}")
     
     # Convenience methods for common subscriptions
@@ -968,7 +936,6 @@ class AlloraWebsocketSubscriber:
         if self.websocket and not self.websocket.close_code:
             await self._send_subscription(subscription_id, query)
         
-        logger.info(f"Subscribed to filtered block events: {event_name} with conditions {event_attribute_conditions} (ID: {subscription_id})")
         return subscription_id
     
     async def subscribe_new_block_events_typed(
@@ -993,21 +960,14 @@ class AlloraWebsocketSubscriber:
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
         
-        logger.info(f"🔧 Creating typed subscription for {event_class}")
-        
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"typed_block_events_{self._subscription_id_counter}"
         
-        logger.info(f"🆔 Generated subscription ID: {subscription_id}")
-        
         # Extract event name from class (e.g., EventScoresSet -> emissions.v9.EventScoresSet)
         event_name = self._get_event_type_from_class(event_class)
-        logger.info(f"🔍 Event name resolution: {event_class.__name__} -> {event_name}")
-        
         if not event_name:
             logger.error(f"❌ Could not determine event type for class {event_class.__name__}")
-            logger.info(f"📋 Available event types: {list(self.event_registry._event_map.keys())[:10]}...")  # Show first 10
             raise ValueError(f"Could not determine event type for class {event_class.__name__}")
         
         # Construct EventFilter with NewBlockEvents and attribute conditions
@@ -1016,7 +976,6 @@ class AlloraWebsocketSubscriber:
             event_filter.custom(event_name + "." + condition.to_query_condition())
         
         query = event_filter.to_query()
-        logger.info(f"🔍 Generated query: {query}")
         
         # Store subscription info
         subscription_info = {
@@ -1030,67 +989,38 @@ class AlloraWebsocketSubscriber:
         }
         
         self.subscriptions[subscription_id] = subscription_info
-        logger.info(f"💾 Stored typed subscription: {subscription_id} -> {subscription_info}")
         
         # Store callback
         if subscription_id not in self.callbacks:
             self.callbacks[subscription_id] = []
         self.callbacks[subscription_id].append(callback)
-        logger.info(f"📞 Stored callback for {subscription_id}, total callbacks: {len(self.callbacks[subscription_id])}")
         
         # Send subscription if connected
         if self.websocket and not self.websocket.close_code:
-            logger.info(f"📤 Sending typed subscription request...")
             await self._send_subscription(subscription_id, query)
         else:
             logger.warning("❌ WebSocket not connected, subscription will be sent when connected")
         
-        logger.info(f"✅ Completed typed subscription: {event_name} -> {event_class.__name__} (ID: {subscription_id})")
+        logger.debug(f"✅ Completed typed subscription: {event_name} -> {event_class.__name__} (ID: {subscription_id})")
         return subscription_id
     
     def _get_event_type_from_class(self, event_class: Type[betterproto2.Message]) -> Optional[str]:
         """Get the event type string from a protobuf class."""
-        logger.info(f"🔍 Looking for event type for class: {event_class}")
-        logger.info(f"📊 Registry has {len(self.event_registry._event_map)} registered types")
         
         # First try direct class match
         for event_type, registered_class in self.event_registry._event_map.items():
             logger.debug(f"  Checking {event_type} -> {registered_class}")
             if registered_class == event_class:
-                logger.info(f"✅ Found exact match: {event_class} -> {event_type}")
                 return event_type
         
         # Try matching by class name if no exact match
         class_name = event_class.__name__
-        logger.info(f"🔍 No exact match, trying class name matching for: {class_name}")
         
         for event_type, registered_class in self.event_registry._event_map.items():
             if registered_class.__name__ == class_name:
-                logger.info(f"✅ Found name match: {class_name} -> {event_type}")
                 return event_type
         
         logger.warning(f"❌ No event type found for class {event_class}")
-        logger.info(f"📋 Available registered classes: {[f'{et} -> {cls.__name__}' for et, cls in list(self.event_registry._event_map.items())[:10]]}")
         return None
-
-
-# # Event handler decorators and utilities
-
-# class EventHandler:
-#     """Decorator for creating event handlers."""
-    
-#     def __init__(self, event_filter: EventFilter):
-#         self.event_filter = event_filter
-#         self.handlers: List[Callable] = []
-    
-#     def __call__(self, func: Callable):
-#         """Register function as event handler."""
-#         self.handlers.append(func)
-#         return func
-    
-#     async def register_with_subscriber(self, subscriber: AlloraWebsocketSubscriber):
-#         """Register all handlers with event subscriber."""
-#         for handler in self.handlers:
-#             await subscriber.subscribe(self.event_filter, handler)
 
 

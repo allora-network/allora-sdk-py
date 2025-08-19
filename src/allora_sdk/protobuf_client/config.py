@@ -28,7 +28,7 @@ class AlloraNetworkConfig:
             chain_id="allora-testnet-1",
             # url="grpc+http://65.108.224.166:26757",
             # url="grpc+http://allora-grpc.polkachu.com:26790",
-            url="grpc+http://100.126.144.65:9090",
+            url="grpc+https://allora-grpc.testnet.allora.network:443",
             # url="grpc+http://100.126.144.65:9090",
             websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
             fee_denom="uallo",

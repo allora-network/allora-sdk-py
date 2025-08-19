@@ -1,6 +1,5 @@
 import logging
 from typing import Dict, List, Optional
-from cosmpy.aerial.client import TxResponse
 from allora_sdk.protobuf_client.protos.emissions.v3 import Nonce
 from allora_sdk.protobuf_client.protos.emissions.v9 import (
     InputInference,
@@ -59,7 +58,7 @@ class EmissionsTxs:
         proof: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ) -> TxResponse:
+    ):
         """
         Submit a worker payload (inference/forecast) to the Allora network.
 
@@ -79,7 +78,7 @@ class EmissionsTxs:
             Transaction response with hash and status
         """
         if not self._txs:
-            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
 
         worker_address = str(self._txs.wallet.address())
 
