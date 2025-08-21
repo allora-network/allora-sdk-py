@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .DELETE_ON_ERROR:
 
 UV := uv
-PY := $(UV) run python
+PY := $ python
 
 # --- Paths
 PROTO_DEPS := ./proto-deps
@@ -28,12 +28,11 @@ dev: install_as_editable $(PROTO_STAMP) $(REST_STAMP)
 
 .PHONY: install_as_editable
 install_as_editable:
-	$(UV) venv
-	$(UV) pip install -e ".[dev]" ".[codegen]"
+	$ python -m pip install -e ".[dev,codegen]"
 
 .PHONY: wheel
 wheel:
-	$(UV) build
+	$ python -m build --wheel
 
 # --- Git dependencies
 $(GOGOPROTO_DIR)/.git:
