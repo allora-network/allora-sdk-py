@@ -28,12 +28,13 @@ dev: install_as_editable $(PROTO_STAMP) $(REST_STAMP)
 
 .PHONY: install_as_editable
 install_as_editable:
-	$(UV) venv
-	$(UV) pip install -e ".[dev]" ".[codegen]"
+	uv venv
+	source .venv/bin/activate
+	uv sync
 
 .PHONY: wheel
 wheel:
-	$(UV) build
+	uv build
 
 # --- Git dependencies
 $(GOGOPROTO_DIR)/.git:
