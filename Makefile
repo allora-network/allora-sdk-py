@@ -3,9 +3,6 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DELETE_ON_ERROR:
 
-UV := uv
-PY := $(UV) run python
-
 # --- Paths
 PROTO_DEPS := ./proto-deps
 COSMOS_SDK_DIR := $(PROTO_DEPS)/cosmos-sdk
@@ -29,8 +26,7 @@ dev: install_as_editable $(PROTO_STAMP) $(REST_STAMP)
 .PHONY: install_as_editable
 install_as_editable:
 	uv venv
-	source .venv/bin/activate
-	uv sync
+	uv pip install -e ".[dev]" ".[codegen]"
 
 .PHONY: wheel
 wheel:

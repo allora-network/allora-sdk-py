@@ -170,7 +170,7 @@ class AlloraWorker:
             return LocalWallet.from_mnemonic(mnemonic, "allo")
 
     def _maybe_faucet_request(self):
-        MIN_ALLO = 100000000000000000  # 0.1 ALLO in uALLO (0.1 * 10^18)
+        MIN_ALLO = 1000000000  # 0.1 ALLO in uALLO (0.1 * 10^18)
 
         resp = self.client.bank.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
