@@ -14,8 +14,7 @@ from google.protobuf import descriptor_pb2
 from google.protobuf import descriptor_pool
 from google.protobuf import message_factory
 
-# Import the HTTP option extension definition
-from google.api import annotations_pb2, http_pb2  # from googleapis-common-protos
+from google.api import annotations_pb2, http_pb2
 
 
 # ---------------------- Data model ----------------------

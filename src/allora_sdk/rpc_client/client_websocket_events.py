@@ -128,7 +128,7 @@ class EventRegistry:
         
         for version in versions:
             try:
-                module_name = f"allora_sdk.protobuf_client.protos.emissions.{version}"
+                module_name = f"allora_sdk.protos.emissions.{version}"
                 module = importlib.import_module(module_name)
                 
                 event_classes = [

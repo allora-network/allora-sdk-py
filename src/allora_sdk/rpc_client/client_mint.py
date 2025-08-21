@@ -5,8 +5,8 @@ from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.wallet import LocalWallet
 from grpclib.client import Channel
 
-from allora_sdk.protobuf_client.config import AlloraNetworkConfig
-from allora_sdk.protobuf_client.tx_manager import TxManager
+from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.tx_manager import TxManager
 from allora_sdk.rest.mint_v5_rest_client import MintV5QueryServiceLike
 
 logger = logging.getLogger(__name__)

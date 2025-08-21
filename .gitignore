@@ -1,6 +1,10 @@
+.allora_key
 .tox/
+.claude/
 .venv/
 .mypy_cache/
+.pytest_cache/
+__pycache__/
 .omega.json
 *.sublime-project
 *.sublime-workspace
@@ -9,9 +13,8 @@
 .DS_Store
 build/
 dist/
-src/allora_sdk/protobuf_client/protos/
-# src/allora_sdk/rest/
-# __pycache__/
+src/allora_sdk/protos/
+src/allora_sdk/rest/
 proto-deps/
 
 

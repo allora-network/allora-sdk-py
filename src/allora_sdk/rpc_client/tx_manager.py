@@ -1,23 +1,21 @@
 from enum import Enum
 import time
-from cosmpy.aerial.client.utils import ensure_timedelta
 import grpc
-import requests
 from datetime import datetime, timedelta
 import logging
 import traceback
 from typing import Any, Optional, Union
 
-from cosmpy.aerial.client import LedgerClient, TxResponse as TxResponseCosmPy
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
+from cosmpy.aerial.client.utils import ensure_timedelta
 
-from allora_sdk.protobuf_client.config import AlloraNetworkConfig
-from allora_sdk.protobuf_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
-from allora_sdk.protobuf_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
-from allora_sdk.protobuf_client.protos.cosmos.base.abci.v1beta1 import TxResponse
-from allora_sdk.protobuf_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest
+from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
+from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from allora_sdk.protos.cosmos.base.abci.v1beta1 import TxResponse
+from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest
 from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
 from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
 from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
@@ -123,10 +121,8 @@ class TxManager:
                 logger.debug("Account sequence mismatch, retrying...")
                 continue
             except TxError:
-                # Don't retry on-chain errors - re-raise immediately
                 raise
             except Exception as e:
-                # Don't retry on other types of errors
                 logger.debug(f"Transaction failed: {str(e)}")
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
                 raise Exception(f"Transaction failed: {str(e)}")
@@ -273,7 +269,6 @@ class TxManager:
             )
 
     async def _estimate_gas(self, type_url: str) -> int:
-        """Estimate gas with safety margin based on message type."""
         base_gas = self._default_gas_limits.get(type_url, 200000)
 
         # Add 20% safety margin
@@ -281,7 +276,6 @@ class TxManager:
 
 
     async def _calculate_optimal_fee(self, gas_limit: int, fee_tier: FeeTier) -> Coin:
-        """Calculate fee based on tier and network conditions."""
         base_price = self.config.fee_minimum_gas_price
         multiplier = self._fee_multipliers[fee_tier]
 

@@ -16,17 +16,17 @@ from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
 
-import allora_sdk.protobuf_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
-import allora_sdk.protobuf_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
-import allora_sdk.protobuf_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
-import allora_sdk.protobuf_client.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
-import allora_sdk.protobuf_client.protos.emissions.v9 as emissions_v9
-import allora_sdk.protobuf_client.protos.mint.v5 as mint_v5
+import allora_sdk.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
+import allora_sdk.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
+import allora_sdk.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
+import allora_sdk.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
+import allora_sdk.protos.emissions.v9 as emissions_v9
+import allora_sdk.protos.mint.v5 as mint_v5
 import allora_sdk.rest as rest
 
 from .client_emissions import EmissionsClient
 from .client_mint import MintClient
-from .config import AlloraNetworkConfig, DEFAULT_TESTNET_CONFIG
+from .config import AlloraNetworkConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .utils import AlloraUtils
 from .tx_manager import TxManager
@@ -41,12 +41,15 @@ class AlloraRPCClient:
     This class provides a high-level interface for blockchain operations
     including queries, transactions, and event subscriptions.
     """
+
+    config: AlloraNetworkConfig
     
     def __init__(
         self,
-        config: Optional[AlloraNetworkConfig] = None,
+        config: Optional[AlloraNetworkConfig],
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
+        wallet: Optional[LocalWallet] = None,
         debug: bool = False
     ):
         """
@@ -61,16 +64,12 @@ class AlloraRPCClient:
         if debug:
             logging.basicConfig(level=logging.DEBUG)
         
-        # Set up network configuration
-        self.config = config or self._get_default_config()
-
-        # Initialize cosmpy client
+        self.config = config if config is not None else AlloraNetworkConfig.testnet()
         self.ledger_client = LedgerClient(cfg=self.config.to_cosmpy_config())
-
-        # Initialize wallet if credentials provided
-        self.wallet: Optional[LocalWallet] = None
-        if private_key or mnemonic:
-            self._initialize_wallet(private_key, mnemonic)
+        if wallet:
+            self.wallet = wallet
+        else:
+            self.wallet = self._initialize_wallet(private_key, mnemonic) if private_key or mnemonic else None
 
         parsed_url = parse_url(self.config.url)
 
@@ -115,13 +114,6 @@ class AlloraRPCClient:
         # self.cosmos_tx = CosmosTxClient(query_client=cosmos_tx)
         
         logger.info(f"Initialized Allora client for {self.config.chain_id}")
-
-    
-    def _get_default_config(self) -> AlloraNetworkConfig:
-        """Get default configuration from environment or use testnet."""
-        if any(key.startswith("ALLORA_") for key in os.environ):
-            return AlloraNetworkConfig.from_env()
-        return DEFAULT_TESTNET_CONFIG
     
 
     def _initialize_wallet(self, private_key: Optional[str], mnemonic: Optional[str]):
@@ -156,75 +148,17 @@ class AlloraRPCClient:
     def is_connected(self) -> bool:
         """Check if client is connected to the network."""
         try:
-            # Try to get chain ID to test connection
-            chain_id = self.ledger_client.query_chain_id()
+            chain_id = self.get_latest_block().header.chain_id
             return chain_id == self.config.chain_id
         except Exception:
             return False
     
 
     def get_latest_block(self):
-        resp = self.tendermint.get_latest_block(tendermint_v1beta1.GetLatestBlockRequest())
+        resp = self.tendermint.get_latest_block()
         if resp is None or resp.block is None:
             raise Exception('could not get latest block')
         return resp.block
-
-    
-    def get_balance(self, address: Optional[str] = None, denom: Optional[str] = None) -> Dict[str, int]:
-        """
-        Get account balance(s).
-        
-        Args:
-            address: Account address. If None, uses wallet address.
-            denom: Specific denomination to query. If None, returns all balances.
-            
-        Returns:
-            Dictionary mapping denomination to amount.
-        """
-        if not address and not self.wallet:
-            raise ValueError("Address required when no wallet is configured")
-
-        try:
-            if denom:
-                balance = self.ledger_client.query_bank_balance(self.wallet.address(), denom)
-                return {denom: balance}
-            else:
-                balances = self.ledger_client.query_bank_all_balances(self.wallet.address())
-                return {coin.denom: coin.amount for coin in balances}
-        except Exception as e:
-            logger.error(f"Failed to get balance for {self.wallet.address()}: {e}")
-            return {}
-    
-
-    async def get_account_info(self, address: Optional[str] = None):
-        """
-        Get account information including sequence number.
-
-        Args:
-            address: Account address. If None, uses wallet address.
-
-        Returns:
-            An `Account` object.
-        """
-        if not address and not self.wallet:
-            raise ValueError("Address required when no wallet is configured")
-        
-        # Prefer gRPC auth service to fetch account metadata, then return cosmpy Account for compatibility
-        # target = address or str(self.wallet.address())
-        return self.ledger_client.query_account(self.wallet.address())
-
-
-    def get_validators(self, status: ValidatorStatus = ValidatorStatus.BONDED):
-        """
-        Get list of validators.
-
-        Args:
-            status: Validator status filter
-
-        Returns:
-            List of validator information
-        """
-        return self.ledger_client.query_validators(status)
 
 
     async def close(self):
@@ -244,7 +178,7 @@ class AlloraRPCClient:
     ) -> 'AlloraRPCClient':
         """Create client from mnemonic phrase."""
         return cls(config=config, mnemonic=mnemonic, debug=debug)
-    
+
 
     @classmethod
     def from_private_key(
@@ -255,13 +189,14 @@ class AlloraRPCClient:
     ) -> 'AlloraRPCClient':
         """Create client from private key."""
         return cls(config=config, private_key=private_key, debug=debug)
-    
+
 
     @classmethod
     def testnet(
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
+        wallet: Optional[LocalWallet] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
@@ -269,15 +204,17 @@ class AlloraRPCClient:
             config=AlloraNetworkConfig.testnet(),
             private_key=private_key,
             mnemonic=mnemonic,
+            wallet=wallet,
             debug=debug
         )
-    
+
 
     @classmethod
     def mainnet(
         cls,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
+        wallet: Optional[LocalWallet] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
@@ -285,15 +222,17 @@ class AlloraRPCClient:
             config=AlloraNetworkConfig.mainnet(),
             private_key=private_key,
             mnemonic=mnemonic,
+            wallet=wallet,
             debug=debug
         )
-    
+
     @classmethod
     def local(
         cls,
         port: int = 26657,
         private_key: Optional[str] = None,
         mnemonic: Optional[str] = None,
+        wallet: Optional[LocalWallet] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
@@ -301,9 +240,6 @@ class AlloraRPCClient:
             config=AlloraNetworkConfig.local(port),
             private_key=private_key,
             mnemonic=mnemonic,
+            wallet=wallet,
             debug=debug
         )
-
-
-
-

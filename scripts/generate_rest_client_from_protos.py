@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class ProtobufAnalyzer:
-    def __init__(self, base_import_path: str = "allora_sdk.protobuf_client.protos"):
+    def __init__(self, base_import_path: str = "allora_sdk.protos"):
         self.base_import_path = base_import_path
         self.discovered_modules: List[ProtobufModule] = []
         
@@ -268,7 +268,7 @@ def main():
     )
     parser.add_argument(
         "--base-import-path",
-        default="allora_sdk.protobuf_client.protos",
+        default="allora_sdk.protos",
         help="Base import path for protobuf modules"
     )
     parser.add_argument(

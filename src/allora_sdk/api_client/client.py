@@ -1,34 +1,17 @@
 import aiohttp
 from enum import Enum
-from typing import List, Optional, TypeVar, Generic, Any
+from typing import List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
 from pydantic import BaseModel, Field
-
-
-class ChainSlug(str, Enum):
-    TESTNET = "testnet"
-    MAINNET = "mainnet"
 
 
 class ChainID(str, Enum):
     TESTNET = "allora-testnet-1"
     MAINNET = "allora-mainnet-1"
 
-
-class PricePredictionToken(str, Enum):
-    BTC = "BTC"
-    ETH = "ETH"
-
-
-class PricePredictionTimeframe(str, Enum):
-    FIVE_MIN = "5m"
-    EIGHT_HOURS = "8h"
-
-
 class SignatureFormat(str, Enum):
     ETHEREUM_SEPOLIA = "ethereum-11155111"
 
-
-class TopicAPI(BaseModel):
+class Topic(BaseModel):
     topic_id: int
     topic_name: str
     description: Optional[str] = None
@@ -43,8 +26,7 @@ class TopicAPI(BaseModel):
     is_active: Optional[bool] = None
     updated_at: str
 
-
-class InferenceDataAPI3(BaseModel):
+class InferenceData(BaseModel):
     network_inference: str
     network_inference_normalized: str
     confidence_interval_percentiles: List[str]
@@ -55,29 +37,26 @@ class InferenceDataAPI3(BaseModel):
     timestamp: int
     extra_data: str
 
-
-class AlloraInference(BaseModel):
+class Inference(BaseModel):
     signature: str
-    inference_data: AlloraInferenceData
-
+    inference_data: InferenceData
 
 class TopicsResponse(BaseModel):
-    topics: List[AlloraTopic]
+    topics: List[Topic]
     continuation_token: Optional[str] = None
 
 
 T = TypeVar("T")
 
-
-class AlloraAPIResponse(BaseModel, Generic[T]):
+class APIResponse(BaseModel, Generic[T]):
     request_id: str
     status: bool
     api_response_message: Optional[str] = Field(None, alias="apiResponseMessage")
     data: T
 
-class Fetcher:
-    async def fetch(self, url: str, headers: dict) -> Any:
-        pass
+@runtime_checkable
+class Fetcher(Protocol):
+    async def fetch(self, url: str, headers: dict) -> Any: ...
 
 class DefaultFetcher(Fetcher):
     async def fetch(self, url: str, headers: dict) -> Any:
@@ -90,17 +69,17 @@ class DefaultFetcher(Fetcher):
 class AlloraAPIClient:
     def __init__(
         self,
-        chain_slug: Optional[ChainSlug] = None,
+        chain_id: Optional[ChainID] = ChainID.TESTNET,
         api_key: Optional[str] = "UP-8cbc632a67a84ac1b4078661",
         base_api_url: Optional[str] = "https://api.allora.network/v2",
         fetcher: Fetcher = DefaultFetcher(),
     ):
-        self.chain_id = (ChainID.TESTNET if chain_slug == ChainSlug.TESTNET else ChainID.MAINNET).value
+        self.chain_id = chain_id
         self.api_key = api_key
         self.base_api_url = base_api_url
         self.fetcher = fetcher
 
-    async def get_all_topics(self) -> List[AlloraTopic]:
+    async def get_all_topics(self) -> List[Topic]:
         """
         Fetches all available topics from the Allora API.
         This method handles pagination automatically by following continuation tokens
@@ -109,7 +88,7 @@ class AlloraAPIClient:
         :return: A list of all available topics
         :raises: requests.RequestException if the API request fails
         """
-        all_topics: List[AlloraTopic] = []
+        all_topics: List[Topic] = []
         continuation_token: Optional[str] = None
 
         while True:
@@ -125,7 +104,7 @@ class AlloraAPIClient:
         self,
         topic_id: int,
         signature_format: SignatureFormat = SignatureFormat.ETHEREUM_SEPOLIA,
-    ) -> AlloraInference:
+    ) -> Inference:
         """
         Fetches an inference for a specific topic from the Allora API.
 
@@ -136,31 +115,7 @@ class AlloraAPIClient:
         """
         response = await self.fetch_api_response(
             f"allora/consumer/{signature_format.value}?allora_topic_id={topic_id}&inference_value_type=uint256",
-            AlloraInference,
-        )
-
-        if not response.data.inference_data:
-            raise ValueError("Failed to fetch price prediction")
-        return response.data
-
-    async def get_price_prediction(
-        self,
-        asset: PricePredictionToken,
-        timeframe: PricePredictionTimeframe,
-        signature_format: SignatureFormat = SignatureFormat.ETHEREUM_SEPOLIA,
-    ) -> AlloraInference:
-        """
-        Fetches a price prediction for a specific asset and timeframe from the Allora API.
-
-        :param asset: The asset to get price prediction for
-        :param timeframe: The timeframe to get price prediction for
-        :param signature_format: The signature format to use
-        :return: The inference data
-        :raises: requests.RequestException if the API request fails
-        """
-        response = await self.fetch_api_response(
-            f"allora/consumer/price/{signature_format.value}/{asset.value}/{timeframe.value}",
-            AlloraInference,
+            Inference,
         )
 
         if not response.data.inference_data:
@@ -178,7 +133,7 @@ class AlloraAPIClient:
         endpoint = endpoint.lstrip("/")
         return f"{api_url}/{endpoint}"
 
-    async def fetch_api_response(self, endpoint: str, response_model: type) -> AlloraAPIResponse:
+    async def fetch_api_response(self, endpoint: str, response_model: type) -> APIResponse:
         """
         Fetches and parses the API response for a given endpoint.
 
@@ -195,5 +150,5 @@ class AlloraAPIClient:
         }
         response_data = await self.fetcher.fetch(url, headers)
 
-        return AlloraAPIResponse[response_model](**response_data)
+        return APIResponse[response_model](**response_data)
 

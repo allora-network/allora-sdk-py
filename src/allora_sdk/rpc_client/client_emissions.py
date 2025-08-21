@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Optional
-from allora_sdk.protobuf_client.protos.emissions.v3 import Nonce
-from allora_sdk.protobuf_client.protos.emissions.v9 import (
+from allora_sdk.protos.emissions.v3 import Nonce
+from allora_sdk.protos.emissions.v9 import (
     InputInference,
     InputInferenceForecastBundle,
     InputWorkerDataBundle,
@@ -10,7 +10,7 @@ from allora_sdk.protobuf_client.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.protobuf_client.tx_manager import FeeTier, TxError, TxManager
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxManager
 from allora_sdk.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger(__name__)

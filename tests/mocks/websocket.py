@@ -3,7 +3,7 @@ from websockets import Data
 import json
 from typing import Awaitable, Optional, Iterable, AsyncIterable
 
-from allora_sdk.protobuf_client.client_websocket_events import WebSocketLike
+from allora_sdk.rpc_client.client_websocket_events import WebSocketLike
 
 
 class MockWebSocket:
