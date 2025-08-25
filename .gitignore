@@ -10,6 +10,8 @@ __pycache__/
 *.sublime-workspace
 *.pyc
 *.egg-info
+*.pkl
+*.joblib
 .DS_Store
 build/
 dist/

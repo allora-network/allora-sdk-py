@@ -21,8 +21,7 @@ class AlloraNetworkConfig:
             chain_id="allora-testnet-1",
             url="grpc+https://allora-grpc.testnet.allora.network:443",
             websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
-            # faucet_url="https://faucet.allora.network",
-            faucet_url="http://localhost:8000",
+            faucet_url="https://faucet.testnet.allora.network",
             fee_denom="uallo",
             fee_minimum_gas_price=10.0
         )

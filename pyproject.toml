@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "spooktheducks", email = "spook@alloralabs.xyz" },
     { name = "gh-allora", email = "gregory@alloralabs.xyz" },
+    { name = "jefferythewind", email = "tim@alloralabs.xyz" },
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -30,6 +31,11 @@ dependencies = [
     "async-timeout>=5.0.1",
     "hdwallets>=0.1.2",
     "mnemonic>=0.21",
+    "pandas",
+    "numpy",
+    "lightgbm",
+    "requests",
+    "dill",
 ]
 
 [project.optional-dependencies]

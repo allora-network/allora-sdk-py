@@ -44,7 +44,9 @@ When you run this snippet, a few things happen:
 - It obtains a small amount of ALLO, the compute gas currency of the platform.
 - It registers your worker to start submitting inferences to Allora's "sandbox" topic -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
 
-Don't worry about that for now -- get up and running, and then dive into our [documentation](https://docs.allora.network) and join our [Discord server](https://discord.gg/RU7yPcqb).
+For an even more comprehensive walkthrough, including an intro to our data pipeline, check out the [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb), which walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
+
+Once you're up and running, dive into our [documentation](https://docs.allora.network) and join our [Discord server](https://discord.gg/RU7yPcqb).
 
 ### Advanced Configuration
 
@@ -111,8 +113,8 @@ subscription_id = await client.events.subscribe_new_block_events_typed(
 ### Capabilities
 
 RPC endpoint types:
-- **Complete gRPC API**: All emissions, bank, and staking operations
-- **Complete Cosmos-LCD REST API**: Same as above with identical interfaces
+- **gRPC API**: All emissions, bank, and staking operations
+- **Cosmos-LCD REST API**: Same as above with identical interfaces
 
 Determined by the RPC url string passed to the config constructor.  `grpc+http(s)` will utilize the gRPC Protobuf client, whereas `rest+http(s)` will use Cosmos-LCD.
 
@@ -165,19 +167,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 pip install uv
 ```
 
-### Setup
+### Setup for development
 
-The Makefile handles all development setup:
+The Makefile handles all development setup.  Simply run:
 
 ```bash
-# Complete development setup (installs dependencies, generates code)
 make dev
-
-# Or step by step:
-make install_as_editable  # Install package in development mode
-make proto-deps           # Clone protobuf dependencies
-make proto                # Generate Python protobuf classes  
-make generate_rest_clients # Generate REST client classes
 ```
 
 ### Testing
@@ -220,7 +215,7 @@ Both generators run automatically with `make dev`.
 # Initial setup
 make dev
 
-# After proto file changes
+# After changes to .proto files
 make proto generate_rest_clients
 
 # Run tests  

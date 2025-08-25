@@ -170,7 +170,7 @@ class AlloraWorker:
             return LocalWallet.from_mnemonic(mnemonic, "allo")
 
     def _maybe_faucet_request(self):
-        MIN_ALLO = 1000000000  # 0.1 ALLO in uALLO (0.1 * 10^18)
+        MIN_ALLO = 100000000
 
         resp = self.client.bank.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
@@ -193,7 +193,7 @@ class AlloraWorker:
                     "chain": "allora-testnet-1",
                     "address": str(self.wallet.address()),
                 }, headers={
-                    "x-api-key": "foo",
+                    "x-api-key": self.api_key,
                 })
                 faucet_resp.raise_for_status()
                 logging.info(f"    Request sent...")
@@ -209,12 +209,15 @@ class AlloraWorker:
                     logging.info(f"    Balance: {balance_formatted}")
                     if balance >= MIN_ALLO:
                         return
-            except Exception as err:
-                if faucet_resp.status_code == 429:
+            except requests.HTTPError as err:
+                if err.response.status_code == 429:
                     logging.error(f"    Too many faucet requests. Try sending ALLO to your worker's wallet manually.")
                     self.stop()
                     sys.exit(-1)
                 logging.error(f"    Error requesting funds from wallet: {err}")
+            except Exception as err:
+                logging.error(f"    Error requesting funds from wallet: {err}")
+
             time.sleep(15)
 
 

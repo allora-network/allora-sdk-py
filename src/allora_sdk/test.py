@@ -9,10 +9,14 @@ from allora_sdk.worker import AlloraWorker
 def my_model():
     """Your ML model goes here."""
     import random
-    return round(55000 + random.uniform(-5000, 5000), 2)
+    return round(116000 + random.uniform(-5000, 5000), 2)
 
 async def main():
-    worker = AlloraWorker(topic_id=60, predict_fn=my_model)
+    worker = AlloraWorker(
+        topic_id=69,
+        predict_fn=my_model,
+        api_key="UP-17f415babba7482cb4b446a1",
+    )
 
     async for result in worker.run():
         if isinstance(result, Exception):
