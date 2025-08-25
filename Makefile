@@ -96,7 +96,7 @@ $(PROTO_STAMP): \
 	mkdir -p "$(ALLORA_PROTOS_DIR)"
 
 	# Run protoc via uv/venv; evaluate `find` at recipe time with $$()
-	python -m grpc_tools.protoc \
+	uv run python -m grpc_tools.protoc \
 		--proto_path="$(ALLORA_CHAIN_DIR)/x/emissions/proto" \
 		--proto_path="$(ALLORA_CHAIN_DIR)/x/mint/proto" \
 		--proto_path="$(COSMOS_SDK_DIR)/proto" \
@@ -127,7 +127,7 @@ $(REST_STAMP): \
 	rm -rf "$(REST_CLIENT_OUT_DIR)"
 	mkdir -p "$(REST_CLIENT_OUT_DIR)"
 
-	python scripts/generate_rest_client_from_protos.py \
+	uv run python scripts/generate_rest_client_from_protos.py \
 		--out "$(REST_CLIENT_OUT_DIR)" \
 		--include-tags emissions.v9 mint.v5 cosmos.tx cosmos.base.tendermint.v1beta1 cosmos.auth.v1beta1 cosmos.bank.v1beta1 \
 		--proto-files-dirs "$(ALLORA_CHAIN_DIR)/x" "$(COSMOS_SDK_DIR)/proto" \
