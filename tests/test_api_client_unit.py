@@ -1,9 +1,7 @@
 import pytest
 
-from allora_sdk.v2.api_client import (
+from allora_sdk.api_client import (
     AlloraAPIClient,
-    PriceInferenceTimeframe,
-    PriceInferenceToken,
     SignatureFormat,
 )
 from .mock_data import (
@@ -58,22 +56,11 @@ async def test_get_inference_by_topic_id():
     assert inference.inference_data.network_inference_normalized == mock_inference["inference_data"]["network_inference_normalized"]
 
 @pytest.mark.asyncio
-async def test_get_price_inference():
-    server.add_mock_response(mock_api_response, 200)
-    client = AlloraAPIClient(fetcher=fetcher)
-    inference = await client.get_price_inference(PriceInferenceToken.BTC, PriceInferenceTimeframe.FIVE_MIN)
-
-    assert inference.inference_data.network_inference == mock_inference["inference_data"]["network_inference"]
-    assert inference.inference_data.network_inference_normalized == mock_inference["inference_data"]["network_inference_normalized"]
-
-@pytest.mark.asyncio
 async def test_get_price_inference_missing_inference_data():
     mock_response = {**mock_api_response, "data": {"signature": "0x1234"}}
     server.add_mock_response(mock_response, 200)
     client = AlloraAPIClient(fetcher=fetcher)
+    topic_id = 1
     with pytest.raises(ValueError, match="validation error"):
-        await client.get_price_inference(
-            PriceInferenceToken.BTC,
-            PriceInferenceTimeframe.FIVE_MIN,
-        )
+        inference = await client.get_inference_by_topic_id(topic_id, SignatureFormat.ETHEREUM_SEPOLIA)
 
