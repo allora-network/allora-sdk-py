@@ -4,17 +4,37 @@
 
 A Python SDK for interacting with the Allora Network. Submit machine learning predictions, query blockchain data, and access network inference results.
 
+## Table of Contents
+
+- [Installation](#installation)
+- [ML Inference Worker](#ml-inference-worker)
+  - [Quick Start](#quick-start)
+  - [Advanced Configuration](#advanced-configuration)
+- [RPC Client](#rpc-client)
+  - [Basic Usage](#basic-usage-1)
+  - [Capabilities](#capabilities)
+- [API Client](#api-client)
+  - [Basic Usage](#basic-usage-2)
+  - [Features](#features)
+- [Development](#development)
+  - [Prerequisites](#prerequisites)
+  - [Setup for development](#setup-for-development)
+  - [Testing](#testing)
+  - [Code Generation](#code-generation)
+  - [Workflow](#workflow)
+  - [Dependencies](#dependencies)
+
 ## Installation
 
 ```bash
-pip install allora-sdk
+pip install allora_sdk
 ```
 
 ## ML Inference Worker
 
 Submits predictions to Allora Network topics with your ML models. The worker handles wallet creation, blockchain transactions, and automatic retries so that you can focus on model engineering.
 
-## Quick Start
+### Quick Start
 
 The simplest way to start participating in the Allora network is to paste the following snippet into a Jupyter or Google Colab notebook (or just a Python file that you can run from your terminal).  It will automatically handle all of the network onboarding and configuration behind the scenes, and will start submitting inferences automatically.
 
@@ -51,10 +71,10 @@ When you run this snippet, a few things happen:
 - It configures this worker to communicate with our "testnet" network -- a place where no real funds are exchanged.
 - It automatically generates an identity on the platform for you, represented by an `allo` address.
 - It obtains a small amount of ALLO, the compute gas currency of the platform.
-- It registers your worker to start submitting inferences to Allora's "sandbox" topic -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
+- It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
 
 More resources:
-- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20ML%20Workflow.ipynb): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
+- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
 - Official [documentation](https://docs.allora.network)
 - Join our [Discord server](https://discord.gg/RU7yPcqb)
 
@@ -198,14 +218,11 @@ make dev
 The project uses tox for testing across Python versions:
 
 ```bash
-# Run all tests across supported Python versions
-tox
+# Run all tests across supported Python versions using `tox`
+make test
 
 # Test specific Python version
 tox -e py312
-
-# Run tests directly with current Python
-uv run pytest tests/
 ```
 
 ### Code Generation
