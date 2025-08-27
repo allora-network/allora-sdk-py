@@ -1,19 +1,17 @@
 import pytest
 import pytest_asyncio
-from allora_sdk.v2.api_client import (
+from allora_sdk.api_client import (
     AlloraAPIClient,
-    ChainSlug,
-    PriceInferenceToken,
-    PriceInferenceTimeframe,
-    AlloraTopic,
-    AlloraInference,
+    ChainID,
+    Topic,
+    Inference,
 )
 
 DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
 @pytest_asyncio.fixture
 def client():
-    return AlloraAPIClient(chain_slug=ChainSlug.TESTNET)
+    return AlloraAPIClient(chain_id=ChainID.TESTNET)
 
 @pytest.mark.asyncio
 async def test_get_all_topics(client):
@@ -23,7 +21,7 @@ async def test_get_all_topics(client):
     assert len(topics) > 0
 
     topic = topics[0]
-    assert isinstance(topic, AlloraTopic)
+    assert isinstance(topic, Topic)
     assert isinstance(topic.topic_id, int)
     assert isinstance(topic.topic_name, str)
     assert topic.topic_name, "Topic name should not be empty"
@@ -48,7 +46,7 @@ async def test_get_inference_by_topic_id(client):
 
     inference = await client.get_inference_by_topic_id(topics[0].topic_id)
 
-    assert isinstance(inference, AlloraInference)
+    assert isinstance(inference, Inference)
     assert isinstance(inference.signature, str)
     assert inference.signature, "Signature should not be empty"
 
@@ -64,12 +62,9 @@ async def test_get_inference_by_topic_id(client):
 
 @pytest.mark.asyncio
 async def test_get_price_inference(client):
-    inference = await client.get_price_inference(
-        PriceInferenceToken.BTC,
-        PriceInferenceTimeframe.EIGHT_HOURS
-    )
+    inference = await client.get_inference_by_topic_id(69)
 
-    assert isinstance(inference, AlloraInference)
+    assert isinstance(inference, Inference)
     assert isinstance(inference.signature, str)
     assert inference.signature, "Signature should not be empty"
 
@@ -90,10 +85,9 @@ async def test_get_price_inference(client):
 
 @pytest.mark.asyncio
 async def test_get_price_inference_different_assets(client):
-    for token in [PriceInferenceToken.BTC, PriceInferenceToken.ETH]:
-        for timeframe in [PriceInferenceTimeframe.FIVE_MIN, PriceInferenceTimeframe.EIGHT_HOURS]:
-            inference = await client.get_price_inference(token, timeframe)
-            assert isinstance(inference, AlloraInference)
-            assert inference.inference_data.network_inference.isdigit()
-            assert float(inference.inference_data.network_inference_normalized) > 0
+    for topic_id in [13, 14]:
+        inference = await client.get_inference_by_topic_id(topic_id)
+        assert isinstance(inference, Inference)
+        assert inference.inference_data.network_inference.isdigit()
+        assert float(inference.inference_data.network_inference_normalized) > 0
 

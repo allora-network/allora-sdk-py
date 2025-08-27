@@ -1,48 +1,61 @@
 [project]
 name = "allora_sdk"
-version = "0.2.3"
-dependencies = [
-    "aiohttp",
-    "annotated-types==0.7.0",
-    "cachetools==5.5.0",
-    "certifi==2024.12.14",
-    "chardet==5.2.0",
-    "charset-normalizer==3.4.1",
-    "colorama==0.4.6",
-    "distlib==0.3.9",
-    "filelock==3.16.1",
-    "idna==3.10",
-    "packaging==24.2",
-    "platformdirs==4.3.6",
-    "pluggy==1.5.0",
-    "pydantic>=2.10.4",
-    "pydantic_core==2.27.2",
-    "pyproject-api==1.8.0",
-    "requests==2.32.3",
-    "tox==4.23.2",
-    "typing_extensions==4.12.2",
-    "urllib3==2.3.0",
-    "virtualenv==20.28.1",
-]
-authors = [
-    { name="spooktheducks", email="spooktheducks@protonmail.com" },
-]
+version = "1.0.4"
 description = "Allora Network SDK"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
+authors = [
+    { name = "spooktheducks", email = "spook@alloralabs.xyz" },
+    { name = "gh-allora", email = "gregory@alloralabs.xyz" },
+    { name = "jefferythewind", email = "tim@alloralabs.xyz" },
+]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
 
+dependencies = [
+    "pydantic >= 2.10.4",
+    "aiohttp ~= 3.12",
+    "cosmpy >= 0.11.1",
+    "websockets >= 15.0.1",
+    "grpclib >= 0.4.8",
+    "betterproto2 ~= 0.7.0",
+    "requests ~= 2.32",
+    "async-timeout>=5.0.1",
+    "hdwallets>=0.1.2",
+    "mnemonic>=0.21",
+    "pandas",
+    "numpy",
+    "lightgbm",
+    "requests",
+    "dill",
+]
+
 [project.optional-dependencies]
 dev = [
-    "tox",
-    "pytest",
-    "pytest-asyncio",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-timeout>=2.4.0",
+    "mypy==1.11.2",
+    "types-cachetools>=5.5.0.20240820",
+    "types-chardet>=5.0.4.6",
     "fastapi",
     "starlette",
+    "httpx",
+    "tox",
+]
+codegen = [
+    "grpcio-tools",
+    "betterproto2-compiler",
+    "openapi-python-client",
+    "pyyaml",
 ]
 
 [project.urls]
@@ -56,13 +69,31 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/allora_sdk"]
+include = [
+    "src/allora_sdk/**/*"
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/.vscode",
+    "/.idea",
+    "/tests",
+    "/scripts",
+    "/examples",
+    "/.tox",
+    "/.venv",
+    "/.allora_key*",
+    "/allora_key*",
+]
 
 [tool.tox]
 requires = ["tox>=4.19"]
-env_list = ["lint", "type", "3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+env_list = ["lint", "3.13", "3.12", "3.11", "3.10"] # "test"
+# passenv = ["PATH"]
 
 [tool.tox.env_run_base]
-description = "Run test under {base_python}"
+description = "Run tests"
 deps = [
     "pytest>=8",
     "pytest-asyncio",
@@ -71,15 +102,17 @@ deps = [
     "starlette",
     "httpx",
 ]
+# set_env = { PATH = "{env:PATH}" }
+allowlist_externals = ["make"]
+commands_pre = [["make", "dev"]]
 commands = [["pytest", { replace = "posargs", default = ["tests"], extend = true }]]
 
+
 [tool.tox.env.type]
-description = "run type check on code base"
+description = "Type check"
 deps = ["mypy==1.11.2", "types-cachetools>=5.5.0.20240820", "types-chardet>=5.0.4.6"]
-commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend = true} ]]
+commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend = true }]]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = [
-    "asyncio: mark test as async test",
-]
+markers = ["asyncio: mark test as async test"]
