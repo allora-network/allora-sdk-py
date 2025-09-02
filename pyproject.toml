@@ -1,6 +1,6 @@
 [project]
 name = "allora_sdk"
-version = "1.0.4"
+version = "1.0.5"
 description = "Allora Network SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -72,8 +72,16 @@ packages = ["src/allora_sdk"]
 include = [
     "src/allora_sdk/**/*"
 ]
+artifacts = [
+    "src/allora_sdk/protos/**/*",
+    "src/allora_sdk/rest/**/*",
+]
 
 [tool.hatch.build.targets.sdist]
+artifacts = [
+    "src/allora_sdk/protos/**/*",
+    "src/allora_sdk/rest/**/*",
+]
 exclude = [
     "/.github",
     "/.vscode",
