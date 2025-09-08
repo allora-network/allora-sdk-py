@@ -1,10 +1,14 @@
+import asyncio
 from enum import Enum
+from random import paretovariate
 import time
 import grpc
 from datetime import datetime, timedelta
 import logging
 import traceback
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Dict
+from google.protobuf.message import Message
+import uuid
 
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
@@ -22,6 +26,43 @@ from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1Service
 
 
 logger = logging.getLogger("allora_sdk")
+
+class PendingTx:
+    def __init__(
+        self,
+        manager: "TxManager",
+        *,
+        parent_tx_id: int,
+        type_url: str,
+        msg: Any,
+        fee_tier: "FeeTier",
+        max_retries: int,
+        timeout: Optional[timedelta],
+    ):
+        self.manager = manager
+        self.parent_tx_id = parent_tx_id
+        self.created_at = datetime.now()
+        self.type_url = type_url
+        self.msg = msg
+        self.fee_tier = fee_tier
+        self.max_retries = max_retries
+
+        # These get populated during processing
+        self.last_tx_hash: Optional[str] = None
+        self.last_gas_limit: Optional[int] = None
+        self.last_fee: Optional[Coin] = None
+        self.start = datetime.now()
+        self.timeout = timeout
+        self.attempt: int = 0
+
+        # Final outcome future: resolves to TxResponse or raises
+        self._final_future: asyncio.Future[TxResponse] = asyncio.get_running_loop().create_future()
+
+    async def wait(self) -> TxResponse:
+        return await self._final_future
+
+    def __await__(self):
+        return self.wait().__await__()
 
 class FeeTier(Enum):
     ECO      = "eco"
@@ -79,6 +120,7 @@ class TxManager:
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
+        self.parent_tx_id = 0
 
         self._default_gas_limits = {
             "/emissions.v9.InsertWorkerPayloadRequest": 250000,
@@ -93,50 +135,123 @@ class TxManager:
             FeeTier.PRIORITY: 2.5,   # 150% higher than minimum
         }
 
+        # Pending tx hash watchers monitored by a background task
+        self._pending_attempts: Dict[str, Dict[str, Any]] = {}
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._monitor_cond = asyncio.Condition()
+
     async def submit_transaction(
         self,
         type_url: str,
         msg: Any,
         gas_limit: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        max_retries: int = 2
+        max_retries: int = 2,
+        timeout: Optional[timedelta] = None,
     ):
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
-        await self._pre_flight_checks()
+        pending = PendingTx(
+            manager=self,
+            parent_tx_id=self.parent_tx_id,
+            type_url=type_url,
+            msg=msg,
+            fee_tier=fee_tier,
+            max_retries=max_retries,
+            timeout=timeout,
+        )
+        self.parent_tx_id += 1
 
-        for attempt in range(max_retries + 1):
+        # Kick off processing as a background task; caller can await the PendingTx
+        asyncio.create_task(self._attempt_submissions(pending, gas_limit))
+
+        return pending
+
+    async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int]):
+        start = datetime.now()
+
+        gas_multiplier = 1.0
+        fee_multiplier = self._fee_multipliers[pending.fee_tier]
+
+        for attempt in range(pending.max_retries + 1):
             try:
-                gas_multiplier = 1.0 + (attempt * 0.3)  # Increase gas 30% each retry
-                return await self._submit_single_attempt(type_url, msg, gas_limit, fee_tier, gas_multiplier)
+                await self._pre_flight_checks()
+
+                pending.attempt = attempt
+
+                gas_multiplier = 1.0 + (attempt * 0.3)
+                tx_hash, used_gas_limit, used_fee = await self._build_and_broadcast(
+                    pending.type_url,
+                    pending.msg,
+                    gas_limit,
+                    fee_multiplier,
+                    gas_multiplier,
+                )
+
+                # Update known properties
+                pending.last_tx_hash = tx_hash
+                pending.last_gas_limit = used_gas_limit
+                pending.last_fee = used_fee
+
+                # Await current attempt
+                resp = await self.wait_for_tx(tx_hash, timeout=timedelta(seconds=30), poll_period=timedelta(seconds=2))
+                assert resp.tx_response is not None
+                self._log_tx_response(resp.tx_response)
+                self._raise_for_status(resp.tx_response)
+
+                logger.debug(f"✅ Transaction included in block!")
+                # Success
+                pending._final_future.set_result(resp.tx_response)
+                return
+
             except OutOfGasError:
-                if attempt == max_retries:
+                gas_multiplier = 1.0 + (attempt * 0.3)
+                if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to insufficient gas")
                 logger.debug(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
                 continue
+
+            except InsufficientFeesError:
+                fee_multiplier = 1.0 + attempt * 0.5
+                if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                    raise Exception("Transaction failed after multiple attempts due to insufficient fees")
+                logger.debug("Insufficient fees, retrying...")
+                continue
+
             except AccountSequenceMismatchError:
-                if attempt == max_retries:
-                    raise
+                # Account sequence will be recalculated on next attempt
+                # TODO: maybe build a nonce manager?
+                if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                    raise Exception("Transaction failed after multiple attempts due to repeated account sequence mismatches")
                 logger.debug("Account sequence mismatch, retrying...")
                 continue
-            except TxError:
-                raise
-            except Exception as e:
-                logger.debug(f"Transaction failed: {str(e)}")
-                logger.debug(f"Full traceback: {traceback.format_exc()}")
-                raise Exception(f"Transaction failed: {str(e)}")
 
-        raise Exception("Transaction failed after maximum retries")
+            except TxTimeoutError:
+                if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                    logger.error("Transaction timed out after multiple attempts")
+                    pending._final_future.set_exception(TxTimeoutError())
+                    return
+                logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
+                continue
 
-    async def _submit_single_attempt(
+            except Exception as err:
+                logger.error(f"Transaction failed unexpectedly and irrecoverably: {str(err)}")
+                pending._final_future.set_exception(err)
+                return
+
+        # Exhausted attempts without setting result
+        pending._final_future.set_exception(TxTimeoutError("Transaction failed after maximum retries"))
+
+
+    async def _build_and_broadcast(
         self,
         type_url: str,
         msg: Any,
         gas_limit: Optional[int],
-        fee_tier: FeeTier,
-        gas_multiplier: float
-    ):
+        fee_multiplier: float,
+        gas_multiplier: float,
+    ) -> tuple[str, int, Coin]:
         any_message = self._create_any_message(msg, type_url)
 
         tx = Transaction()
@@ -146,7 +261,7 @@ class TxManager:
             gas_limit = await self._estimate_gas(type_url)
 
         gas_limit = int(gas_limit * gas_multiplier)
-        fee = await self._calculate_optimal_fee(gas_limit, fee_tier)
+        fee = await self._calculate_optimal_fee(gas_limit, fee_multiplier)
 
         resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
         if resp.info is None:
@@ -170,8 +285,13 @@ class TxManager:
 
         logger.debug("Broadcasting transaction...")
 
+        # Cast to protobuf Message to satisfy the linter about SerializeToString
+        pb_tx = tx.tx  # underlying protobuf message
+        from typing import cast
+        tx_bytes = cast(Message, pb_tx).SerializeToString()
+
         req = BroadcastTxRequest(
-            tx_bytes=tx.tx.SerializeToString(),
+            tx_bytes=tx_bytes,
             mode=BroadcastMode.SYNC,
         )
 
@@ -183,24 +303,9 @@ class TxManager:
         tx_hash = broadcast_result.tx_response.txhash
         logger.debug("⏳ Waiting for transaction to be included in block...")
 
-        timeout     = timedelta(seconds=30)
-        poll_period = timedelta(seconds=1)
+        return tx_hash, gas_limit, fee
 
-        resp = self.wait_for_tx(hash=tx_hash, timeout=timeout, poll_period=poll_period)
-        assert resp.tx_response is not None
-
-        logger.debug(f"✅ Transaction included in block!")
-
-        self._log_tx_response(resp.tx_response)
-
-        err = self._exception_from_tx_response(resp.tx_response)
-        if err is not None:
-            raise err
-        elif resp.tx_response is None:
-            raise Exception("tx_response is None")
-        return resp.tx_response
-
-    def wait_for_tx(self,
+    async def wait_for_tx(self,
         hash: str,
         timeout: Optional[Union[int, float, timedelta]] = None,
         poll_period: Optional[Union[int, float, timedelta]] = None,
@@ -219,7 +324,7 @@ class TxManager:
             if delta >= timeout:
                 raise TxTimeoutError()
 
-            time.sleep(poll_period.total_seconds())
+            await asyncio.sleep(poll_period.total_seconds())
 
     def _get_tx(self, hash: str):
         try:
@@ -250,6 +355,11 @@ class TxManager:
             logger.debug(f"   - Gas Wanted: {resp.gas_wanted}")
 
 
+    def _raise_for_status(self, resp: TxResponse):
+        err = self._exception_from_tx_response(resp)
+        if err is not None:
+            raise err
+
     def _exception_from_tx_response(self, resp: TxResponse):
         if resp.code == 0:
             return None
@@ -269,18 +379,16 @@ class TxManager:
             )
 
     async def _estimate_gas(self, type_url: str) -> int:
+        # TODO
         base_gas = self._default_gas_limits.get(type_url, 200000)
 
         # Add 20% safety margin
         return int(base_gas * 1.2)
 
 
-    async def _calculate_optimal_fee(self, gas_limit: int, fee_tier: FeeTier) -> Coin:
+    async def _calculate_optimal_fee(self, gas_limit: int, fee_multiplier: float) -> Coin:
         base_price = self.config.fee_minimum_gas_price
-        multiplier = self._fee_multipliers[fee_tier]
-
-        fee_amount = int(gas_limit * base_price * multiplier)
-
+        fee_amount = int(gas_limit * base_price * fee_multiplier)
         return Coin(amount=fee_amount, denom=self.config.fee_denom)
 
 

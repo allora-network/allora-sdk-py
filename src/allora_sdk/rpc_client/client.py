@@ -26,9 +26,8 @@ import allora_sdk.rest as rest
 
 from .client_emissions import EmissionsClient
 from .client_mint import MintClient
-from .config import AlloraNetworkConfig
+from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
-from .utils import AlloraUtils
 from .tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
@@ -42,14 +41,10 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
-    config: AlloraNetworkConfig
-    
     def __init__(
         self,
-        config: Optional[AlloraNetworkConfig],
-        private_key: Optional[str] = None,
-        mnemonic: Optional[str] = None,
-        wallet: Optional[LocalWallet] = None,
+        network: AlloraNetworkConfig,
+        wallet: Optional[AlloraWalletConfig],
         debug: bool = False
     ):
         """
@@ -64,14 +59,11 @@ class AlloraRPCClient:
         if debug:
             logging.basicConfig(level=logging.DEBUG)
         
-        self.config = config if config is not None else AlloraNetworkConfig.testnet()
-        self.ledger_client = LedgerClient(cfg=self.config.to_cosmpy_config())
-        if wallet:
-            self.wallet = wallet
-        else:
-            self.wallet = self._initialize_wallet(private_key, mnemonic) if private_key or mnemonic else None
+        self.network = network if network is not None else AlloraNetworkConfig.testnet()
+        self.ledger_client = LedgerClient(cfg=self.network.to_cosmpy_config())
+        self._initialize_wallet(wallet)
 
-        parsed_url = parse_url(self.config.url)
+        parsed_url = parse_url(self.network.url)
 
         if parsed_url.protocol == Protocol.GRPC:
             if parsed_url.secure:
@@ -98,34 +90,44 @@ class AlloraRPCClient:
             self.auth: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
             self.bank: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
 
-        tendermint = tendermint_v1beta1.ServiceStub(self.grpc_client)
 
-        self.tx_manager = TxManager(
-            wallet=self.wallet,
-            tx_client=self.tx,
-            auth_client=self.auth,
-            bank_client=self.bank,
-            config=self.config,
-        )
-        self.events = AlloraWebsocketSubscriber(self.config.websocket_url)
-        self.utils = AlloraUtils(self)
+        if self.wallet:
+            self.tx_manager = TxManager(
+                wallet=self.wallet,
+                tx_client=self.tx,
+                auth_client=self.auth,
+                bank_client=self.bank,
+                config=self.network,
+            )
+        self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
         self.emissions = EmissionsClient(query_client=emissions, tx_manager=self.tx_manager)
         self.mint = MintClient(query_client=mint)
         # self.cosmos_tx = CosmosTxClient(query_client=cosmos_tx)
         
-        logger.info(f"Initialized Allora client for {self.config.chain_id}")
+        logger.info(f"Initialized Allora client for {self.network.chain_id}")
     
 
-    def _initialize_wallet(self, private_key: Optional[str], mnemonic: Optional[str]):
+    def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
+        if not wallet:
+            return
+
         try:
-            if private_key:
-                pk = PrivateKey(bytes.fromhex(private_key))
+            if wallet.wallet:
+                self.wallet = wallet.wallet
+                logger.info("Wallet initialized from LocalWallet")
+            elif wallet.private_key:
+                pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix="allo")
                 logger.info("Wallet initialized from private key")
-            elif mnemonic:
-                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
+            elif wallet.mnemonic:
+                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
                 logger.info("Wallet initialized from mnemonic")
+            elif wallet.mnemonic_file:
+                with open(wallet.mnemonic_file) as f:
+                    mnemonic = f.read()
+                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
+                logger.info("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
             raise ValueError(f"Invalid wallet credentials: {e}")
@@ -149,7 +151,7 @@ class AlloraRPCClient:
         """Check if client is connected to the network."""
         try:
             chain_id = self.get_latest_block().header.chain_id
-            return chain_id == self.config.chain_id
+            return chain_id == self.network.chain_id
         except Exception:
             return False
     
@@ -166,44 +168,19 @@ class AlloraRPCClient:
         logger.debug("Closing Allora client")
         if self.events:
             await self.events.stop()
-        self.grpc_client.close()
-
-
-    @classmethod
-    def from_mnemonic(
-        cls,
-        mnemonic: str,
-        config: Optional[AlloraNetworkConfig] = None,
-        debug: bool = True,
-    ) -> 'AlloraRPCClient':
-        """Create client from mnemonic phrase."""
-        return cls(config=config, mnemonic=mnemonic, debug=debug)
-
-
-    @classmethod
-    def from_private_key(
-        cls,
-        private_key: str,
-        config: Optional[AlloraNetworkConfig] = None,
-        debug: bool = True,
-    ) -> 'AlloraRPCClient':
-        """Create client from private key."""
-        return cls(config=config, private_key=private_key, debug=debug)
+        if self.grpc_client:
+            self.grpc_client.close()
 
 
     @classmethod
     def testnet(
         cls,
-        private_key: Optional[str] = None,
-        mnemonic: Optional[str] = None,
-        wallet: Optional[LocalWallet] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
-            config=AlloraNetworkConfig.testnet(),
-            private_key=private_key,
-            mnemonic=mnemonic,
+            network=AlloraNetworkConfig.testnet(),
             wallet=wallet,
             debug=debug
         )
@@ -212,16 +189,12 @@ class AlloraRPCClient:
     @classmethod
     def mainnet(
         cls,
-        private_key: Optional[str] = None,
-        mnemonic: Optional[str] = None,
-        wallet: Optional[LocalWallet] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
-            config=AlloraNetworkConfig.mainnet(),
-            private_key=private_key,
-            mnemonic=mnemonic,
+            network=AlloraNetworkConfig.mainnet(),
             wallet=wallet,
             debug=debug
         )
@@ -230,16 +203,12 @@ class AlloraRPCClient:
     def local(
         cls,
         port: int = 26657,
-        private_key: Optional[str] = None,
-        mnemonic: Optional[str] = None,
-        wallet: Optional[LocalWallet] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = True,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
-            config=AlloraNetworkConfig.local(port),
-            private_key=private_key,
-            mnemonic=mnemonic,
+            network=AlloraNetworkConfig.local(port),
             wallet=wallet,
             debug=debug
         )

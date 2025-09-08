@@ -2,6 +2,15 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
+from cosmpy.aerial.wallet import LocalWallet
+
+
+@dataclass
+class AlloraWalletConfig:
+    private_key: Optional[str] = None
+    mnemonic: Optional[str] = None
+    mnemonic_file: Optional[str] = None
+    wallet: Optional[LocalWallet] = None
 
 
 @dataclass
@@ -19,8 +28,11 @@ class AlloraNetworkConfig:
     def testnet(cls) -> 'AlloraNetworkConfig':
         return cls(
             chain_id="allora-testnet-1",
-            url="grpc+https://allora-grpc.testnet.allora.network:443",
-            websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
+            url="grpc+http://aws--us-east-1--testnet--archive-2.tail110056.ts.net:9090",
+            # url="grpc+https://allora-grpc.testnet.allora.network:443",
+            # url="grpc+http://offchain-testnet-1-tailscale-peers.tail110056.ts.net:9090",
+            websocket_url="ws://offchain-testnet-1-tailscale-peers.tail110056.ts.net:26657/websocket",
+            # websocket_url="wss://allora-grpc.testnet.allora.network/websocket",
             faucet_url="https://faucet.testnet.allora.network",
             fee_denom="uallo",
             fee_minimum_gas_price=10.0
@@ -30,7 +42,7 @@ class AlloraNetworkConfig:
     def mainnet(cls) -> 'AlloraNetworkConfig':
         return cls(
             chain_id="allora-mainnet-1",
-            url="grpc+https://allora-grpc.testnet.allora.network:443",
+            url="grpc+https://allora-grpc.mainnet.allora.network:443",
             websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=10.0
