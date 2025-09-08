@@ -14,8 +14,9 @@ import signal
 import sys
 import logging
 import time
-from typing import Callable, Optional, Set, AsyncIterator, Union, Awaitable
+from typing import Callable, Optional, Protocol, Set, AsyncIterator, Type, Union, Awaitable
 
+from betterproto2 import Message
 from cosmpy.aerial.client import TxResponse
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
@@ -26,49 +27,13 @@ import async_timeout
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
+from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.protos.emissions.v9 import EventNetworkLossSet, IsWorkerRegisteredInTopicIdRequest
-from allora_sdk.utils.timestamp_ordered_set import TimestampOrderedSet
-from allora_sdk.utils.format import format_allo_from_uallo_short
+from allora_sdk.protos.emissions.v9 import EventNetworkLossSet, EventReputerSubmissionWindowClosed, EventReputerSubmissionWindowOpened, IsWorkerRegisteredInTopicIdRequest, EventWorkerSubmissionWindowOpened, EventWorkerSubmissionWindowClosed
+from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo_short
 from allora_sdk.logging_config import setup_sdk_logging
 
 logger = logging.getLogger("allora_sdk")
-
-
-class WorkerContext:
-    """Go-like context for coordinating shutdown across the worker."""
-    
-    def __init__(self):
-        self._cancelled = False
-        self._cancel_event = asyncio.Event()
-        self._cleanup_tasks: Set[asyncio.Task] = set()
-        
-    def is_cancelled(self) -> bool:
-        """Check if the context has been cancelled."""
-        return self._cancelled
-        
-    async def wait_for_cancellation(self):
-        """Wait until the context is cancelled."""
-        await self._cancel_event.wait()
-        
-    def cancel(self):
-        """Cancel the context, triggering shutdown."""
-        if not self._cancelled:
-            self._cancelled = True
-            self._cancel_event.set()
-            
-    def add_cleanup_task(self, task: asyncio.Task):
-        """Register a task for cleanup on cancellation."""
-        self._cleanup_tasks.add(task)
-        
-    async def cleanup(self):
-        """Cancel all registered cleanup tasks."""
-        for task in self._cleanup_tasks:
-            if not task.done():
-                task.cancel()
-        
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
 
 
 @dataclass
@@ -85,10 +50,11 @@ class _StopQueue:
 
 PredictionItem = Union[PredictionResult, Exception, _StopQueue]
 PredictFnResultType = str | float
-PredictFnSync = Callable[[], PredictFnResultType]
-PredictFnAsync = Callable[[], Awaitable[PredictFnResultType]]
+PredictFnSync = Callable[[int], PredictFnResultType]
+PredictFnAsync = Callable[[int], Awaitable[PredictFnResultType]]
 PredictFn = Union[PredictFnSync, PredictFnAsync]
 
+SubmissionWindowOpenedEvent = Union[EventWorkerSubmissionWindowOpened, EventReputerSubmissionWindowOpened]
 
 class AlloraWorker:
     """
@@ -97,17 +63,78 @@ class AlloraWorker:
     Provides automatic WebSocket subscription management, environment-aware signal handling,
     and graceful resource cleanup for submitting predictions to Allora network topics.
     """
-    
-    def __init__(
-        self,
+
+    @staticmethod
+    def inferer(
         predict_fn: PredictFn,
-        mnemonic_file: Optional[str] = None,
-        mnemonic: Optional[str] = None,
-        private_key: Optional[str] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         debug: bool = False,
+    ):
+        """
+        Initialize the Allora predictive inference worker.
+
+        Args:
+            topic_id: The Allora network topic ID to submit predictions to
+            predict_fn: Function that returns prediction values (str or float)
+            key_file: Path to key file (optional)
+            mnemonic: Mnemonic phrase for wallet (optional)
+            private_key: Private key for wallet (optional)
+            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
+            log_level: `logging` package levels
+        """
+        return AlloraWorker(
+            predict_fn=predict_fn,
+            wallet=wallet,
+            api_key=api_key,
+            topic_id=topic_id,
+            fee_tier=fee_tier,
+            debug=debug,
+            submission_window_event_type=EventWorkerSubmissionWindowOpened,
+        )
+
+    @staticmethod
+    def reputer(
+        predict_fn: PredictFn,
+        wallet: Optional[AlloraWalletConfig] = None,
+        api_key: Optional[str] = None,
+        topic_id: int = 69,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        debug: bool = False,
+    ):
+        """
+        Initialize the Allora predictive inference worker.
+
+        Args:
+            topic_id: The Allora network topic ID to submit predictions to
+            predict_fn: Function that returns prediction values (str or float)
+            key_file: Path to key file (optional)
+            mnemonic: Mnemonic phrase for wallet (optional)
+            private_key: Private key for wallet (optional)
+            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
+            log_level: `logging` package levels
+        """
+        return AlloraWorker(
+            predict_fn=predict_fn,
+            wallet=wallet,
+            api_key=api_key,
+            topic_id=topic_id,
+            fee_tier=fee_tier,
+            debug=debug,
+            submission_window_event_type=EventReputerSubmissionWindowOpened,
+        )
+    
+    def __init__(
+        self,
+        predict_fn: PredictFn,
+        wallet: Optional[AlloraWalletConfig] = None,
+        api_key: Optional[str] = None,
+        topic_id: int = 69,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        debug: bool = False,
+        submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -120,36 +147,41 @@ class AlloraWorker:
             private_key: Private key for wallet (optional)
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             log_level: `logging` package levels
+            submission_window_event_type: Event type to listen for submission windows (worker, reputer, forecaster)
         """
         self.topic_id = topic_id
         self.predict_fn = predict_fn
         self.fee_tier = fee_tier
         self.api_key = api_key
+        self.submission_window_event_type = submission_window_event_type
         self.submitted_nonces = TimestampOrderedSet()
 
         setup_sdk_logging(debug=debug)
 
-        self.wallet = self._init_wallet(mnemonic=mnemonic, private_key=private_key, mnemonic_file=mnemonic_file)
-        self.client = AlloraRPCClient.testnet(mnemonic=mnemonic, wallet=self.wallet, debug=debug)
-        self._ctx: Optional[WorkerContext] = None
+        self.wallet = self._init_wallet(wallet)
+        if not self.wallet:
+            raise Exception('no wallet')
+
+        self.client = AlloraRPCClient.testnet(wallet=AlloraWalletConfig(wallet=self.wallet), debug=debug)
+        self._ctx: Optional[Context] = None
         self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
         self._subscription_id: Optional[str] = None
 
-        self._maybe_faucet_request()
+        if self.api_key:
+            self._maybe_faucet_request()
 
 
-    def _init_wallet(
-        self,
-        mnemonic: Optional[str] = None,
-        private_key: Optional[str] = None,
-        mnemonic_file: Optional[str] = None,
-    ):
-        if private_key:
-            return LocalWallet(PrivateKey(bytes.fromhex(private_key)))
-        if mnemonic:
-            return LocalWallet.from_mnemonic(mnemonic, "allo")
+    def _init_wallet(self, wallet: AlloraWalletConfig | None):
+        if wallet:
+            if wallet.private_key:
+                return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)))
+            if wallet.mnemonic:
+                return LocalWallet.from_mnemonic(wallet.mnemonic, "allo")
 
-        mnemonic_file = mnemonic_file or ".allora_key"
+        if wallet:
+            mnemonic_file = wallet.mnemonic_file or ".allora_key"
+        else:
+            mnemonic_file = ".allora_key"
 
         if os.path.exists(mnemonic_file):
             with open(mnemonic_file, "r") as f:
@@ -176,9 +208,9 @@ class AlloraWorker:
         balance = int(resp.balance.amount)
         balance_formatted = format_allo_from_uallo_short(balance)
         logging.info(f"Worker wallet {str(self.wallet.address())} balance: {balance_formatted}")
-        if self.client.config.chain_id != "allora-testnet-1":
+        if self.client.network.chain_id != "allora-testnet-1":
             return
-        if not self.client.config.faucet_url:
+        if not self.client.network.faucet_url:
             return
         if balance >= MIN_ALLO:
             return
@@ -186,7 +218,7 @@ class AlloraWorker:
 
         while True:
             try:
-                faucet_resp = requests.post(self.client.config.faucet_url + "/api/request", data={
+                faucet_resp = requests.post(self.client.network.faucet_url + "/api/request", data={
                     "chain": "allora-testnet-1",
                     "address": str(self.wallet.address()),
                 }, headers={
@@ -226,7 +258,7 @@ class AlloraWorker:
         else:
             return "shell"
             
-    def _setup_signal_handlers(self, ctx: WorkerContext):
+    def _setup_signal_handlers(self, ctx: Context):
         env = self._detect_environment()
         
         if env == "shell":
@@ -279,7 +311,7 @@ class AlloraWorker:
         if self._ctx and not self._ctx.is_cancelled():
             raise RuntimeError("Worker is already running")
             
-        ctx = WorkerContext()
+        ctx = Context()
         self._ctx = ctx
         self._prediction_queue = asyncio.Queue()
         
@@ -321,11 +353,11 @@ class AlloraWorker:
         finally:
             await self._cleanup(ctx)
 
-    async def _run_with_context(self, ctx: WorkerContext) -> AsyncIterator[PredictionResult |  Exception]:
+    async def _run_with_context(self, ctx: Context) -> AsyncIterator[PredictionResult |  Exception]:
         polling = asyncio.create_task(self._polling_worker(ctx))
         ctx.add_cleanup_task(polling)
 
-        await self._listen()
+        await self._subscribe_websocket_events()
 
         cleanup_task = asyncio.create_task(self._monitor_cancellation(ctx))
         ctx.add_cleanup_task(cleanup_task)
@@ -347,7 +379,7 @@ class AlloraWorker:
             # propagate ctx cancellation
             raise
             
-    async def _monitor_cancellation(self, ctx: WorkerContext):
+    async def _monitor_cancellation(self, ctx: Context):
         await ctx.wait_for_cancellation()
         if self._prediction_queue is not None:
             try:
@@ -355,12 +387,13 @@ class AlloraWorker:
             except asyncio.QueueFull:
                 pass
 
-    async def _polling_worker(self, ctx: WorkerContext):
+    async def _polling_worker(self, ctx: Context):
         logger.info(f"🔄 Starting polling worker for topic {self.topic_id}")
         
         while not ctx.is_cancelled():
+            logger.info(f"🔄 Polling worker checking topic {self.topic_id}")
             try:
-                await self._maybe_submit_prediction(ctx)
+                await self._maybe_submit(ctx)
             except asyncio.CancelledError:
                 self.stop()
                 break
@@ -371,35 +404,56 @@ class AlloraWorker:
                 self.stop()
                 break
             except Exception as e:
+                logger.error(f"Error in polling worker: {e}")
                 pass
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(60)
         
         logger.debug(f"🔄 Polling worker stopped for topic {self.topic_id}")
     
 
-    async def _listen(self):
+    async def _subscribe_websocket_events(self):
         self._subscription_id = await self.client.events.subscribe_new_block_events_typed(
-            EventNetworkLossSet,
-            [ EventAttributeCondition("topic_id", "=", str(self.topic_id)) ],
-            self._handle_new_epoch_event,
+            self.submission_window_event_type,
+            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            self._handle_submission_window_opened,
+        )
+        await self.client.events.subscribe_new_block_events_typed(
+            EventWorkerSubmissionWindowOpened,
+            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"🚀 Worker submission window opened (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+        )
+        await self.client.events.subscribe_new_block_events_typed(
+            EventWorkerSubmissionWindowClosed,
+            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+        )
+        await self.client.events.subscribe_new_block_events_typed(
+            EventReputerSubmissionWindowOpened,
+            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+        )
+        await self.client.events.subscribe_new_block_events_typed(
+            EventReputerSubmissionWindowClosed,
+            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
         )
 
 
-    async def _handle_new_epoch_event(self, event: EventNetworkLossSet, height: int):
+    async def _handle_submission_window_opened(self, event: SubmissionWindowOpenedEvent, height: int):
         ctx = self._ctx
         if ctx is None or ctx.is_cancelled():
             return
 
-        logger.info(f"New epoch: topic={event.topic_id} height={height} nonce={height+1}")
+        logger.info(f"New epoch: topic={event.topic_id} height={height} nonce={event.nonce_block_height}")
         
         try:
-            await self._maybe_submit_prediction(ctx, height+1)
+            await self._maybe_submit(ctx, event.nonce_block_height)
         except Exception as e:
             logger.error(f"Error handling event: {e}")
 
 
-    async def _maybe_submit_prediction(self, ctx: WorkerContext, nonce: Optional[int] = None):
+    async def _maybe_submit(self, ctx: Context, nonce: Optional[int] = None):
         if ctx.is_cancelled():
             return
 
@@ -421,28 +475,30 @@ class AlloraWorker:
         if nonce is not None:
             new_nonces.append(nonce)
 
-        logger.info(f"🔄 Checking topic {self.topic_id}: {len(nonces)} unfulfilled nonces {nonces}, our unfulfilled nonces {new_nonces}")
+        logger.info(f"Checking topic {self.topic_id}: {len(nonces)} unfulfilled nonces {nonces}, our unfulfilled nonces {new_nonces}")
 
         for nonce in new_nonces:
             if not self._ctx or self._ctx.is_cancelled():
                 break
 
-            logger.info(f"🚀 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
+            logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
 
             try:
-                result = await self._submit_prediction(nonce)
+                result = await self._submit(nonce)
                 if isinstance(result, TxError):
-                    logger.error(f"❌ Error while submitting prediction: {str(result)} topic_id={self.topic_id} nonce={nonce}")
                     if result.code == 78: # already submitted
                         self.submitted_nonces.add(nonce)
+                        logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
                     elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
                         self.submitted_nonces.add(nonce)
+                    elif result.code != 0:
+                        logger.error(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
 
                 elif isinstance(result, Exception):
                     logger.error(f"❌ Failed to submit for nonce {nonce}: {str(result)} {type(result)}")
 
                 elif result:
-                    logger.info(f"✅ Successfully submitted topic={self.topic_id} nonce={nonce}")
+                    logger.info(f"✅ Successfully submitted: topic={self.topic_id} nonce={nonce}")
                     logger.info(f"    - Transaction hash: {result.tx_result.txhash}")
                     self.submitted_nonces.add(nonce)
 
@@ -462,28 +518,28 @@ class AlloraWorker:
                     await self._prediction_queue.put(result)
 
 
-    async def _submit_prediction(self, nonce: int) -> PredictionItem:
+    async def _submit(self, nonce: int):
         if not self.wallet:
             return Exception('no wallet')
 
         try:
             if asyncio.iscoroutinefunction(self.predict_fn):
-                prediction: PredictFnResultType = await self.predict_fn()
+                prediction: PredictFnResultType = await self.predict_fn(nonce)
             else:
                 # Run sync prediction in executor to avoid blocking
                 loop = asyncio.get_event_loop()
-                prediction: PredictFnResultType = await loop.run_in_executor(None, self.predict_fn)
+                prediction: PredictFnResultType = await loop.run_in_executor(None, self.predict_fn, nonce)
         except Exception as err:
             logger.debug(f"Prediction function failed: {err}")
             return err
 
         try:
-            resp = await self.client.emissions.tx.insert_worker_payload(
+            resp = await (await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
                 inference_value=str(prediction),
                 nonce=nonce,
                 fee_tier=self.fee_tier
-            )
+            )).wait()
 
             if resp.code != 0:
                 return TxError(
@@ -498,7 +554,7 @@ class AlloraWorker:
         except Exception as err:
             return err
 
-    async def _cleanup(self, ctx: WorkerContext):
+    async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
         
         if self._subscription_id:

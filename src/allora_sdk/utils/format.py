@@ -4,6 +4,32 @@ Formatting utilities for Allora SDK.
 
 from decimal import Decimal
 
+def allo_str_to_uallo(allo: str):
+    """
+    Convert ALLO string to uALLO (micro ALLO) integer representation.
+
+    Args:
+        allo: Amount in ALLO as a string (e.g., "1.5")
+
+    Returns:
+        Amount in uALLO as an integer
+
+    Examples:
+        >>> allo_str_to_uallo("1.0")
+        1000000000000000000
+        >>> allo_str_to_uallo("0.5")
+        500000000000000000
+        >>> allo_str_to_uallo("2.345678901234567890")
+        2345678901234567890
+    """
+    # Convert string to Decimal for precise arithmetic
+    allo_decimal = Decimal(allo)
+
+    # Convert from ALLO to uALLO by multiplying by 10^18
+    uallo_decimal = allo_decimal * (Decimal(10) ** 18)
+
+    # Return as integer
+    return int(uallo_decimal)
 
 def format_allo_from_uallo(uallo_amount: str | int, decimals: int = 18) -> str:
     """

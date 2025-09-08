@@ -656,12 +656,13 @@ class AlloraWebsocketSubscriber:
                 if not self.websocket or self.websocket.close_code:
                     logger.info("Reconnecting...")
                     await self._connect()
+                    logger.info("Websocket connected")
                     continue
                 
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=30.0
+                        timeout=120.0
                     )
                     await self._handle_message(str(message))
                     
