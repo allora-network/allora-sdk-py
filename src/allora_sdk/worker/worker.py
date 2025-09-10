@@ -12,24 +12,31 @@ from getpass import getpass
 import os
 import signal
 import sys
+import requests
 import logging
 import time
-from typing import Callable, Optional, Protocol, Set, AsyncIterator, Type, Union, Awaitable
+from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
 
 from betterproto2 import Message
 from cosmpy.aerial.client import TxResponse
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
-import requests
 from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
-import allora_sdk.protos.emissions.v9 as emissions_v9
 import async_timeout
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.protos.emissions.v9 import EventNetworkLossSet, EventReputerSubmissionWindowClosed, EventReputerSubmissionWindowOpened, IsWorkerRegisteredInTopicIdRequest, EventWorkerSubmissionWindowOpened, EventWorkerSubmissionWindowClosed
+from allora_sdk.protos.emissions.v9 import (
+    EventReputerSubmissionWindowClosed,
+    EventReputerSubmissionWindowOpened,
+    EventWorkerSubmissionWindowOpened,
+    EventWorkerSubmissionWindowClosed,
+    CanSubmitWorkerPayloadRequest,
+    GetUnfulfilledWorkerNoncesRequest,
+    IsWorkerRegisteredInTopicIdRequest,
+)
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo_short
 from allora_sdk.logging_config import setup_sdk_logging
 
@@ -214,7 +221,7 @@ class AlloraWorker:
             return
         if balance >= MIN_ALLO:
             return
-        logging.info(f"    Requesting ALLO from testnet faucet...")
+        logging.info(f"    Requesting ALLO from testnet faucet (api key: {self.api_key})...")
 
         while True:
             try:
@@ -354,8 +361,8 @@ class AlloraWorker:
             await self._cleanup(ctx)
 
     async def _run_with_context(self, ctx: Context) -> AsyncIterator[PredictionResult |  Exception]:
-        polling = asyncio.create_task(self._polling_worker(ctx))
-        ctx.add_cleanup_task(polling)
+        # polling = asyncio.create_task(self._polling_worker(ctx))
+        # ctx.add_cleanup_task(polling)
 
         await self._subscribe_websocket_events()
 
@@ -415,28 +422,27 @@ class AlloraWorker:
     async def _subscribe_websocket_events(self):
         self._subscription_id = await self.client.events.subscribe_new_block_events_typed(
             self.submission_window_event_type,
-            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened,
-        )
-        await self.client.events.subscribe_new_block_events_typed(
-            EventWorkerSubmissionWindowOpened,
-            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"🚀 Worker submission window opened (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
-            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
-            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
-            [ EventAttributeCondition("topic_id", "CONTAINS", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {self.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            subscription_id="123",
         )
 
 
@@ -445,7 +451,7 @@ class AlloraWorker:
         if ctx is None or ctx.is_cancelled():
             return
 
-        logger.info(f"New epoch: topic={event.topic_id} height={height} nonce={event.nonce_block_height}")
+        logger.info(f"🚀 Worker submission window opened (topic {self.topic_id}, nonce {event.nonce_block_height}, height {height})")
         
         try:
             await self._maybe_submit(ctx, event.nonce_block_height)
@@ -458,22 +464,24 @@ class AlloraWorker:
             return
 
         can_submit_resp = self.client.emissions.query.can_submit_worker_payload(
-            emissions_v9.CanSubmitWorkerPayloadRequest(
+            CanSubmitWorkerPayloadRequest(
                 address=str(self.wallet.address()),
                 topic_id=self.topic_id,
             )
         )
         if not can_submit_resp.can_submit_worker_payload:
-            raise WorkerNotWhitelistedError()
+            logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+            self.stop()
+            return
 
         resp = self.client.emissions.query.get_unfulfilled_worker_nonces(
-            emissions_v9.GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
+            GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
         )
         nonces     = [ x.block_height for x in resp.nonces.nonces ] if resp.nonces is not None else []
-        new_nonces = [ n for n in nonces if n not in self.submitted_nonces ]
+        new_nonces = set([ n for n in nonces if n not in self.submitted_nonces ])
 
         if nonce is not None:
-            new_nonces.append(nonce)
+            new_nonces.add(nonce)
 
         logger.info(f"Checking topic {self.topic_id}: {len(nonces)} unfulfilled nonces {nonces}, our unfulfilled nonces {new_nonces}")
 
@@ -491,11 +499,14 @@ class AlloraWorker:
                         logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
                     elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
                         self.submitted_nonces.add(nonce)
+                        logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
                     elif result.code != 0:
-                        logger.error(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
+                        logger.error(f"❌ Error submitting for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
+                        self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, Exception):
-                    logger.error(f"❌ Failed to submit for nonce {nonce}: {str(result)} {type(result)}")
+                    logger.error(f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}")
+                    self.submitted_nonces.add(nonce)
 
                 elif result:
                     logger.info(f"✅ Successfully submitted: topic={self.topic_id} nonce={nonce}")
