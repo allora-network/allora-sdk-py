@@ -7,6 +7,7 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 ## Table of Contents
 
 - [Installation](#installation)
+- [Allora Chain Overview](#allora-chain-overview)
 - [ML Inference Worker](#ml-inference-worker)
   - [Quick Start](#quick-start)
   - [Advanced Configuration](#advanced-configuration)
@@ -16,6 +17,9 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 - [API Client](#api-client)
   - [Basic Usage](#basic-usage-2)
   - [Features](#features)
+- [Command-line Tools](#command-line-tools)
+  - [allora-export-txs](#allora-export-txs)
+  - [allora-topic-lifecycle-visualizer](#allora-topic-lifecycle-visualizer)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Setup for development](#setup-for-development)
@@ -30,6 +34,12 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 pip install allora_sdk
 ```
 
+## Allora Chain Overview
+
+The ALLO token is the native "compute gas" currency of the Allora Network, a decentralized oracle platform that leverages machine learning to provide accurate and timely data to smart contracts. The network operates on a proof-of-stake consensus mechanism, ensuring security and scalability.
+
+ALLO has 18 decimal places, unlike the native token on most Cosmos chains.  This was chosen for compatibility with the Ethereum/EVM standard.
+
 ## ML Inference Worker
 
 Submits predictions to Allora Network topics with your ML models. The worker handles wallet creation, blockchain transactions, and automatic retries so that you can focus on model engineering.
@@ -38,7 +48,7 @@ Submits predictions to Allora Network topics with your ML models. The worker han
 
 The simplest way to start participating in the Allora network is to paste the following snippet into a Jupyter or Google Colab notebook (or just a Python file that you can run from your terminal).  It will automatically handle all of the network onboarding and configuration behind the scenes, and will start submitting inferences automatically.
 
-**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network)
+**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
 
 ```python
 from allora_sdk.worker import AlloraWorker
@@ -110,16 +120,47 @@ Low-level blockchain client for advanced users. Supports queries, transactions, 
 
 ### Basic Usage
 
+Initialization is very flexible and straightforward.  The client can be initialized with:
+- sensible preset defaults for testnet, mainnet, and local nodes
+- direct specification of network and wallet parameters
+- environment variables
+
 ```python
 from allora_sdk import LocalWallet, PrivateKey
 from allora_sdk.rpc_client import AlloraRPCClient
 from allora_sdk.protos.emissions.v9 import GetActiveTopicsAtBlockRequest, EventNetworkLossSet
 
-# Initialize client
-client = AlloraRPCClient.testnet(
-    # mnemonic / private key are optional, only needed for sending transactions
-    mnemonic=mnemonic,
+# Initialize client manually
+client = AlloraRPCClient(
+    wallet=AlloraWalletConfig(
+        mnemonic-"...", # wallet config is optional, only needed for sending transactions
+        prefix="allo",  # bech32 prefix (default is "allo" for Allora Network
+    ),
+    network=AlloraNetworkConfig(
+        url="...",           # RPC url
+        websocket_url="...", # websocket url is optional, only needed for subscribing to events
+    )
 )
+
+# Initialize client with preset network config defaults
+client = AlloraRPCClient.testnet()
+client = AlloraRPCClient.testnet(
+    wallet=AlloraWalletConfig(mnemonic-"..."), # optional, only needed for sending transactions
+    websocket_url="...",                       # optional, only needed for subscribing to events
+)
+
+# Alternatively, initialize client from environment variables:
+#   - PRIVATE_KEY
+#   - MNEMONIC
+#   - MNEMONIC_FILE
+#   - ADDRESS_PREFIX
+#   - CHAIN_ID
+#   - RPC_ENDPOINT
+#   - WEBSOCKET_ENDPOINT
+#   - FAUCET_URL
+#   - FEE_DENOM
+#   - FEE_MIN_GAS_PRICE
+client = AlloraRPCClient.from_env()
 
 # Query network data
 topics = client.emissions.query.get_active_topics_at_block(
@@ -161,7 +202,7 @@ Determined by the RPC url string passed to the config constructor.  `grpc+http(s
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
 
-**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network)
+**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
 
 ### Basic Usage
 
@@ -188,6 +229,52 @@ print(f"BTC price: ${inference.inference_data.network_inference}")
 - **Topic discovery**: Browse all network topics and their metadata  
 - **Confidence intervals**: Access prediction uncertainty bounds
 - **Async/await**: Fully asynchronous API
+
+
+## Command-line Tools
+
+The SDK comes with several command-line tools that provide useful insights into the Allora Network.  Running `pip install allora_sdk` will make them available in your environment.
+
+### `allora-export-txs`
+
+This tool allows the user to export all of the inference worker transactions from the given account to a CSV file.
+
+```
+usage: allora-export-txs [-h] --address ADDRESS [--url URL] [--page_size PAGE_SIZE] [--pages PAGES]
+                         [--start_page START_PAGE] [--resume | --no-resume] [--order ORDER]
+                         [--output_file OUTPUT_FILE]
+
+Export Allora inference worker transactions from an address to CSV
+
+options:
+  -h, --help            show this help message and exit
+  --address ADDRESS     The address to fetch transactions for
+  --url URL             The URL of the RPC endpoint
+  --page_size PAGE_SIZE
+                        The number of txs to fetch per request (lower if you have issues)
+  --pages PAGES         The total number of pages to fetch
+  --start_page START_PAGE
+                        The page on which to start fetching (useful with --resume)
+  --resume, --no-resume
+                        Set to true if you want to resume an existing fetch
+  --order ORDER         'desc' to start from most recent or 'asc' to start from oldest
+  --output_file OUTPUT_FILE
+                        Output CSV file path (default: transactions.csv)
+````
+
+
+### `allora-topic-lifecycle-visualizer`
+
+Given a set of logs from the `AlloraWorker`, this tool plots a visualization of the phases of a topic's lifecycle over the provided block range.
+
+```
+usage: Plot a visualization of a topic's lifecycle over the given block range [-h] --log_file LOG_FILE
+
+options:
+  -h, --help           show this help message and exit
+  --log_file LOG_FILE  AlloraWorker log file
+````
+
 
 ## Development
 

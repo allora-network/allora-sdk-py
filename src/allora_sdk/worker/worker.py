@@ -424,25 +424,21 @@ class AlloraWorker:
             self.submission_window_event_type,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened,
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
 
 
@@ -494,7 +490,7 @@ class AlloraWorker:
             try:
                 result = await self._submit(nonce)
                 if isinstance(result, TxError):
-                    if result.code == 78: # already submitted
+                    if result.code == 78 or result.code == 75: # already submitted
                         self.submitted_nonces.add(nonce)
                         logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
                     elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome

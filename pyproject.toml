@@ -36,6 +36,7 @@ dependencies = [
     "lightgbm",
     "requests",
     "dill",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +58,10 @@ codegen = [
     "openapi-python-client",
     "pyyaml",
 ]
+
+[project.scripts]
+allora-export-txs = "allora_sdk.tools.export_txs_to_csv:main"
+allora-topic-lifecycle-visualizer = "allora_sdk.tools.topic_lifecycle_visualizer:main"
 
 [project.urls]
 Homepage = "https://github.com/allora-network/allora-sdk-py"
