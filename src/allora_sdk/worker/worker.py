@@ -17,7 +17,6 @@ import logging
 import time
 from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
 
-from betterproto2 import Message
 from cosmpy.aerial.client import TxResponse
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
@@ -26,7 +25,7 @@ import async_timeout
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
-from allora_sdk.rpc_client.config import AlloraWalletConfig
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.protos.emissions.v9 import (
     EventReputerSubmissionWindowClosed,
@@ -71,77 +70,16 @@ class AlloraWorker:
     and graceful resource cleanup for submitting predictions to Allora network topics.
     """
 
-    @staticmethod
-    def inferer(
-        predict_fn: PredictFn,
-        wallet: Optional[AlloraWalletConfig] = None,
-        api_key: Optional[str] = None,
-        topic_id: int = 69,
-        fee_tier: FeeTier = FeeTier.STANDARD,
-        debug: bool = False,
-    ):
-        """
-        Initialize the Allora predictive inference worker.
-
-        Args:
-            topic_id: The Allora network topic ID to submit predictions to
-            predict_fn: Function that returns prediction values (str or float)
-            key_file: Path to key file (optional)
-            mnemonic: Mnemonic phrase for wallet (optional)
-            private_key: Private key for wallet (optional)
-            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            log_level: `logging` package levels
-        """
-        return AlloraWorker(
-            predict_fn=predict_fn,
-            wallet=wallet,
-            api_key=api_key,
-            topic_id=topic_id,
-            fee_tier=fee_tier,
-            debug=debug,
-            submission_window_event_type=EventWorkerSubmissionWindowOpened,
-        )
-
-    @staticmethod
-    def reputer(
-        predict_fn: PredictFn,
-        wallet: Optional[AlloraWalletConfig] = None,
-        api_key: Optional[str] = None,
-        topic_id: int = 69,
-        fee_tier: FeeTier = FeeTier.STANDARD,
-        debug: bool = False,
-    ):
-        """
-        Initialize the Allora predictive inference worker.
-
-        Args:
-            topic_id: The Allora network topic ID to submit predictions to
-            predict_fn: Function that returns prediction values (str or float)
-            key_file: Path to key file (optional)
-            mnemonic: Mnemonic phrase for wallet (optional)
-            private_key: Private key for wallet (optional)
-            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            log_level: `logging` package levels
-        """
-        return AlloraWorker(
-            predict_fn=predict_fn,
-            wallet=wallet,
-            api_key=api_key,
-            topic_id=topic_id,
-            fee_tier=fee_tier,
-            debug=debug,
-            submission_window_event_type=EventReputerSubmissionWindowOpened,
-        )
-    
     def __init__(
         self,
         predict_fn: PredictFn,
         wallet: Optional[AlloraWalletConfig] = None,
+        network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        debug: bool = False,
         submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
+        debug: bool = False,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -149,12 +87,12 @@ class AlloraWorker:
         Args:
             topic_id: The Allora network topic ID to submit predictions to
             predict_fn: Function that returns prediction values (str or float)
-            key_file: Path to key file (optional)
-            mnemonic: Mnemonic phrase for wallet (optional)
-            private_key: Private key for wallet (optional)
+            wallet: Wallet configuration (private key, mnemonic, or file)
+            api_key: API key for testnet faucet (if needed)
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             log_level: `logging` package levels
             submission_window_event_type: Event type to listen for submission windows (worker, reputer, forecaster)
+            debug: Enable debug logging
         """
         self.topic_id = topic_id
         self.predict_fn = predict_fn
@@ -169,7 +107,11 @@ class AlloraWorker:
         if not self.wallet:
             raise Exception('no wallet')
 
-        self.client = AlloraRPCClient.testnet(wallet=AlloraWalletConfig(wallet=self.wallet), debug=debug)
+        self.client = AlloraRPCClient(
+            wallet=AlloraWalletConfig(wallet=self.wallet),
+            network=network,
+            debug=debug,
+        )
         self._ctx: Optional[Context] = None
         self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
         self._subscription_id: Optional[str] = None
@@ -206,7 +148,7 @@ class AlloraWorker:
             return LocalWallet.from_mnemonic(mnemonic, "allo")
 
     def _maybe_faucet_request(self):
-        MIN_ALLO = 100000000
+        MIN_ALLO = 1000000000
 
         resp = self.client.bank.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
@@ -424,25 +366,21 @@ class AlloraWorker:
             self.submission_window_event_type,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened,
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
-            subscription_id="123",
         )
 
 
@@ -494,7 +432,7 @@ class AlloraWorker:
             try:
                 result = await self._submit(nonce)
                 if isinstance(result, TxError):
-                    if result.code == 78: # already submitted
+                    if result.code == 78 or result.code == 75: # already submitted
                         self.submitted_nonces.add(nonce)
                         logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
                     elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome

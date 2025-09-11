@@ -18,6 +18,7 @@ dist/
 src/allora_sdk/protos/
 src/allora_sdk/rest/
 proto-deps/
-
-
+mnemonic*
+src/allora_sdk/test.py
+src/allora_sdk/test_many.py
 

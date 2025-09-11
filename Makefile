@@ -107,6 +107,9 @@ $(PROTO_STAMP): \
 		$$(find "$(ALLORA_CHAIN_DIR)/x/mint/proto" -type f -name '*.proto') \
 		$$(find "$(COSMOS_SDK_DIR)/proto" -type f -name '*.proto')
 
+	python scripts/generate_custom_message_pool.py \
+		--out "$(ALLORA_PROTOS_DIR)"
+
 	# ensure packages are importable
 	find "$(ALLORA_PROTOS_DIR)"/ -type d -exec sh -c 'touch "$$1/__init__.py"' _ {} \;
 
@@ -146,7 +149,7 @@ generate_rest_clients: $(REST_STAMP)
 # --- Clean
 .PHONY: clean
 clean:
-	rm -rf "$(ALLORA_PROTOS_DIR)" "$(REST_CLIENT_OUT_DIR)"
+	rm -rf "$(ALLORA_PROTOS_DIR)" "$(REST_CLIENT_OUT_DIR)" "$(PROTO_DEPS)"
 
 .PHONY: distclean
 distclean: clean

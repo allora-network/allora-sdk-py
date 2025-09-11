@@ -10,7 +10,7 @@ from allora_sdk.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxManager
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager
 from allora_sdk.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
@@ -143,3 +143,4 @@ class EmissionsTxs:
             gas_limit=gas_limit,
             fee_tier=fee_tier
         )
+

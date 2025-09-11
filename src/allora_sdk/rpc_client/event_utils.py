@@ -72,7 +72,6 @@ class EventRegistry:
 
             for name, obj in event_classes:
                 event_type = f"{rel_module}.{name}"
-                print(f"event: {event_type}")
                 # Prefer first registration; warn on conflicting duplicate
                 if event_type in self._event_map and self._event_map[event_type] is not obj:
                     logger.debug(f"Duplicate event type {event_type}; keeping first registration")

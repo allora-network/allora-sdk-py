@@ -7,10 +7,40 @@ from cosmpy.aerial.wallet import LocalWallet
 
 @dataclass
 class AlloraWalletConfig:
+    """
+    Configuration for Allora wallet access.
+
+    At least one of the following must be provided:
+    - private_key: Hex-encoded private key string.
+    - mnemonic: Mnemonic phrase string.
+    - mnemonic_file: Path to a file containing the mnemonic phrase.
+    - wallet: An existing LocalWallet instance.
+
+    The address prefix can also be specified (default is "allo").
+    """
     private_key: Optional[str] = None
     mnemonic: Optional[str] = None
     mnemonic_file: Optional[str] = None
     wallet: Optional[LocalWallet] = None
+    prefix: str = "allo"
+
+    @classmethod
+    def from_env(cls) -> 'AlloraWalletConfig':
+        return cls(
+            private_key=os.getenv("PRIVATE_KEY"),
+            mnemonic=os.getenv("MNEMONIC"),
+            mnemonic_file=os.getenv("MNEMONIC_FILE"),
+            prefix=os.getenv("ADDRESS_PREFIX", "allo"),
+        )
+
+    def __post_init__(self):
+        if (
+            self.private_key is None and
+            self.mnemonic is None and
+            self.mnemonic_file is None and
+            self.wallet is None
+        ):
+            raise ValueError("No wallet credentials provided")
 
 
 @dataclass
@@ -19,7 +49,7 @@ class AlloraNetworkConfig:
     
     chain_id: str
     url: str
-    websocket_url: str
+    websocket_url: Optional[str] = None
     fee_denom: str = "uallo"
     fee_minimum_gas_price: float = 10.0
     faucet_url: Optional[str] = None
@@ -28,14 +58,11 @@ class AlloraNetworkConfig:
     def testnet(cls) -> 'AlloraNetworkConfig':
         return cls(
             chain_id="allora-testnet-1",
-            url="grpc+http://aws--us-east-1--testnet--archive-2.tail110056.ts.net:9090",
-            # url="grpc+https://allora-grpc.testnet.allora.network:443",
-            # url="grpc+http://offchain-testnet-1-tailscale-peers.tail110056.ts.net:9090",
-            websocket_url="ws://offchain-testnet-1-tailscale-peers.tail110056.ts.net:26657/websocket",
-            # websocket_url="wss://allora-grpc.testnet.allora.network/websocket",
+            url="grpc+https://allora-grpc.testnet.allora.network:443",
+            websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
             faucet_url="https://faucet.testnet.allora.network",
             fee_denom="uallo",
-            fee_minimum_gas_price=10.0
+            fee_minimum_gas_price=10.0,
         )
 
     @classmethod
@@ -45,7 +72,7 @@ class AlloraNetworkConfig:
             url="grpc+https://allora-grpc.mainnet.allora.network:443",
             websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
             fee_denom="uallo",
-            fee_minimum_gas_price=10.0
+            fee_minimum_gas_price=10.0,
         )
 
     @classmethod
@@ -55,17 +82,18 @@ class AlloraNetworkConfig:
             url=f"grpc+http://localhost:{port}",
             websocket_url=f"ws://localhost:{port}/websocket",
             fee_denom="uallo",
-            fee_minimum_gas_price=0.0
+            fee_minimum_gas_price=0.0,
         )
 
     @classmethod
     def from_env(cls) -> 'AlloraNetworkConfig':
         return cls(
-            chain_id=os.getenv("ALLORA_CHAIN_ID", "allora-testnet-1"),
-            url=os.getenv("ALLORA_RPC_ENDPOINT", "https://allora-grpc.testnet.allora.network:443"),
-            websocket_url=os.getenv("ALLORA_WEBSOCKET_ENDPOINT", "wss://allora-rpc.testnet.allora.network:443/websocket"),
-            fee_denom=os.getenv("ALLORA_FEE_DENOM", "uallo"),
-            fee_minimum_gas_price=float(os.getenv("ALLORA_FEE_MIN_GAS_PRICE", "0.025"))
+            chain_id=require_env("CHAIN_ID"),
+            url=require_env("RPC_ENDPOINT"),
+            websocket_url=require_env("WEBSOCKET_ENDPOINT"),
+            faucet_url=require_env("FAUCET_URL"),
+            fee_denom=require_env("FEE_DENOM"),
+            fee_minimum_gas_price=float(require_env("FEE_MIN_GAS_PRICE")),
         )
     
     def to_cosmpy_config(self) -> NetworkConfig:
@@ -78,3 +106,8 @@ class AlloraNetworkConfig:
         )
 
 
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"environment variable {name} is required")
+    return value

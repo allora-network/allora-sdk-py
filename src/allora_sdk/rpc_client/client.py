@@ -6,12 +6,11 @@ and provides Allora-specific functionality for interacting with the blockchain.
 """
 
 import logging
-import os
-from typing import Optional, Dict
+from typing import Optional
 
 import grpc
 import certifi
-from cosmpy.aerial.client import LedgerClient, ValidatorStatus
+from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
@@ -41,10 +40,13 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
+    wallet: Optional[LocalWallet] = None
+    tx_manager: Optional[TxManager] = None
+
     def __init__(
         self,
-        network: AlloraNetworkConfig,
-        wallet: Optional[AlloraWalletConfig],
+        network: Optional[AlloraNetworkConfig] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = False
     ):
         """
@@ -90,8 +92,10 @@ class AlloraRPCClient:
             self.auth: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
             self.bank: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
 
+        if self.network.websocket_url is not None:
+            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
 
-        if self.wallet:
+        if self.wallet is not None:
             self.tx_manager = TxManager(
                 wallet=self.wallet,
                 tx_client=self.tx,
@@ -99,7 +103,7 @@ class AlloraRPCClient:
                 bank_client=self.bank,
                 config=self.network,
             )
-        self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
+
         self.emissions = EmissionsClient(query_client=emissions, tx_manager=self.tx_manager)
         self.mint = MintClient(query_client=mint)
         # self.cosmos_tx = CosmosTxClient(query_client=cosmos_tx)
@@ -212,3 +216,17 @@ class AlloraRPCClient:
             wallet=wallet,
             debug=debug
         )
+
+    @classmethod
+    def from_env(
+        cls,
+        network: Optional[AlloraNetworkConfig] = None,
+        wallet: Optional[AlloraWalletConfig] = None,
+        debug: bool = False,
+    ) -> 'AlloraRPCClient':
+        """Create client using environment variables."""
+        if network is None:
+            network = AlloraNetworkConfig.from_env()
+        if wallet is None:
+            wallet = AlloraWalletConfig.from_env()
+        return cls(network=network, wallet=wallet, debug=debug)
