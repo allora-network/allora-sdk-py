@@ -80,7 +80,7 @@ class AlloraNetworkConfig:
         return cls(
             chain_id="allora-local",
             url=f"grpc+http://localhost:{port}",
-            websocket_url=f"ws://localhost:{port}/websocket",
+            websocket_url=f"ws://localhost:26657/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=0.0,
         )

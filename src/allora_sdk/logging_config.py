@@ -25,7 +25,7 @@ def setup_sdk_logging(debug: bool = False, force: bool = False):
     # Force reconfiguration (important for Colab/Jupyter)
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format='%(asctime)s %(levelname)s %(message)s',
         force=True,
         stream=sys.stdout  # Ensure output goes to stdout for notebook visibility
     )

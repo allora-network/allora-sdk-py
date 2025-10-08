@@ -29,16 +29,13 @@ class Topic(BaseModel):
 class InferenceData(BaseModel):
     network_inference: str
     network_inference_normalized: str
-    confidence_interval_percentiles: List[str]
-    confidence_interval_percentiles_normalized: List[str]
-    confidence_interval_values: List[str]
-    confidence_interval_values_normalized: List[str]
     topic_id: str
     timestamp: int
     extra_data: str
 
 class Inference(BaseModel):
     signature: str
+    token_decimals: int
     inference_data: InferenceData
 
 class TopicsResponse(BaseModel):

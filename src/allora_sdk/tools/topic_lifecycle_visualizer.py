@@ -29,7 +29,7 @@ class Window:
 
 def parse_log_line(line: str) -> Optional[WindowEvent]:
     # Pattern to match log lines
-    pattern = r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ - allora_sdk - INFO - [🚀✨] (Worker|Reputer) submission window (opened|closed) \(topic (\d+), nonce (\d+), height (\d+)\)'
+    pattern = r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ INFO [🚀✨] (Worker|Reputer) submission window (opened|closed) \(topic (\d+), nonce (\d+), height (\d+)\)'
 
     match = re.match(pattern, line)
     if not match:

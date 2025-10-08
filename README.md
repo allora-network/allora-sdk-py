@@ -133,8 +133,8 @@ from allora_sdk.protos.emissions.v9 import GetActiveTopicsAtBlockRequest, EventN
 # Initialize client manually
 client = AlloraRPCClient(
     wallet=AlloraWalletConfig(
-        mnemonic-"...", # wallet config is optional, only needed for sending transactions
-        prefix="allo",  # bech32 prefix (default is "allo" for Allora Network
+        mnemonic="...", # wallet config is optional, only needed for sending transactions
+        prefix="allo",  # bech32 prefix (default is "allo" for Allora Network)
     ),
     network=AlloraNetworkConfig(
         url="...",           # RPC url
@@ -207,20 +207,21 @@ Slim, high-level HTTP client for querying a list of all topics, individual topic
 ### Basic Usage
 
 ```python
-from allora_sdk.api_client import AlloraAPIClient, ChainID
+import asyncio
+from allora_sdk.api_client import AlloraAPIClient
 
-client = AlloraAPIClient(
-    chain_id=ChainID.TESTNET,
-    api_key="<YOUR API KEY HERE>",
-)
+client = AlloraAPIClient()
 
-# Get all active topics
-topics = await client.get_all_topics()
-print(f"Found {len(topics)} topics")
+async def main():
+    # Get all active topics
+    topics = await client.get_all_topics()
+    print(f"Found {len(topics)} topics")
 
-# Get latest inference
-inference = await client.get_inference_by_topic_id(1)
-print(f"BTC price: ${inference.inference_data.network_inference}")
+    # Get latest inference
+    inference = await client.get_inference_by_topic_id(13)
+    print(f"ETH price in 5 minutes: ${inference.inference_data.network_inference_normalized}")
+
+asyncio.run(main())
 ```
 
 ### Features

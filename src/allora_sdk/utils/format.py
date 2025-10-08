@@ -60,7 +60,7 @@ def format_allo_from_uallo(uallo_amount: str | int, decimals: int = 18) -> str:
     allo_amount = uallo_decimal / divisor
     
     # Format with 6 decimal places for readability
-    return f"{allo_amount:.6f} ALLO"
+    return f"{allo_amount:.18f} ALLO"
 
 
 def format_allo_from_uallo_short(uallo_amount: str | int, decimals: int = 18) -> str:

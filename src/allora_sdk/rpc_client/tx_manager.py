@@ -236,7 +236,6 @@ class TxManager:
                 continue
 
             except Exception as err:
-                logger.error(f"Transaction failed unexpectedly and irrecoverably: {str(err)}")
                 pending._final_future.set_exception(err)
                 return
 
