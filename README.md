@@ -96,7 +96,11 @@ from allora_sdk.rpc_client.tx_manager import FeeTier
 
 worker = AlloraWorker(
     topic_id=1,
+
+    # Specify the inference function directly
     predict_fn=my_model,
+    # Or specify a pickle file containing it (recommended to use the `dill` package for this)
+    predict_pkl="my_model.pkl",
 
     #
     # These parameters give you the freedom to manage your identity on the platform as you prefer

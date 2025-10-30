@@ -43,7 +43,7 @@ class EmissionsTxs:
         )
         return await self._txs.submit_transaction(
             type_url="/emissions.v9.RegisterRequest",
-            msg=msg,
+            msgs=[ msg ],
             gas_limit=gas_limit,
             fee_tier=fee_tier
         )
@@ -139,7 +139,7 @@ class EmissionsTxs:
 
         return await self._txs.submit_transaction(
             type_url="/emissions.v9.InsertWorkerPayloadRequest",
-            msg=payload_request,
+            msgs=[ payload_request ],
             gas_limit=gas_limit,
             fee_tier=fee_tier
         )

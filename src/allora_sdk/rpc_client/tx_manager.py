@@ -34,7 +34,7 @@ class PendingTx:
         *,
         parent_tx_id: int,
         type_url: str,
-        msg: Any,
+        msgs: Any,
         fee_tier: "FeeTier",
         max_retries: int,
         timeout: Optional[timedelta],
@@ -43,7 +43,7 @@ class PendingTx:
         self.parent_tx_id = parent_tx_id
         self.created_at = datetime.now()
         self.type_url = type_url
-        self.msg = msg
+        self.msgs = msgs
         self.fee_tier = fee_tier
         self.max_retries = max_retries
 
@@ -124,7 +124,7 @@ class TxManager:
 
         self._default_gas_limits = {
             "/emissions.v9.InsertWorkerPayloadRequest": 250000,
-            "/cosmos.bank.v1beta1.MsgSend": 50000,
+            "/cosmos.bank.v1beta1.MsgSend": 250000,
             "/cosmos.staking.v1beta1.MsgDelegate": 100000,
             "/cosmos.staking.v1beta1.MsgUndelegate": 100000,
         }
@@ -143,7 +143,7 @@ class TxManager:
     async def submit_transaction(
         self,
         type_url: str,
-        msg: Any,
+        msgs: list[Any],
         gas_limit: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         max_retries: int = 2,
@@ -156,7 +156,7 @@ class TxManager:
             manager=self,
             parent_tx_id=self.parent_tx_id,
             type_url=type_url,
-            msg=msg,
+            msgs=msgs,
             fee_tier=fee_tier,
             max_retries=max_retries,
             timeout=timeout,
@@ -183,7 +183,7 @@ class TxManager:
                 gas_multiplier = 1.0 + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee = await self._build_and_broadcast(
                     pending.type_url,
-                    pending.msg,
+                    pending.msgs,
                     gas_limit,
                     fee_multiplier,
                     gas_multiplier,
@@ -246,15 +246,16 @@ class TxManager:
     async def _build_and_broadcast(
         self,
         type_url: str,
-        msg: Any,
+        msgs: list[Any],
         gas_limit: Optional[int],
         fee_multiplier: float,
         gas_multiplier: float,
     ) -> tuple[str, int, Coin]:
-        any_message = self._create_any_message(msg, type_url)
+        any_messages = [ self._create_any_message(msg, type_url) for msg in msgs ]
 
         tx = Transaction()
-        tx.add_message(any_message)
+        for msg in any_messages:
+            tx.add_message(msg)
 
         if gas_limit is None:
             gas_limit = await self._estimate_gas(type_url)

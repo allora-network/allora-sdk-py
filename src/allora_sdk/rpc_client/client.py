@@ -22,12 +22,17 @@ import allora_sdk.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
 import allora_sdk.protos.emissions.v9 as emissions_v9
 import allora_sdk.protos.mint.v5 as mint_v5
 import allora_sdk.rest as rest
+from allora_sdk.rpc_client.client_auth import AuthClient
+from allora_sdk.rpc_client.client_bank import BankClient
+from allora_sdk.rpc_client.client_tx import TxClient
+from allora_sdk.rpc_client.client_tendermint import TendermintClient
 
 from .client_emissions import EmissionsClient
 from .client_mint import MintClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .tx_manager import TxManager
+from allora_sdk.rpc_client import tx_manager
 
 logger = logging.getLogger("allora_sdk")
 
@@ -77,36 +82,38 @@ class AlloraRPCClient:
                 self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
 
             # Set up gRPC services
-            emissions: rest.EmissionsV9QueryServiceLike = emissions_v9.QueryServiceStub(self.grpc_client)
-            mint: rest.MintV5QueryServiceLike = mint_v5.QueryServiceStub(self.grpc_client)
-            self.tx: rest.CosmosTxV1Beta1ServiceLike = cosmos_tx_v1beta1.ServiceStub(self.grpc_client)
-            self.tendermint: rest.CosmosBaseTendermintV1Beta1ServiceLike = tendermint_v1beta1.ServiceStub(self.grpc_client)
-            self.auth = cosmos_auth_v1beta1.QueryStub(self.grpc_client)
-            self.bank = cosmos_bank_v1beta1.QueryStub(self.grpc_client)
+            auth_query: rest.CosmosAuthV1Beta1QueryLike = cosmos_auth_v1beta1.QueryStub(self.grpc_client)
+            bank_query: rest.CosmosBankV1Beta1QueryLike = cosmos_bank_v1beta1.QueryStub(self.grpc_client)
+            tendermint_query: rest.CosmosBaseTendermintV1Beta1ServiceLike = tendermint_v1beta1.ServiceStub(self.grpc_client)
+            tx_query: rest.CosmosTxV1Beta1ServiceLike = cosmos_tx_v1beta1.ServiceStub(self.grpc_client)
+            emissions_query: rest.EmissionsV9QueryServiceLike = emissions_v9.QueryServiceStub(self.grpc_client)
+            mint_query: rest.MintV5QueryServiceLike = mint_v5.QueryServiceStub(self.grpc_client)
         else:
             # Set up REST (Cosmos-LCD) services
-            emissions: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
-            mint: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
-            self.tx: rest.CosmosTxV1Beta1ServiceLike = rest.CosmosTxV1Beta1RestServiceClient(parsed_url.rest_url)
-            self.tendermint: rest.CosmosBaseTendermintV1Beta1ServiceLike = rest.CosmosBaseTendermintV1Beta1RestServiceClient(parsed_url.rest_url)
-            self.auth: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
-            self.bank: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
-
-        if self.network.websocket_url is not None:
-            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
+            auth_query: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
+            bank_query: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
+            tendermint_query: rest.CosmosBaseTendermintV1Beta1ServiceLike = rest.CosmosBaseTendermintV1Beta1RestServiceClient(parsed_url.rest_url)
+            tx_query: rest.CosmosTxV1Beta1ServiceLike = rest.CosmosTxV1Beta1RestServiceClient(parsed_url.rest_url)
+            emissions_query: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
+            mint_query: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
 
         if self.wallet is not None:
             self.tx_manager = TxManager(
                 wallet=self.wallet,
-                tx_client=self.tx,
-                auth_client=self.auth,
-                bank_client=self.bank,
+                tx_client=tx_query,
+                auth_client=auth_query,
+                bank_client=bank_query,
                 config=self.network,
             )
+        self.auth = TxClient(query_client=auth_query, tx_manager=self.tx_manager)
+        self.bank = BankClient(query_client=bank_query, tx_manager=self.tx_manager)
+        self.tendermint = TendermintClient(query_client=tendermint_query, tx_manager=self.tx_manager)
+        self.tx = TxClient(query_client=tx_query, tx_manager=self.tx_manager)
+        self.emissions = EmissionsClient(query_client=emissions_query, tx_manager=self.tx_manager)
+        self.mint = MintClient(query_client=mint_query)
 
-        self.emissions = EmissionsClient(query_client=emissions, tx_manager=self.tx_manager)
-        self.mint = MintClient(query_client=mint)
-        # self.cosmos_tx = CosmosTxClient(query_client=cosmos_tx)
+        if self.network.websocket_url is not None:
+            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
         
         logger.info(f"Initialized Allora client for {self.network.chain_id}")
     
