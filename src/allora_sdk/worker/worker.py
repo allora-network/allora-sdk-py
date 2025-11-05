@@ -232,9 +232,9 @@ class AlloraWorker:
     def _init_wallet(self, wallet: AlloraWalletConfig | None):
         if wallet:
             if wallet.private_key:
-                return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)))
+                return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
             if wallet.mnemonic:
-                return LocalWallet.from_mnemonic(wallet.mnemonic, "allo")
+                return LocalWallet.from_mnemonic(wallet.mnemonic, wallet.prefix)
 
         if wallet:
             mnemonic_file = wallet.mnemonic_file or ".allora_key"

@@ -46,14 +46,14 @@ class AlloraWalletConfig:
 @dataclass
 class AlloraNetworkConfig:
     """Configuration for Allora blockchain networks."""
-    
+
     chain_id: str
     url: str
     websocket_url: Optional[str] = None
     fee_denom: str = "uallo"
     fee_minimum_gas_price: float = 10.0
     faucet_url: Optional[str] = None
-    
+
     @classmethod
     def testnet(cls) -> 'AlloraNetworkConfig':
         return cls(
@@ -72,7 +72,7 @@ class AlloraNetworkConfig:
             url="grpc+https://allora-grpc.mainnet.allora.network:443",
             websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
             fee_denom="uallo",
-            fee_minimum_gas_price=10.0,
+            fee_minimum_gas_price=250_000_000.0,
         )
 
     @classmethod
