@@ -49,4 +49,46 @@ class BankTxs:
             gas_limit=gas_limit,
             fee_tier=fee_tier,
         )
+    
+    async def simulate_send(
+        self,
+        outputs: list[SendOutput],
+        from_addr: Optional[str] = None,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+    ) -> tuple[int, int]:
+        """
+        Simulate a send transaction to estimate gas usage and fees.
+        
+        Args:
+            outputs: List of SendOutput objects specifying recipients and amounts
+            from_addr: Optional sender address (defaults to wallet address)
+            fee_tier: Fee tier to use (ECO, STANDARD, or PRIORITY)
+            
+        Returns:
+            Tuple of (estimated_gas, estimated_fee_uallo)
+        """
+        if self._txs is None:
+            raise ValueError("TxManager is not initialized for BankTxs")
+
+        msgs = [
+            MsgSend(
+                from_address=from_addr or str(self._txs.wallet.address()),
+                to_address=o.to_addr,
+                amount=[ Coin(denom="uallo", amount=o.amount_uallo) ],
+            )
+            for o in outputs
+        ]
+        
+        # Get estimated gas from simulation
+        estimated_gas = await self._txs.simulate_transaction(
+            type_url="/cosmos.bank.v1beta1.MsgSend",
+            msgs=msgs,
+        )
+        
+        # Calculate estimated fee including fee tier multiplier
+        fee_multiplier = self._txs._fee_multipliers[fee_tier]
+        gas_price = self._txs.config.fee_minimum_gas_price
+        estimated_fee = int(estimated_gas * gas_price * fee_multiplier)
+        
+        return (estimated_gas, estimated_fee)
 
