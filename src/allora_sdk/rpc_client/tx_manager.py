@@ -239,8 +239,8 @@ class TxManager:
             gas_used = int(sim_response.gas_info.gas_used)
             logger.debug(f"Simulation successful: estimated gas = {gas_used}")
             
-            # Add a 50% safety margin to the estimate
-            return int(gas_used * 1.5)
+            # Add a 20% safety margin to the estimate
+            return int(gas_used * 1.2)
             
         except grpc.RpcError as e:
             error_details = e.details() if hasattr(e, 'details') else str(e)
