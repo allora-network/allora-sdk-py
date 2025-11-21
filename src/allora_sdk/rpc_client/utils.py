@@ -125,7 +125,7 @@ class AlloraUtils:
     
     # Unit conversion utilities
     
-    def to_base_units(self, amount: Union[str, float, Decimal], decimals: int = 6) -> int:
+    def to_base_units(self, amount: Union[str, float, Decimal], decimals: int = 18) -> int:
         """
         Convert human-readable amount to base units.
         
@@ -144,7 +144,7 @@ class AlloraUtils:
             logger.error(f"Failed to convert {amount} to base units: {e}")
             raise ValueError(f"Invalid amount: {amount}")
     
-    def from_base_units(self, amount: int, decimals: int = 6) -> Decimal:
+    def from_base_units(self, amount: int, decimals: int = 18) -> Decimal:
         """
         Convert base units to human-readable amount.
         
@@ -166,7 +166,7 @@ class AlloraUtils:
         self,
         amount: int,
         denom: str,
-        decimals: int = 6,
+        decimals: int = 18,
         show_denom: bool = True
     ) -> str:
         """
