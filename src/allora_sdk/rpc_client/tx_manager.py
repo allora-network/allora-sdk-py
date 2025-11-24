@@ -173,7 +173,6 @@ class TxManager:
         self,
         type_url: str,
         msgs: list[Any],
-        memo: str = "",
     ) -> int:
         """
         Simulate a transaction to estimate gas usage.
