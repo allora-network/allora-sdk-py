@@ -231,6 +231,10 @@ class AlloraWorker:
 
     def _init_wallet(self, wallet: AlloraWalletConfig | None):
         if wallet:
+            # Pre-initialized wallet takes highest precedence
+            if wallet.wallet is not None:
+                logger.info("Wallet initialized from LocalWallet")
+                return wallet.wallet
             if wallet.private_key:
                 return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
             if wallet.mnemonic:
