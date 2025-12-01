@@ -84,7 +84,7 @@ When you run this snippet, a few things happen:
 - It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
 
 More resources:
-- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
+- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
 - Official [documentation](https://docs.allora.network)
 - Join our [Discord server](https://discord.gg/RU7yPcqb)
 
