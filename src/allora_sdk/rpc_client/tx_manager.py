@@ -6,7 +6,7 @@ import grpc
 from datetime import datetime, timedelta
 import logging
 import traceback
-from typing import Any, Optional, Union, Dict
+from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 import uuid
 
@@ -14,12 +14,13 @@ from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
+from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 from allora_sdk.protos.cosmos.base.abci.v1beta1 import TxResponse
-from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest
+from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
 from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
 from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
 from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
@@ -167,6 +168,92 @@ class TxManager:
         asyncio.create_task(self._attempt_submissions(pending, gas_limit))
 
         return pending
+    
+    async def simulate_transaction(
+        self,
+        type_url: str,
+        msgs: list[Any],
+    ) -> int:
+        """
+        Simulate a transaction to estimate gas usage.
+        
+        This creates a transaction with the user's actual wallet but doesn't sign or broadcast it.
+        The simulation happens server-side with empty signatures.
+        
+        Args:
+            type_url: The message type URL (e.g., "/cosmos.bank.v1beta1.MsgSend")
+            msgs: List of protobuf messages to include in the transaction
+            memo: Optional transaction memo
+            
+        Returns:
+            Estimated gas units required for the transaction (with 20% safety margin)
+            
+        Raises:
+            Exception: If simulation fails or account info cannot be retrieved
+        """
+        if self.wallet is None:
+            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+        
+        logger.debug(f"Simulating transaction for {type_url}")
+        
+        resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+        if resp.info is None:
+            raise Exception('account_info query response is none')
+        info = resp.info
+        
+        any_messages = [self._create_any_message(msg, type_url) for msg in msgs]
+        
+        tx = Transaction()
+        for msg in any_messages:
+            tx.add_message(msg)
+        
+        dummy_gas_limit = 200000
+        dummy_fee = Coin(amount=1, denom=self.config.fee_denom)
+        
+        tx.seal(
+            signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
+            fee=TxFee(amount=[dummy_fee], gas_limit=dummy_gas_limit),
+        )
+        
+        tx.complete()
+        
+        assert tx.tx is not None
+        
+        tx_raw = CosmpyTxRaw(
+            body_bytes=cast(Message, tx.tx.body).SerializeToString(),
+            auth_info_bytes=cast(Message, tx.tx.auth_info).SerializeToString(),
+            signatures=[b''],
+        )
+        
+        tx_bytes = tx_raw.SerializeToString()
+        
+        sim_request = SimulateRequest(tx_bytes=tx_bytes)
+        
+        try:
+            sim_response = self.tx_client.simulate(sim_request)
+            
+            if sim_response is None or sim_response.gas_info is None:
+                raise Exception('Simulation response is None or missing gas_info')
+            
+            gas_used = int(sim_response.gas_info.gas_used)
+            logger.debug(f"Simulation successful: estimated gas = {gas_used}")
+            
+            # Add a 20% safety margin to the estimate
+            return int(gas_used * 1.2)
+            
+        except grpc.RpcError as e:
+            error_details = e.details() if hasattr(e, 'details') else str(e)
+            logger.error(f"Simulation failed: {error_details}")
+            
+            # Check for common errors
+            error_str = str(error_details).lower() if error_details else ""
+            if "account sequence mismatch" in error_str:
+                raise AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_details}")
+            
+            raise Exception(f"Transaction simulation failed: {error_details}")
+        except Exception as e:
+            logger.error(f"Simulation error: {e}")
+            raise
 
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int]):
         start = datetime.now()

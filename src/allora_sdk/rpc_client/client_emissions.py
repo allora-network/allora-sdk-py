@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from allora_sdk.protos.emissions.v3 import Nonce
 from allora_sdk.protos.emissions.v9 import (
     InputInference,
@@ -10,7 +10,7 @@ from allora_sdk.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
 from allora_sdk.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
@@ -34,19 +34,44 @@ class EmissionsTxs:
         is_reputer: bool,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+        """
+        Register as a worker or reputer for a topic.
+        
+        Args:
+            topic_id: The topic ID to register for
+            owner_addr: Owner address
+            sender_addr: Sender address
+            is_reputer: Whether registering as a reputer (True) or worker (False)
+            fee_tier: Fee tier to use (ECO, STANDARD, or PRIORITY)
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
+            
+        Returns:
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
+        """
         msg = RegisterRequest(
             topic_id=topic_id,
             owner=owner_addr,
             sender=sender_addr,
             is_reputer=is_reputer,
         )
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.RegisterRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+        
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.RegisterRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.RegisterRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def insert_worker_payload(
         self,
@@ -58,7 +83,8 @@ class EmissionsTxs:
         proof: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Submit a worker payload (inference/forecast) to the Allora network.
 
@@ -72,10 +98,13 @@ class EmissionsTxs:
             extra_data: Optional extra data as bytes
             proof: Optional proof string
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -137,10 +166,16 @@ class EmissionsTxs:
         logger.debug(f"🚀 Submitting worker payload for topic {topic_id}, inference: {inference_value}")
         logger.debug(f"   📋 Payload details: nonce={nonce}, forecaster={worker_address}")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.InsertWorkerPayloadRequest",
-            msgs=[ payload_request ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.InsertWorkerPayloadRequest",
+                msgs=[ payload_request ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.InsertWorkerPayloadRequest",
+                msgs=[ payload_request ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
