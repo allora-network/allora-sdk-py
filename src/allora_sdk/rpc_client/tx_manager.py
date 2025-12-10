@@ -4,9 +4,10 @@ from random import paretovariate
 import time
 import grpc
 from datetime import datetime, timedelta
+from decimal import Decimal
 import logging
 import traceback
-from typing import Any, Optional, Union, Dict
+from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 import uuid
 
@@ -14,15 +15,18 @@ from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
+from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 from allora_sdk.protos.cosmos.base.abci.v1beta1 import TxResponse
-from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest
+from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
+from allora_sdk.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
 from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
 from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
 from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
+from allora_sdk.rest.feemarket_feemarket_v1_rest_client import FeemarketFeemarketV1QueryLike
 
 
 logger = logging.getLogger("allora_sdk")
@@ -109,6 +113,7 @@ class TxManager:
         tx_client: CosmosTxV1Beta1ServiceLike,
         auth_client: CosmosAuthV1Beta1QueryLike,
         bank_client: CosmosBankV1Beta1QueryLike,
+        feemarket_client: Optional[FeemarketFeemarketV1QueryLike],
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 5,
@@ -117,6 +122,7 @@ class TxManager:
         self.tx_client = tx_client
         self.auth_client = auth_client
         self.bank_client = bank_client
+        self.feemarket_client = feemarket_client
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
@@ -143,6 +149,11 @@ class TxManager:
         self._pending_attempts: Dict[str, Dict[str, Any]] = {}
         self._monitor_task: Optional[asyncio.Task] = None
         self._monitor_cond = asyncio.Condition()
+
+        # Gas price caching
+        self._cached_gas_price: Optional[Decimal] = None
+        self._gas_price_cache_time: Optional[datetime] = None
+        self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
 
     async def submit_transaction(
         self,
@@ -171,6 +182,92 @@ class TxManager:
         asyncio.create_task(self._attempt_submissions(pending, gas_limit))
 
         return pending
+    
+    async def simulate_transaction(
+        self,
+        type_url: str,
+        msgs: list[Any],
+    ) -> int:
+        """
+        Simulate a transaction to estimate gas usage.
+        
+        This creates a transaction with the user's actual wallet but doesn't sign or broadcast it.
+        The simulation happens server-side with empty signatures.
+        
+        Args:
+            type_url: The message type URL (e.g., "/cosmos.bank.v1beta1.MsgSend")
+            msgs: List of protobuf messages to include in the transaction
+            memo: Optional transaction memo
+            
+        Returns:
+            Estimated gas units required for the transaction (with 20% safety margin)
+            
+        Raises:
+            Exception: If simulation fails or account info cannot be retrieved
+        """
+        if self.wallet is None:
+            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+        
+        logger.debug(f"Simulating transaction for {type_url}")
+        
+        resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+        if resp.info is None:
+            raise Exception('account_info query response is none')
+        info = resp.info
+        
+        any_messages = [self._create_any_message(msg, type_url) for msg in msgs]
+        
+        tx = Transaction()
+        for msg in any_messages:
+            tx.add_message(msg)
+        
+        dummy_gas_limit = 200000
+        dummy_fee = Coin(amount=1, denom=self.config.fee_denom)
+        
+        tx.seal(
+            signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
+            fee=TxFee(amount=[dummy_fee], gas_limit=dummy_gas_limit),
+        )
+        
+        tx.complete()
+        
+        assert tx.tx is not None
+        
+        tx_raw = CosmpyTxRaw(
+            body_bytes=cast(Message, tx.tx.body).SerializeToString(),
+            auth_info_bytes=cast(Message, tx.tx.auth_info).SerializeToString(),
+            signatures=[b''],
+        )
+        
+        tx_bytes = tx_raw.SerializeToString()
+        
+        sim_request = SimulateRequest(tx_bytes=tx_bytes)
+        
+        try:
+            sim_response = self.tx_client.simulate(sim_request)
+            
+            if sim_response is None or sim_response.gas_info is None:
+                raise Exception('Simulation response is None or missing gas_info')
+            
+            gas_used = int(sim_response.gas_info.gas_used)
+            logger.debug(f"Simulation successful: estimated gas = {gas_used}")
+            
+            # Add a 20% safety margin to the estimate
+            return int(gas_used * 1.2)
+            
+        except grpc.RpcError as e:
+            error_details = e.details() if hasattr(e, 'details') else str(e)
+            logger.error(f"Simulation failed: {error_details}")
+            
+            # Check for common errors
+            error_str = str(error_details).lower() if error_details else ""
+            if "account sequence mismatch" in error_str:
+                raise AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_details}")
+            
+            raise Exception(f"Transaction simulation failed: {error_details}")
+        except Exception as e:
+            logger.error(f"Simulation error: {e}")
+            raise
 
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int]):
         start = datetime.now()
@@ -217,10 +314,14 @@ class TxManager:
                 continue
 
             except InsufficientFeesError:
+                # Invalidate gas price cache - network conditions may have changed
+                self._cached_gas_price = None
+                self._gas_price_cache_time = None
+
                 fee_multiplier = 1.0 + attempt * 0.5
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to insufficient fees")
-                logger.debug("Insufficient fees, retrying...")
+                logger.debug("Insufficient fees, retrying with refreshed gas price...")
                 continue
 
             except AccountSequenceMismatchError:
@@ -390,9 +491,122 @@ class TxManager:
         return int(base_gas * 1.2)
 
 
+    async def _get_current_gas_price(self) -> float:
+        """
+        Get current gas price with caching.
+
+        Queries feemarket module for dynamic gas price, falling back to static
+        config price on failure. Caches result for configured TTL.
+
+        Returns:
+            Gas price in base units per gas unit
+        """
+        # Check cache validity
+        if self._cached_gas_price is not None and self._gas_price_cache_time is not None:
+            age = datetime.now() - self._gas_price_cache_time
+            if age.total_seconds() < self._gas_price_cache_ttl_secs:
+                return float(self._cached_gas_price)
+
+        # Try dynamic price if enabled
+        if self.config.use_dynamic_gas_price and self.feemarket_client is not None:
+            try:
+                response = self.feemarket_client.gas_price(
+                    GasPriceRequest(denom=self.config.fee_denom)
+                )
+                if response.price is not None:
+                    # DecCoin.amount is a string decimal with 18 decimal places (cosmos.Dec format)
+                    # e.g., "10000000000000000000" represents 10.0
+                    price_raw = Decimal(response.price.amount)
+                    price = price_raw / Decimal(10 ** 18)
+                    self._cached_gas_price = price
+                    self._gas_price_cache_time = datetime.now()
+                    logger.debug(f"Using dynamic gas price: {price} {self.config.fee_denom}/gas")
+                    return float(price)
+            except Exception as e:
+                logger.debug(f"Failed to query dynamic gas price, using static: {e}")
+
+        # Fall back to static config price
+        return self.config.fee_minimum_gas_price
+
+
+    async def _check_network_congestion(self) -> Optional[float]:
+        """
+        Check network congestion via feemarket state.
+
+        Returns:
+            Congestion multiplier (1.0 = normal, >1.0 = congested) or None if check failed
+        """
+        if not self.config.congestion_aware_fees or self.feemarket_client is None:
+            return None
+
+        try:
+            state_resp = self.feemarket_client.state(StateRequest())
+            if state_resp.state is None:
+                return None
+
+            state = state_resp.state
+
+            # Calculate average utilization in window
+            if not state.window:
+                return None
+
+            params_resp = self.feemarket_client.params(ParamsRequest())
+            if params_resp.params is None:
+                return None
+
+            avg_utilization = sum(state.window) / len(state.window)
+            max_utilization = params_resp.params.max_block_utilization
+
+            if max_utilization == 0:
+                return None
+
+            utilization_ratio = avg_utilization / max_utilization
+
+            # Suggest multiplier based on utilization
+            # >80% = congested, suggest 1.5x
+            # >90% = very congested, suggest 2.0x
+            if utilization_ratio > 0.9:
+                logger.debug(f"High network congestion detected: {utilization_ratio:.1%}")
+                return 2.0
+            elif utilization_ratio > 0.8:
+                logger.debug(f"Moderate network congestion detected: {utilization_ratio:.1%}")
+                return 1.5
+
+            return 1.0
+
+        except Exception as e:
+            logger.debug(f"Failed to check network congestion: {e}")
+            return None
+
+
     async def _calculate_optimal_fee(self, gas_limit: int, fee_multiplier: float) -> Coin:
-        base_price = self.config.fee_minimum_gas_price
-        fee_amount = int(gas_limit * base_price * fee_multiplier)
+        """
+        Calculate optimal transaction fee.
+
+        Uses dynamic gas prices from feemarket when available, falling back to
+        static config prices. Applies fee tier multiplier and optional congestion
+        multiplier.
+
+        Args:
+            gas_limit: Gas limit for the transaction
+            fee_multiplier: Base fee tier multiplier (from retry logic)
+
+        Returns:
+            Coin object with calculated fee amount
+        """
+        # Get current gas price (cached or fresh)
+        base_price = await self._get_current_gas_price()
+
+        # Apply fee tier multiplier
+        price_with_tier = base_price * fee_multiplier
+
+        # Apply congestion multiplier if enabled
+        congestion_multiplier = await self._check_network_congestion()
+        if congestion_multiplier is not None and congestion_multiplier > 1.0:
+            price_with_tier *= congestion_multiplier
+            logger.debug(f"Applied congestion multiplier: {congestion_multiplier}x")
+
+        fee_amount = int(gas_limit * price_with_tier)
         return Coin(amount=fee_amount, denom=self.config.fee_denom)
 
 

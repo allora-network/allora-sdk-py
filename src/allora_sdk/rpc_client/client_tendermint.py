@@ -1,16 +1,12 @@
 import logging
-from typing import Optional
-from allora_sdk.protos.cosmos.base.tendermint.v1beta1 import (
-    ServiceStub,
-)
-from allora_sdk.protos.cosmos.base.v1beta1 import Coin
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager
+from allora_sdk.rest.cosmos_base_tendermint_v1beta1_rest_client import CosmosBaseTendermintV1Beta1ServiceLike
+from allora_sdk.rpc_client.tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
 
 
 class TendermintClient:
-    def __init__(self, query_client: ServiceStub, tx_manager: TxManager | None = None):
+    def __init__(self, query_client: CosmosBaseTendermintV1Beta1ServiceLike, tx_manager: TxManager | None = None):
         self.query = query_client
         self.tx = TendermintTxs(txs=tx_manager)
 

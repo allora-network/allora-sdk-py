@@ -20,10 +20,12 @@ import allora_sdk.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
 import allora_sdk.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
 import allora_sdk.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
 import allora_sdk.protos.emissions.v9 as emissions_v9
+import allora_sdk.protos.feemarket.feemarket.v1 as feemarket_v1
 import allora_sdk.protos.mint.v5 as mint_v5
 import allora_sdk.rest as rest
 from allora_sdk.rpc_client.client_auth import AuthClient
 from allora_sdk.rpc_client.client_bank import BankClient
+from allora_sdk.rpc_client.client_feemarket import FeemarketClient
 from allora_sdk.rpc_client.client_tx import TxClient
 from allora_sdk.rpc_client.client_tendermint import TendermintClient
 
@@ -32,7 +34,6 @@ from .client_mint import MintClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .tx_manager import TxManager
-from allora_sdk.rpc_client import tx_manager
 
 logger = logging.getLogger("allora_sdk")
 
@@ -88,6 +89,7 @@ class AlloraRPCClient:
             tx_query: rest.CosmosTxV1Beta1ServiceLike = cosmos_tx_v1beta1.ServiceStub(self.grpc_client)
             emissions_query: rest.EmissionsV9QueryServiceLike = emissions_v9.QueryServiceStub(self.grpc_client)
             mint_query: rest.MintV5QueryServiceLike = mint_v5.QueryServiceStub(self.grpc_client)
+            feemarket_query: rest.FeemarketFeemarketV1QueryLike = feemarket_v1.QueryStub(self.grpc_client)
         else:
             # Set up REST (Cosmos-LCD) services
             auth_query: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
@@ -96,6 +98,7 @@ class AlloraRPCClient:
             tx_query: rest.CosmosTxV1Beta1ServiceLike = rest.CosmosTxV1Beta1RestServiceClient(parsed_url.rest_url)
             emissions_query: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
             mint_query: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
+            feemarket_query: rest.FeemarketFeemarketV1QueryLike = rest.FeemarketFeemarketV1RestQueryClient(parsed_url.rest_url)
 
         if self.wallet is not None:
             self.tx_manager = TxManager(
@@ -103,19 +106,21 @@ class AlloraRPCClient:
                 tx_client=tx_query,
                 auth_client=auth_query,
                 bank_client=bank_query,
+                feemarket_client=feemarket_query,
                 config=self.network,
             )
-        self.auth = TxClient(query_client=auth_query, tx_manager=self.tx_manager)
+        self.auth = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
         self.bank = BankClient(query_client=bank_query, tx_manager=self.tx_manager)
         self.tendermint = TendermintClient(query_client=tendermint_query, tx_manager=self.tx_manager)
         self.tx = TxClient(query_client=tx_query, tx_manager=self.tx_manager)
         self.emissions = EmissionsClient(query_client=emissions_query, tx_manager=self.tx_manager)
         self.mint = MintClient(query_client=mint_query)
+        self.feemarket = FeemarketClient(query_client=feemarket_query)
 
         if self.network.websocket_url is not None:
             self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
         
-        logger.info(f"Initialized Allora client for {self.network.chain_id}")
+        logger.debug(f"Initialized Allora client for {self.network.chain_id}")
     
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
@@ -126,19 +131,19 @@ class AlloraRPCClient:
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                logger.info("Wallet initialized from LocalWallet")
+                logger.debug("Wallet initialized from LocalWallet")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix="allo")
-                logger.info("Wallet initialized from private key")
+                logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
                 self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
-                logger.info("Wallet initialized from mnemonic")
+                logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
                 self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
-                logger.info("Wallet initialized from mnemonic file")
+                logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
             raise ValueError(f"Invalid wallet credentials: {e}")

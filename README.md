@@ -11,10 +11,10 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 - [ML Inference Worker](#ml-inference-worker)
   - [Quick Start](#quick-start)
   - [Advanced Configuration](#advanced-configuration)
-- [RPC Client](#rpc-client)
+- [Allora RPC Client](#rpc-client)
   - [Basic Usage](#basic-usage-1)
   - [Capabilities](#capabilities)
-- [API Client](#api-client)
+- [Allora API Client](#api-client)
   - [Basic Usage](#basic-usage-2)
   - [Features](#features)
 - [Command-line Tools](#command-line-tools)
@@ -59,8 +59,8 @@ def my_model():
     return 120000.0  # Example BTC price prediction
 
 async def main():
-    worker = AlloraWorker(
-        predict_fn=my_model,
+    worker = AlloraWorker.testnet(
+        run=my_model,
         api_key="<YOUR API KEY HERE>",
     )
     
@@ -79,12 +79,12 @@ await main()
 
 When you run this snippet, a few things happen:
 - It configures this worker to communicate with our "testnet" network -- a place where no real funds are exchanged.
-- It automatically generates an identity on the platform for you, represented by an `allo` address.
+- It automatically generates an identity on the platform for you, represented by an `allo` address.  This identity is saved in the same folder from which you run the worker script, and will be auto-detected if you run it again later.
 - It obtains a small amount of ALLO, the compute gas currency of the platform.
-- It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
+- It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://testnet.explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
 
 More resources:
-- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit/blob/main/notebooks/Allora%20Forge%20Builder%20Kit.ipynb): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
+- [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
 - Official [documentation](https://docs.allora.network)
 - Join our [Discord server](https://discord.gg/RU7yPcqb)
 
@@ -98,7 +98,7 @@ worker = AlloraWorker(
     topic_id=1,
 
     # Specify the inference function directly
-    predict_fn=my_model,
+    run=my_model,
     # Or specify a pickle file containing it (recommended to use the `dill` package for this)
     predict_pkl="my_model.pkl",
 
@@ -111,14 +111,14 @@ worker = AlloraWorker(
     api_key="UP-...",              # Allora API key -- see https://developer.allora.network for a free key.
 
     # `fee_tier` controls how much you pay to ensure your inferences are included within an epoch.  The options are ECO, STANDARD, or PRIORITY -- default is STANDARD.
-    fee_tier=FeeTier.PRIORITY,     # 
+    fee_tier=FeeTier.PRIORITY,
 
-    # `debug` enables debug logging -- noisy, but good for debugging.
+    # `debug` enables debug logging -- very noisy.
     debug=True,
 )
 ```
 
-## RPC Client
+## Allora RPC Client
 
 Low-level blockchain client for advanced users. Supports queries, transactions, and WebSocket subscriptions.
 
@@ -191,18 +191,28 @@ subscription_id = await client.events.subscribe_new_block_events_typed(
 
 ### Capabilities
 
-RPC endpoint types:
-- **gRPC API**: All emissions, bank, and staking operations
-- **Cosmos-LCD REST API**: Same as above with identical interfaces
+RPC wire protocols:
+- **gRPC API**
+- **Cosmos-LCD REST API**
 
-Determined by the RPC url string passed to the config constructor.  `grpc+http(s)` will utilize the gRPC Protobuf client, whereas `rest+http(s)` will use Cosmos-LCD.
+Modules:
+- github.com/allora-network/x/emissions
+- github.com/allora-network/x/mint
+- auth
+- bank
+- feemarket
+- mint
+- tendermint
+- tx
+
+Wire protocol is determined by the RPC url string passed to the config constructor.  `grpc+http(s)` will utilize the gRPC Protobuf client, whereas `rest+http(s)` will use Cosmos-LCD.
 
 - **Transaction support**: Fee estimation, signing, and broadcasting  
 - **WebSocket events**: Real-time blockchain event subscriptions.  For a usage example, see the `AlloraWorker`
 - **Multi-chain**: Testnet and mainnet support come with batteries included, but there is maximal configurability.  Can be used with other Cosmos SDK chains.
 - **Type safety**: Full protobuf type and service definitions, codegen clients
 
-## API Client
+## Allora API Client
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
 
@@ -327,7 +337,7 @@ The SDK uses two code generation systems:
 - Output: `src/allora_sdk/protos/`
 - Command: `make proto`
 
-**REST Client Generation (custom):**
+**REST Client Generation (custom, resides in the `scripts/` directory):**
 - Analyzes protobuf HTTP annotations to generate REST clients  
 - Matches gRPC client interfaces exactly
 - Sources: Same .proto files as above

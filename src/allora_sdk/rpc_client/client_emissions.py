@@ -1,10 +1,11 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from allora_sdk.protos.emissions.v3 import Nonce
 from allora_sdk.protos.emissions.v9 import (
     BulkAddToTopicReputerWhitelistRequest,
     BulkAddToTopicWorkerWhitelistRequest,
     CreateNewTopicRequest,
+    DelegateStakeRequest,
     FundTopicRequest,
     InputInference,
     InputInferenceForecastBundle,
@@ -14,7 +15,7 @@ from allora_sdk.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
 from allora_sdk.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
@@ -39,19 +40,44 @@ class EmissionsTxs:
         is_reputer: bool,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+        """
+        Register as a worker or reputer for a topic.
+
+        Args:
+            topic_id: The topic ID to register for
+            owner_addr: Owner address
+            sender_addr: Sender address
+            is_reputer: Whether registering as a reputer (True) or worker (False)
+            fee_tier: Fee tier to use (ECO, STANDARD, or PRIORITY)
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
+
+        Returns:
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
+        """
         msg = RegisterRequest(
             topic_id=topic_id,
             owner=owner_addr,
             sender=sender_addr,
             is_reputer=is_reputer,
         )
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.RegisterRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.RegisterRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.RegisterRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def insert_worker_payload(
         self,
@@ -63,7 +89,8 @@ class EmissionsTxs:
         proof: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Submit a worker payload (inference/forecast) to the Allora network.
 
@@ -77,10 +104,13 @@ class EmissionsTxs:
             extra_data: Optional extra data as bytes
             proof: Optional proof string
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -139,15 +169,53 @@ class EmissionsTxs:
             worker_data_bundle=worker_data_bundle
         )
 
-        logger.debug(f"🚀 Submitting worker payload for topic {topic_id}, inference: {inference_value}")
-        logger.debug(f"   📋 Payload details: nonce={nonce}, forecaster={worker_address}")
+        logger.debug(f"Submitting worker payload for topic {topic_id}, inference: {inference_value}")
+        logger.debug(f"   Payload details: nonce={nonce}, forecaster={worker_address}")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.InsertWorkerPayloadRequest",
-            msgs=[ payload_request ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.InsertWorkerPayloadRequest",
+                msgs=[ payload_request ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.InsertWorkerPayloadRequest",
+                msgs=[ payload_request ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
+
+
+    async def delegate_stake(
+        self,
+        sender: str,
+        topic_id: int,
+        reputer: str,
+        amount: str,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        gas_limit: Optional[int] = None,
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+
+        msg = DelegateStakeRequest(
+            sender=sender,
+            topic_id=topic_id,
+            reputer=reputer,
+            amount=amount,
         )
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.DelegateStakeRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.DelegateStakeRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def create_topic(
         self,
@@ -168,7 +236,8 @@ class EmissionsTxs:
         enable_reputer_whitelist: bool = False,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Create a new topic on the Allora network.
 
@@ -189,10 +258,13 @@ class EmissionsTxs:
             enable_worker_whitelist: Require whitelist for workers (default False)
             enable_reputer_whitelist: Require whitelist for reputers (default False)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status. The topic_id is in the response events.
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -218,14 +290,20 @@ class EmissionsTxs:
             enable_reputer_whitelist=enable_reputer_whitelist,
         )
 
-        logger.debug(f"🚀 Creating new topic with metadata: {metadata}")
+        logger.debug(f"Creating new topic with metadata: {metadata}")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.CreateNewTopicRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.CreateNewTopicRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.CreateNewTopicRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def fund_topic(
         self,
@@ -233,7 +311,8 @@ class EmissionsTxs:
         amount: str,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Fund a topic with ALLO tokens to incentivize inferences.
 
@@ -241,10 +320,13 @@ class EmissionsTxs:
             topic_id: The topic ID to fund
             amount: Amount of uallo to fund (e.g., "1000000" for 1 ALLO)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status.
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -257,14 +339,20 @@ class EmissionsTxs:
             amount=amount,
         )
 
-        logger.debug(f"🚀 Funding topic {topic_id} with {amount} uallo")
+        logger.debug(f"Funding topic {topic_id} with {amount} uallo")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.FundTopicRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.FundTopicRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.FundTopicRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def bulk_add_to_topic_worker_whitelist(
         self,
@@ -272,7 +360,8 @@ class EmissionsTxs:
         addresses: List[str],
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Add multiple addresses to a topic's worker whitelist.
 
@@ -280,10 +369,13 @@ class EmissionsTxs:
             topic_id: The topic ID to update
             addresses: List of wallet addresses to whitelist
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status.
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -296,14 +388,20 @@ class EmissionsTxs:
             addresses=addresses,
         )
 
-        logger.debug(f"🚀 Adding {len(addresses)} addresses to topic {topic_id} worker whitelist")
+        logger.debug(f"Adding {len(addresses)} addresses to topic {topic_id} worker whitelist")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.BulkAddToTopicWorkerWhitelistRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.BulkAddToTopicWorkerWhitelistRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.BulkAddToTopicWorkerWhitelistRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
 
     async def bulk_add_to_topic_reputer_whitelist(
         self,
@@ -311,7 +409,8 @@ class EmissionsTxs:
         addresses: List[str],
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
-    ):
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
         """
         Add multiple addresses to a topic's reputer whitelist.
 
@@ -319,10 +418,13 @@ class EmissionsTxs:
             topic_id: The topic ID to update
             addresses: List of wallet addresses to whitelist
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
-            gas_limit: Manual gas limit override
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
 
         Returns:
-            Transaction response with hash and status.
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -335,12 +437,17 @@ class EmissionsTxs:
             addresses=addresses,
         )
 
-        logger.debug(f"🚀 Adding {len(addresses)} addresses to topic {topic_id} reputer whitelist")
+        logger.debug(f"Adding {len(addresses)} addresses to topic {topic_id} reputer whitelist")
 
-        return await self._txs.submit_transaction(
-            type_url="/emissions.v9.BulkAddToTopicReputerWhitelistRequest",
-            msgs=[ msg ],
-            gas_limit=gas_limit,
-            fee_tier=fee_tier
-        )
-
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.BulkAddToTopicReputerWhitelistRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.BulkAddToTopicReputerWhitelistRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
