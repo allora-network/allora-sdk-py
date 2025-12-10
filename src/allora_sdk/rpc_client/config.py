@@ -53,6 +53,9 @@ class AlloraNetworkConfig:
     fee_denom: str = "uallo"
     fee_minimum_gas_price: float = 10.0
     faucet_url: Optional[str] = None
+    use_dynamic_gas_price: bool = True
+    gas_price_cache_ttl_secs: int = 30
+    congestion_aware_fees: bool = False
 
     @classmethod
     def testnet(cls) -> 'AlloraNetworkConfig':
@@ -63,6 +66,9 @@ class AlloraNetworkConfig:
             faucet_url="https://faucet.testnet.allora.network",
             fee_denom="uallo",
             fee_minimum_gas_price=10.0,
+            use_dynamic_gas_price=True,
+            gas_price_cache_ttl_secs=30,
+            congestion_aware_fees=False,
         )
 
     @classmethod
@@ -73,6 +79,9 @@ class AlloraNetworkConfig:
             websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=250_000_000.0,
+            use_dynamic_gas_price=True,
+            gas_price_cache_ttl_secs=30,
+            congestion_aware_fees=False,
         )
 
     @classmethod
@@ -83,6 +92,9 @@ class AlloraNetworkConfig:
             websocket_url=f"ws://localhost:26657/websocket",
             fee_denom="uallo",
             fee_minimum_gas_price=0.0,
+            use_dynamic_gas_price=False,
+            gas_price_cache_ttl_secs=30,
+            congestion_aware_fees=False,
         )
 
     @classmethod

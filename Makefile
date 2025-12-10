@@ -7,6 +7,7 @@ SHELL := /bin/bash
 PROTO_DEPS := ./proto-deps
 COSMOS_SDK_DIR := $(PROTO_DEPS)/cosmos-sdk
 COSMOS_PROTO_DIR := $(PROTO_DEPS)/cosmos-proto
+FEEMARKET_DIR := $(PROTO_DEPS)/feemarket
 GOGOPROTO_DIR := $(PROTO_DEPS)/gogoproto
 GOOGLEAPIS_DIR := $(PROTO_DEPS)/googleapis
 ALLORA_CHAIN_DIR := $(PROTO_DEPS)/allora-chain
@@ -47,6 +48,11 @@ $(COSMOS_SDK_DIR)/.git:
 	git clone --depth 1 --single-branch --branch v0.50.13 \
 	  https://github.com/cosmos/cosmos-sdk "$(COSMOS_SDK_DIR)"
 
+$(FEEMARKET_DIR)/.git:
+	rm -rf "$(FEEMARKET_DIR)"
+	git clone --depth 1 --single-branch --branch v1.1.1 \
+	  https://github.com/skip-mev/feemarket "$(FEEMARKET_DIR)"
+
 $(GOOGLEAPIS_DIR)/.git:
 	rm -rf "$(GOOGLEAPIS_DIR)"
 	git clone --depth 1 --single-branch --branch master \
@@ -62,6 +68,7 @@ proto-deps: \
   $(GOGOPROTO_DIR)/.git \
   $(COSMOS_PROTO_DIR)/.git \
   $(COSMOS_SDK_DIR)/.git \
+  $(FEEMARKET_DIR)/.git \
   $(GOOGLEAPIS_DIR)/.git \
   $(ALLORA_CHAIN_DIR)/.git
 
@@ -70,6 +77,7 @@ proto-deps-update:
 	git -C "$(GOGOPROTO_DIR)" fetch --depth 1 origin v1.7.0 && git -C "$(GOGOPROTO_DIR)" reset --hard FETCH_HEAD
 	git -C "$(COSMOS_PROTO_DIR)" fetch --depth 1 origin v1.0.0-beta.5 && git -C "$(COSMOS_PROTO_DIR)" reset --hard FETCH_HEAD
 	git -C "$(COSMOS_SDK_DIR)" fetch --depth 1 origin v0.50.13 && git -C "$(COSMOS_SDK_DIR)" reset --hard FETCH_HEAD
+	git -C "$(FEEMARKET_DIR)" fetch --depth 1 origin v1.1.1 && git -C "$(FEEMARKET_DIR)" reset --hard FETCH_HEAD
 	git -C "$(GOOGLEAPIS_DIR)" fetch --depth 1 origin master && git -C "$(GOOGLEAPIS_DIR)" reset --hard FETCH_HEAD
 	git -C "$(ALLORA_CHAIN_DIR)" fetch --depth 1 origin v0.12.2 && git -C "$(ALLORA_CHAIN_DIR)" reset --hard FETCH_HEAD
 
@@ -85,6 +93,7 @@ $(PROTO_STAMP): \
   $(ALLORA_CHAIN_DIR)/.git \
   $(COSMOS_SDK_DIR)/.git \
   $(COSMOS_PROTO_DIR)/.git \
+  $(FEEMARKET_DIR)/.git \
   $(GOOGLEAPIS_DIR)/.git \
   $(GOGOPROTO_DIR)/.git \
   $(PROTO_INIT_TEMPLATE) \
@@ -99,13 +108,15 @@ $(PROTO_STAMP): \
 		--proto_path="$(ALLORA_CHAIN_DIR)/x/mint/proto" \
 		--proto_path="$(COSMOS_SDK_DIR)/proto" \
 		--proto_path="$(COSMOS_PROTO_DIR)/proto" \
+		--proto_path="$(FEEMARKET_DIR)/proto" \
 		--proto_path="$(GOOGLEAPIS_DIR)" \
 		--proto_path="$(GOGOPROTO_DIR)" \
 		--python_betterproto2_out="$(ALLORA_PROTOS_DIR)" \
 		--python_betterproto2_opt=client_generation=sync_async \
 		$$(find "$(ALLORA_CHAIN_DIR)/x/emissions/proto" -type f -name '*.proto') \
 		$$(find "$(ALLORA_CHAIN_DIR)/x/mint/proto" -type f -name '*.proto') \
-		$$(find "$(COSMOS_SDK_DIR)/proto" -type f -name '*.proto')
+		$$(find "$(COSMOS_SDK_DIR)/proto" -type f -name '*.proto') \
+		$$(find "$(FEEMARKET_DIR)/proto/feemarket" -type f -name '*.proto')
 
 	python scripts/generate_custom_message_pool.py \
 		--out "$(ALLORA_PROTOS_DIR)"
@@ -130,13 +141,24 @@ $(REST_STAMP): \
 
 	python scripts/generate_rest_client_from_protos.py \
 		--out "$(REST_CLIENT_OUT_DIR)" \
-		--include-tags emissions.v9 mint.v5 cosmos.tx cosmos.base.tendermint.v1beta1 cosmos.auth.v1beta1 cosmos.bank.v1beta1 \
-		--proto-files-dirs "$(ALLORA_CHAIN_DIR)/x" "$(COSMOS_SDK_DIR)/proto" \
+		--include-tags \
+			emissions.v9 \
+			mint.v5 \
+			cosmos.tx \
+			cosmos.base.tendermint.v1beta1 \
+			cosmos.auth.v1beta1 \
+			cosmos.bank.v1beta1 \
+			feemarket.v1 \
+		--proto-files-dirs \
+			"$(ALLORA_CHAIN_DIR)/x" \
+			"$(COSMOS_SDK_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto/feemarket" \
 		--include-dirs \
 			"$(ALLORA_CHAIN_DIR)/x/emissions/proto" \
 			"$(ALLORA_CHAIN_DIR)/x/mint/proto" \
 			"$(COSMOS_SDK_DIR)/proto" \
 			"$(COSMOS_PROTO_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto" \
 			"$(GOGOPROTO_DIR)" \
 			"$(GOOGLEAPIS_DIR)"
 

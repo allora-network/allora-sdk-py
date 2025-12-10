@@ -379,9 +379,9 @@ class AlloraWebsocketSubscriber:
         while self.running:
             try:
                 if not self.websocket or self.websocket.close_code:
-                    logger.info("Reconnecting...")
+                    logger.debug("Reconnecting...")
                     await self._connect()
-                    logger.info("Websocket connected")
+                    logger.debug("Websocket connected")
                     continue
                 
                 try:

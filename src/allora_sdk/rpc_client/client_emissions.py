@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List, Optional, Union
 from allora_sdk.protos.emissions.v3 import Nonce
 from allora_sdk.protos.emissions.v9 import (
+    DelegateStakeRequest,
     InputInference,
     InputInferenceForecastBundle,
     InputWorkerDataBundle,
@@ -175,6 +176,38 @@ class EmissionsTxs:
             return await self._txs.submit_transaction(
                 type_url="/emissions.v9.InsertWorkerPayloadRequest",
                 msgs=[ payload_request ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
+
+
+    async def delegate_stake(
+        self,
+        sender: str,
+        topic_id: int,
+        reputer: str,
+        amount: str,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        gas_limit: Optional[int] = None,
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+
+        msg = DelegateStakeRequest(
+            sender=sender,
+            topic_id=topic_id,
+            reputer=reputer,
+            amount=amount,
+        )
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.DelegateStakeRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.DelegateStakeRequest",
+                msgs=[ msg ],
                 gas_limit=gas_limit,
                 fee_tier=fee_tier
             )
