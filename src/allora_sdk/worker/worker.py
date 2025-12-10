@@ -40,6 +40,7 @@ from allora_sdk.protos.emissions.v9 import (
     CanSubmitWorkerPayloadRequest,
     GetUnfulfilledWorkerNoncesRequest,
     IsWorkerRegisteredInTopicIdRequest,
+    GetLatestNetworkInferencesRequest,
 )
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
@@ -632,6 +633,69 @@ class AlloraWorker:
                     await self._prediction_queue.put(result)
 
 
+    def _sanity_check_submission(self, prediction: float) -> None:
+        """
+        Sanity check user's prediction against network consensus using z-score analysis.
+
+        Warns the user if their prediction is suspiciously far from the consensus,
+        which could indicate they're predicting the wrong target variable or using
+        incorrect units.
+
+        Args:
+            prediction: User's prediction value to check
+        """
+        try:
+            # Query latest network inferences to get consensus
+            response = self.client.emissions.query.get_latest_network_inferences(
+                GetLatestNetworkInferencesRequest(topic_id=self.topic_id)
+            )
+
+            if not response.network_inferences or not response.network_inferences.inferer_values:
+                # Not enough data to perform sanity check
+                return
+
+            # Extract individual inferer values
+            inferer_values = []
+            for inferer in response.network_inferences.inferer_values:
+                try:
+                    inferer_values.append(float(inferer.value))
+                except (ValueError, TypeError):
+                    continue
+
+            if len(inferer_values) < 3:
+                # Need at least 3 values for meaningful statistics
+                return
+
+            # Calculate mean and standard deviation
+            mean = sum(inferer_values) / len(inferer_values)
+            variance = sum((x - mean) ** 2 for x in inferer_values) / len(inferer_values)
+            std_dev = variance ** 0.5
+
+            if std_dev == 0:
+                # All predictions are identical, can't calculate z-score
+                return
+
+            # Calculate z-score
+            z_score = abs((prediction - mean) / std_dev)
+
+            # Warn if prediction is more than 3 standard deviations away
+            if z_score > 3.0:
+                logger.warning(
+                    f"⚠️⚠️⚠️  SANITY CHECK WARNING: Your prediction ({prediction:.6f}) is {z_score:.1f} "
+                    f"standard deviations from the network consensus (mean: {mean:.6f}, std: {std_dev:.6f}). "
+                    f"Please verify you're predicting the correct target variable and using the right units."
+                )
+            elif z_score > 2.0:
+                logger.info(
+                    f"ℹ️  NOTICE: Your prediction ({prediction:.6f}) is {z_score:.1f} standard deviations "
+                    f"from consensus (mean: {mean:.6f}). This may indicate a contrarian view or potential issue."
+                )
+
+        except Exception as e:
+            # Don't let sanity check failures block submissions
+            logger.debug(f"Sanity check failed (non-fatal): {e}")
+
+
     async def _submit(self, nonce: int):
         if not self.wallet:
             return Exception('no wallet')
@@ -646,6 +710,12 @@ class AlloraWorker:
         except Exception as err:
             logger.debug(f"Prediction function failed: {err}")
             return err
+
+        # Sanity check prediction against network consensus
+        try:
+            self._sanity_check_submission(float(prediction))
+        except (ValueError, TypeError):
+            logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
         try:
             resp = await (await self.client.emissions.tx.insert_worker_payload(
