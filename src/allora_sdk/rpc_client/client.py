@@ -106,6 +106,7 @@ class AlloraRPCClient:
                 tx_client=tx_query,
                 auth_client=auth_query,
                 bank_client=bank_query,
+                feemarket_client=feemarket_query,
                 config=self.network,
             )
         self.auth = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
