@@ -1,15 +1,12 @@
 import logging
-from allora_sdk.protos.cosmos.auth.v1beta1 import (
-    QueryStub,
-)
-from allora_sdk.protos.cosmos.base.v1beta1 import Coin
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager
+from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
+from allora_sdk.rpc_client.tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
 
 
 class AuthClient:
-    def __init__(self, query_client: QueryStub, tx_manager: TxManager | None = None):
+    def __init__(self, query_client: CosmosAuthV1Beta1QueryLike, tx_manager: TxManager | None = None):
         self.query = query_client
         self.tx = AuthTxs(txs=tx_manager)
 

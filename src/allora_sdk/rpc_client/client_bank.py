@@ -1,18 +1,16 @@
 from dataclasses import dataclass
 import logging
 from typing import Optional, Union
-from allora_sdk.protos.cosmos.bank.v1beta1 import (
-    MsgSend,
-    QueryStub,
-)
+from allora_sdk.protos.cosmos.bank.v1beta1 import MsgSend
 from allora_sdk.protos.cosmos.base.v1beta1 import Coin
+from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
 
 logger = logging.getLogger("allora_sdk")
 
 
 class BankClient:
-    def __init__(self, query_client: QueryStub, tx_manager: TxManager | None = None):
+    def __init__(self, query_client: CosmosBankV1Beta1QueryLike, tx_manager: TxManager | None = None):
         self.query = query_client
         self.tx = BankTxs(txs=tx_manager)
 
