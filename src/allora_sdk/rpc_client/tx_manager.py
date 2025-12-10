@@ -510,8 +510,10 @@ class TxManager:
                     GasPriceRequest(denom=self.config.fee_denom)
                 )
                 if response.price is not None:
-                    # DecCoin.amount is a string decimal
-                    price = Decimal(response.price.amount)
+                    # DecCoin.amount is a string decimal with 18 decimal places (cosmos.Dec format)
+                    # e.g., "10000000000000000000" represents 10.0
+                    price_raw = Decimal(response.price.amount)
+                    price = price_raw / Decimal(10 ** 18)
                     self._cached_gas_price = price
                     self._gas_price_cache_time = datetime.now()
                     logger.debug(f"Using dynamic gas price: {price} {self.config.fee_denom}/gas")

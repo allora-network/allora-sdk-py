@@ -120,7 +120,7 @@ class AlloraRPCClient:
         if self.network.websocket_url is not None:
             self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
         
-        logger.info(f"Initialized Allora client for {self.network.chain_id}")
+        logger.debug(f"Initialized Allora client for {self.network.chain_id}")
     
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
@@ -131,19 +131,19 @@ class AlloraRPCClient:
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                logger.info("Wallet initialized from LocalWallet")
+                logger.debug("Wallet initialized from LocalWallet")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix="allo")
-                logger.info("Wallet initialized from private key")
+                logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
                 self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
-                logger.info("Wallet initialized from mnemonic")
+                logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
                 self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
-                logger.info("Wallet initialized from mnemonic file")
+                logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
             raise ValueError(f"Invalid wallet credentials: {e}")

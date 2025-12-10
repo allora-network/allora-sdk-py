@@ -12,6 +12,7 @@ from getpass import getpass
 import os
 import signal
 import sys
+from textwrap import dedent, indent
 import requests
 import logging
 import time
@@ -24,7 +25,9 @@ from cosmpy.mnemonic import generate_mnemonic
 from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
+from allora_sdk.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
 from allora_sdk.protos.emissions.v3 import ReputerValueBundle, ValueBundle
+from allora_sdk.protos.emissions.v9 import GetTopicRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
@@ -215,6 +218,7 @@ class AlloraWorker:
         if not self.wallet:
             raise Exception('no wallet')
 
+
         self.client = AlloraRPCClient(
             wallet=AlloraWalletConfig(wallet=self.wallet),
             network=network,
@@ -224,9 +228,32 @@ class AlloraWorker:
         self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
         self._subscription_id: Optional[str] = None
 
+        node_info_resp = self.client.tendermint.query.get_node_info(GetNodeInfoRequest())
+        self._chain_id = node_info_resp.default_node_info.network if node_info_resp.default_node_info else ""
 
-        if self.api_key:
-            self._maybe_faucet_request()
+        self._show_banner()
+        self._log_balance()
+        self._maybe_faucet_request()
+
+
+    def _show_banner(self):
+        resp = self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
+
+
+        print(indent(dedent(
+            rf"""
+                 _    _     _     ___  ____      _
+                / \  | |   | |   / _ \|  _ \    / \
+               / _ \ | |   | |  | | | | |_) |  / _ \
+              / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
+             /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
+             __        _____  ____  _  _______ ____          Address: {self.client.wallet.address()}
+             \ \      / / _ \|  _ \| |/ / ____|  _ \
+              \ \ /\ / / | | | |_) | ' /|  _| | |_) |
+               \ V  V /| |_| |  _ <| . \| |___|  _ <
+                \_/\_/  \___/|_| \_\_|\_\_____|_| \_\
+            """
+        ), "   "))
 
 
     def _init_wallet(self, wallet: AlloraWalletConfig | None):
@@ -256,20 +283,32 @@ class AlloraWorker:
             print(f"Mnemonic saved to {mnemonic_file}")
             return LocalWallet.from_mnemonic(mnemonic, "allo")
 
-    def _maybe_faucet_request(self):
-        MIN_ALLO = 100000000
 
+    def _log_balance(self):
         resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
             logger.error(f"Could not check balance for {str(self.wallet.address())}")
             return
         balance = int(resp.balance.amount)
         balance_formatted = format_allo_from_uallo(balance)
-        logger.info(f"Worker wallet {str(self.wallet.address())} balance: {balance_formatted}")
-        if self.client.network.chain_id != "allora-testnet-1":
+        logger.info(f"   Worker wallet: {str(self.wallet.address())}  ||  Balance: {balance_formatted}")
+        return
+
+
+    def _maybe_faucet_request(self):
+        if self._chain_id != "allora-testnet-1":
             return
         if not self.client.network.faucet_url:
             return
+
+        MIN_ALLO = 100000000
+
+        resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+        if resp.balance is None:
+            logger.error(f"    Could not check balance for {str(self.wallet.address())}")
+            return
+        balance = int(resp.balance.amount)
+
         if balance >= MIN_ALLO:
             return
         logger.info(f"    Requesting ALLO from testnet faucet...")
@@ -446,10 +485,9 @@ class AlloraWorker:
                 pass
 
     async def _polling_worker(self, ctx: Context):
-        logger.info(f"🔄 Starting polling worker for topic {self.topic_id}")
+        logger.info(f"🔄 Starting polling worker")
         
         while not ctx.is_cancelled():
-            logger.info(f"🔄 Polling worker checking topic {self.topic_id}")
             try:
                 await self._maybe_submit(ctx)
             except asyncio.CancelledError:
@@ -479,17 +517,17 @@ class AlloraWorker:
         await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic {evt.topic_id}, nonce {evt.nonce_block_height}, height {height})"),
+            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
 
 
@@ -498,7 +536,7 @@ class AlloraWorker:
         if ctx is None or ctx.is_cancelled():
             return
 
-        logger.info(f"🚀 Worker submission window opened (topic {self.topic_id}, nonce {event.nonce_block_height}, height {height})")
+        logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
         
         try:
             await self._maybe_submit(ctx, event.nonce_block_height)
@@ -530,7 +568,9 @@ class AlloraWorker:
         if nonce is not None:
             new_nonces.add(nonce)
 
-        logger.info(f"Checking topic {self.topic_id}: {len(nonces)} unfulfilled nonces {nonces}, our unfulfilled nonces {new_nonces if len(new_nonces) > 0 else '{}'}")
+        nonces_str     = f"{nonces}" if len(nonces) > 0 else "-"
+        new_nonces_str = f"{new_nonces}" if len(new_nonces) > 0 else "-"
+        logger.info(f"   Topic {self.topic_id}: unfulfilled nonces: {nonces_str}, our unfulfilled nonces: {new_nonces_str}")
 
         for nonce in new_nonces:
             if not self._ctx or self._ctx.is_cancelled():
@@ -556,17 +596,24 @@ class AlloraWorker:
                     self.submitted_nonces.add(nonce)
 
                 elif result:
+                    if self._chain_id == "allora-mainnet-1":
+                        explorer_url = f"https://explorer.allora.network/explorer/transactions/{result.tx_result.txhash}"
+                    elif self._chain_id == "allora-testnet-1":
+                        explorer_url = f"https://testnet.explorer.allora.network/explorer/transactions/{result.tx_result.txhash}"
+                    else:
+                        explorer_url = f"unknown (chain ID: {self._chain_id})"
+
                     logger.info(f"✅ Successfully submitted: topic={self.topic_id} nonce={nonce}")
-                    logger.info(f"    - Transaction hash: {result.tx_result.txhash}")
+                    logger.info(f"     - Transaction hash: {result.tx_result.txhash}")
+                    logger.info(f"     - View on explorer: {explorer_url}")
                     self.submitted_nonces.add(nonce)
 
                 resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
                 if resp.balance is None:
                     logger.error(f"Could not check balance for {str(self.wallet.address())}")
                     continue
-                balance = int(resp.balance.amount)
-                balance_formatted = format_allo_from_uallo(balance)
-                logger.info(f"    - Wallet balance: {balance_formatted}")
+
+                self._log_balance()
                 self._maybe_faucet_request()
 
             except Exception as e:
