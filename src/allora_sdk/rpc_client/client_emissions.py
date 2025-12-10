@@ -6,7 +6,6 @@ from allora_sdk.protos.emissions.v9 import (
     BulkAddToTopicWorkerWhitelistRequest,
     CreateNewTopicRequest,
     FundTopicRequest,
-    GetNextTopicIdRequest,
     InputInference,
     InputInferenceForecastBundle,
     InputWorkerDataBundle,
@@ -27,15 +26,6 @@ class EmissionsClient:
         if tx_manager is not None:
             self.tx = EmissionsTxs(txs=tx_manager)
 
-    def get_next_topic_id(self) -> int:
-        """
-        Get the next available topic ID.
-
-        Returns:
-            The next topic ID that will be assigned when creating a new topic.
-        """
-        resp = self.query.get_next_topic_id(GetNextTopicIdRequest())
-        return resp.next_topic_id
 
 class EmissionsTxs:
     def __init__(self, txs: TxManager):
