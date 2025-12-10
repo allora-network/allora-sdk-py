@@ -193,7 +193,6 @@ class AlloraWebsocketSubscriber:
         self.callbacks: Dict[str, List[Callable]] = {}
         self.running = False
         self.reconnect_delay = 5.0  # seconds
-        self.max_reconnect_attempts = 10
         self._subscription_id_counter = 0
         self._connect_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
@@ -303,7 +302,7 @@ class AlloraWebsocketSubscriber:
         """Establish WebSocket connection."""
         async with self._connect_lock:
             attempts = 0
-            while attempts < self.max_reconnect_attempts and self.running:
+            while self.running:
                 try:
                     logger.debug(f"Connecting to {self.url}")
                     self.websocket = await self.connect_fn(self.url)
@@ -328,11 +327,7 @@ class AlloraWebsocketSubscriber:
                 except Exception as e:
                     attempts += 1
                     logger.error(f"Connection attempt {attempts} failed: {e}")
-                    if attempts < self.max_reconnect_attempts:
-                        await asyncio.sleep(self.reconnect_delay)
-                    else:
-                        logger.error("Max reconnection attempts reached")
-                        raise
+                    await asyncio.sleep(self.reconnect_delay)
     
     async def _send_subscription(self, subscription_id: str, query: str):
         """Send subscription request."""

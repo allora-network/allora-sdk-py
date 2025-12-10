@@ -94,7 +94,6 @@ class AlloraWorker:
 
         Args:
             run: Function that returns prediction values (str or float)
-            run_pkl: Path to pickle file containing a 'run' function
             wallet: Wallet configuration (private key, mnemonic, or file)
             network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
