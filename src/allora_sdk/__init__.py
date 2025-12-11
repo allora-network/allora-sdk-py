@@ -1,5 +1,14 @@
 from .worker import AlloraWorker
-from .rpc_client import AlloraRPCClient, AlloraNetworkConfig, TxManager, FeeTier
+from .rpc_client import (
+    AlloraRPCClient,
+    AlloraNetworkConfig,
+    AlloraWalletConfig,
+    TxManager,
+    FeeTier,
+    Signer,
+    LocalWalletSigner,
+    VaultSigner,
+)
 from .api_client import AlloraAPIClient
 from .logging_config import setup_sdk_logging
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
@@ -9,9 +18,14 @@ __all__ = [
     "AlloraRPCClient",
     "AlloraAPIClient",
     "AlloraNetworkConfig",
+    "AlloraWalletConfig",
     "FeeTier",
     "TxManager",
     "setup_sdk_logging",
     "LocalWallet",
     "PrivateKey",
+    # Signer Protocol
+    "Signer",
+    "LocalWalletSigner",
+    "VaultSigner",
 ]
