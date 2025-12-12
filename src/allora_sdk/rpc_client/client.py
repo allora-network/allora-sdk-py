@@ -9,20 +9,21 @@ import logging
 from typing import Optional
 
 import grpc
+from grpclib.client import Channel
 import certifi
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
 
-import allora_sdk.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
-import allora_sdk.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
-import allora_sdk.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
-import allora_sdk.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
-import allora_sdk.protos.emissions.v9 as emissions_v9
-import allora_sdk.protos.feemarket.feemarket.v1 as feemarket_v1
-import allora_sdk.protos.mint.v5 as mint_v5
-import allora_sdk.rest as rest
+import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
+import allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
+import allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
+import allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
+import allora_sdk.rpc_client.protos.emissions.v9 as emissions_v9
+import allora_sdk.rpc_client.protos.feemarket.feemarket.v1 as feemarket_v1
+import allora_sdk.rpc_client.protos.mint.v5 as mint_v5
+import allora_sdk.rpc_client.rest as rest
 from allora_sdk.rpc_client.client_auth import AuthClient
 from allora_sdk.rpc_client.client_bank import BankClient
 from allora_sdk.rpc_client.client_feemarket import FeemarketClient
@@ -74,13 +75,16 @@ class AlloraRPCClient:
         parsed_url = parse_url(self.network.url)
 
         if parsed_url.protocol == Protocol.GRPC:
-            if parsed_url.secure:
-                with open(certifi.where(), "rb") as f:
-                    trusted_certs = f.read()
-                credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
-                self.grpc_client = grpc.secure_channel(parsed_url.host_and_port, credentials)
-            else:
-                self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
+            # if parsed_url.secure:
+            #     with open(certifi.where(), "rb") as f:
+            #         trusted_certs = f.read()
+            #     credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
+            #     self.grpc_client = grpc.secure_channel(parsed_url.host_and_port, credentials)
+            # else:
+            #     self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
+
+
+            self.grpc_client = Channel(host=parsed_url.hostname, port=parsed_url.port, ssl=parsed_url.secure)
 
             # Set up gRPC services
             auth_query: rest.CosmosAuthV1Beta1QueryLike = cosmos_auth_v1beta1.QueryStub(self.grpc_client)
@@ -109,13 +113,14 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
             )
-        self.auth = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
-        self.bank = BankClient(query_client=bank_query, tx_manager=self.tx_manager)
+
+        self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
+        self.bank       = BankClient(query_client=bank_query, tx_manager=self.tx_manager)
         self.tendermint = TendermintClient(query_client=tendermint_query, tx_manager=self.tx_manager)
-        self.tx = TxClient(query_client=tx_query, tx_manager=self.tx_manager)
-        self.emissions = EmissionsClient(query_client=emissions_query, tx_manager=self.tx_manager)
-        self.mint = MintClient(query_client=mint_query)
-        self.feemarket = FeemarketClient(query_client=feemarket_query)
+        self.tx         = TxClient(query_client=tx_query, tx_manager=self.tx_manager)
+        self.emissions  = EmissionsClient(query_client=emissions_query, tx_manager=self.tx_manager)
+        self.mint       = MintClient(query_client=mint_query)
+        self.feemarket  = FeemarketClient(query_client=feemarket_query)
 
         if self.network.websocket_url is not None:
             self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
@@ -162,22 +167,6 @@ class AlloraRPCClient:
             return self.wallet.public_key().public_key_hex
         return None
     
-
-    def is_connected(self) -> bool:
-        """Check if client is connected to the network."""
-        try:
-            chain_id = self.get_latest_block().header.chain_id
-            return chain_id == self.network.chain_id
-        except Exception:
-            return False
-    
-
-    def get_latest_block(self):
-        resp = self.tendermint.get_latest_block()
-        if resp is None or resp.block is None:
-            raise Exception('could not get latest block')
-        return resp.block
-
 
     async def close(self):
         """Close client and cleanup resources."""

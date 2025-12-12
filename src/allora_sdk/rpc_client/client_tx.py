@@ -1,5 +1,5 @@
 import logging
-from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
+from allora_sdk.rpc_client.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
 from allora_sdk.rpc_client.tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")

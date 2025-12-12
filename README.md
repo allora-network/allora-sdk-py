@@ -81,7 +81,7 @@ When you run this snippet, a few things happen:
 - It configures this worker to communicate with our "testnet" network -- a place where no real funds are exchanged.
 - It automatically generates an identity on the platform for you, represented by an `allo` address.  This identity is saved in the same folder from which you run the worker script, and will be auto-detected if you run it again later.
 - It obtains a small amount of ALLO, the compute gas currency of the platform.
-- It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://testnet.explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting poor inferences to this topic.**
+- It registers your worker to start submitting inferences to [Allora's "sandbox" topic](https://testnet.explorer.allora.network/topics/69) -- a topic for newcomers to figure out their configuration and setup, and to become accustomed to how things work on the platform. **There are no penalties for submitting inaccurate inferences to this topic.**
 
 More resources:
 - [Forge Builder Kit](https://github.com/allora-network/allora-forge-builder-kit): walks you through the entire process of training a simple model from Allora datasets and deploying it on the network
@@ -94,27 +94,53 @@ More resources:
 from allora_sdk.worker import AlloraWorker
 from allora_sdk.rpc_client.tx_manager import FeeTier
 
-worker = AlloraWorker(
-    topic_id=1,
+inference_worker = AlloraWorker.inferer(
+    #
+    # Wallet config
+    #
+
+    # Initialize with a mnemonic
+    wallet = AlloraWalletConfig(mnemonic="..."),
+
+    # Initialize with a private key (hex-encoded)
+    wallet = AlloraWalletConfig(private_key="..."),
+
+    #
+    # Networking config
+    #
+
+    # Helpers for common networks/environments
+    network = AlloraNetworkConfig.testnet(),
+    network = AlloraNetworkConfig.mainnet(),
+    network = AlloraNetworkConfig.local(),
+
+    # Specify network options directly
+    network=AlloraNetworkConfig(
+        chain_id = "allora-testnet-1",
+        url = "grpc+https://allora-grpc.testnet.allora.network:443",
+        websocket_url = "wss://allora-rpc.testnet.allora.network/websocket",
+        fee_denom = "uallo",
+        fee_minimum_gas_price = 250_000_000.0,
+        congestion_aware_fees = True,
+        use_dynamic_gas_price = True,
+    ),
+
+    # Topic ID (see https://explorer.allora.network for the full list)
+    topic_id = 1,
 
     # Specify the inference function directly
-    run=my_model,
-    # Or specify a pickle file containing it (recommended to use the `dill` package for this)
-    predict_pkl="my_model.pkl",
+    run = my_model,
 
-    #
-    # These parameters give you the freedom to manage your identity on the platform as you prefer
-    #
-    mnemonic_file="./my_key",      # Custom mnemonic file location. Default is `./allora_key`.
-    mnemonic="foo bar baz ...",    # Mnemonic phrase if you prefer to specify it directly.
-    private_key="b381fa9cc20d...", # Hex-encoded 32-byte private key string.
-    api_key="UP-...",              # Allora API key -- see https://developer.allora.network for a free key.
+    # Allora API key -- see https://developer.allora.network for a free key.
+    # This is a convenience feature that allows the worker to fetch ALLO for gas fees on testnet.
+    api_key = "UP-...",
 
-    # `fee_tier` controls how much you pay to ensure your inferences are included within an epoch.  The options are ECO, STANDARD, or PRIORITY -- default is STANDARD.
-    fee_tier=FeeTier.PRIORITY,
+    # `fee_tier` controls how much you pay to ensure your inferences are included within
+    # an epoch.  The options are ECO, STANDARD, or PRIORITY -- default is STANDARD.
+    fee_tier = FeeTier.PRIORITY,
 
     # `debug` enables debug logging -- very noisy.
-    debug=True,
+    debug = True,
 )
 ```
 
@@ -130,9 +156,7 @@ Initialization is very flexible and straightforward.  The client can be initiali
 - environment variables
 
 ```python
-from allora_sdk import LocalWallet, PrivateKey
 from allora_sdk.rpc_client import AlloraRPCClient
-from allora_sdk.protos.emissions.v9 import GetActiveTopicsAtBlockRequest, EventNetworkLossSet
 
 # Initialize client manually
 client = AlloraRPCClient(
@@ -146,8 +170,10 @@ client = AlloraRPCClient(
     )
 )
 
-# Initialize client with preset network config defaults
+# Initialize client with preset network config defaults (testnet in this case)
 client = AlloraRPCClient.testnet()
+
+# Initialize client with preset network config, but some defaults overridden
 client = AlloraRPCClient.testnet(
     wallet=AlloraWalletConfig(mnemonic-"..."), # optional, only needed for sending transactions
     websocket_url="...",                       # optional, only needed for subscribing to events
@@ -167,9 +193,10 @@ client = AlloraRPCClient.testnet(
 client = AlloraRPCClient.from_env()
 
 # Query network data
-topics = client.emissions.query.get_active_topics_at_block(
-    emissions.GetActiveTopicsAtBlockRequest(block_height=1000)
-)
+request = GetLatestRegretStdNormRequest(topic_id=123)
+response = client.emissions.query.get_latest_regret_std_norm(request, height=6200000)
+
+# Some requests must be queried slightly differently
 
 # Submit transactions  
 response = await client.emissions.tx.insert_worker_payload(
@@ -179,11 +206,13 @@ response = await client.emissions.tx.insert_worker_payload(
 )
 
 # WebSocket subscriptions
+from allora_sdk.rpc_client.protos.emissions.v9 import EventWorkerSubmissionWindowOpened
+
 async def handle_event(event, block_height):
     print(f"New epoch: {event.topic_id} at block {block_height}")
 
 subscription_id = await client.events.subscribe_new_block_events_typed(
-    emissions.EventNetworkLossSet,
+    emissions.EventWorkerSubmissionWindowOpened,
     [ EventAttributeCondition("topic_id", "=", "1") ],
     handle_event
 )
@@ -205,7 +234,9 @@ Modules:
 - tendermint
 - tx
 
-Wire protocol is determined by the RPC url string passed to the config constructor.  `grpc+http(s)` will utilize the gRPC Protobuf client, whereas `rest+http(s)` will use Cosmos-LCD.
+Wire protocol is determined by the RPC url string passed to the config constructor:
+- `grpc+http(s)` will use the gRPC Protobuf client
+- `rest+http(s)` will use the Cosmos-LCD client
 
 - **Transaction support**: Fee estimation, signing, and broadcasting  
 - **WebSocket events**: Real-time blockchain event subscriptions.  For a usage example, see the `AlloraWorker`
@@ -241,7 +272,7 @@ asyncio.run(main())
 ### Features
 
 - **Price predictions**: BTC, ETH, SOL, etc. across multiple timeframes
-- **Topic discovery**: Browse all network topics and their metadata  
+- **Topic index**: Browse all network topics and their metadata  
 - **Confidence intervals**: Access prediction uncertainty bounds
 - **Async/await**: Fully asynchronous API
 
@@ -331,18 +362,18 @@ tox -e py312
 
 The SDK uses two code generation systems:
 
-**Protobuf Generation (betterproto2):**
+**gRPC Generation:**
 - Generates async Python clients from .proto files
 - Sources: Cosmos SDK, Allora Chain, googleapis
 - Output: `src/allora_sdk/protos/`
-- Command: `make proto`
+- Command: `make grpc`
 
-**REST Client Generation (custom, resides in the `scripts/` directory):**
+**REST Client Generation:**
 - Analyzes protobuf HTTP annotations to generate REST clients  
 - Matches gRPC client interfaces exactly
 - Sources: Same .proto files as above
 - Output: `src/allora_sdk/rest/`
-- Command: `make generate_rest_clients`
+- Command: `make rest`
 
 Both generators run automatically with `make dev`.
 
@@ -353,7 +384,11 @@ Both generators run automatically with `make dev`.
 make dev
 
 # After changes to .proto files
-make proto generate_rest_clients
+rm -rf src/allora_sdk/rpc_client/rest
+rm -rf src/allora_sdk/rpc_client/grpc
+rm -rf src/allora_sdk/rpc_client/interfaces
+rm -rf src/allora_sdk/rpc_client/protos
+make grpc rest
 
 # Run tests  
 tox

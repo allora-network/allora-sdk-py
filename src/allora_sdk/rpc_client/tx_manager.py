@@ -1,15 +1,11 @@
 import asyncio
 from enum import Enum
-from random import paretovariate
-import time
 import grpc
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
-import traceback
 from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
-import uuid
 
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
@@ -18,15 +14,15 @@ from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
-from allora_sdk.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
-from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
-from allora_sdk.protos.cosmos.base.abci.v1beta1 import TxResponse
-from allora_sdk.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
-from allora_sdk.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
-from allora_sdk.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
-from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
-from allora_sdk.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
-from allora_sdk.rest.feemarket_feemarket_v1_rest_client import FeemarketFeemarketV1QueryLike
+from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
+from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
+from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
+from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
+from allora_sdk.rpc_client.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
+from allora_sdk.rpc_client.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
+from allora_sdk.rpc_client.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
+from allora_sdk.rpc_client.rest.feemarket_feemarket_v1_rest_client import FeemarketFeemarketV1QueryLike
 
 
 logger = logging.getLogger("allora_sdk")
@@ -210,7 +206,7 @@ class TxManager:
         
         logger.debug(f"Simulating transaction for {type_url}")
         
-        resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+        resp = await self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
         if resp.info is None:
             raise Exception('account_info query response is none')
         info = resp.info
@@ -244,7 +240,7 @@ class TxManager:
         sim_request = SimulateRequest(tx_bytes=tx_bytes)
         
         try:
-            sim_response = self.tx_client.simulate(sim_request)
+            sim_response = await self.tx_client.simulate(sim_request)
             
             if sim_response is None or sim_response.gas_info is None:
                 raise Exception('Simulation response is None or missing gas_info')
@@ -368,7 +364,7 @@ class TxManager:
         gas_limit = int(gas_limit * gas_multiplier)
         fee = await self._calculate_optimal_fee(gas_limit, fee_multiplier)
 
-        resp = self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
+        resp = await self.auth_client.account_info(QueryAccountInfoRequest(address=str(self.wallet.address())))
         if resp.info is None:
             raise Exception('account_info query response is none')
         info = resp.info
@@ -400,7 +396,7 @@ class TxManager:
             mode=BroadcastMode.SYNC,
         )
 
-        broadcast_result = self.tx_client.broadcast_tx(req)
+        broadcast_result = await self.tx_client.broadcast_tx(req)
 
         if broadcast_result is None or broadcast_result.tx_response is None:
             raise Exception('broadcast_tx returned None - check network connectivity')
@@ -421,7 +417,7 @@ class TxManager:
         start = datetime.now()
         while True:
             try:
-                return self._get_tx(hash)
+                return await self._get_tx(hash)
             except TxNotFoundError:
                 pass
 
@@ -431,9 +427,9 @@ class TxManager:
 
             await asyncio.sleep(poll_period.total_seconds())
 
-    def _get_tx(self, hash: str):
+    async def _get_tx(self, hash: str):
         try:
-            resp = self.tx_client.get_tx(GetTxRequest(hash=hash))
+            resp = await self.tx_client.get_tx(GetTxRequest(hash=hash))
             if resp is None or resp.tx_response is None:
                 raise TxNotFoundError()
             return resp
@@ -443,6 +439,11 @@ class TxManager:
                 raise TxNotFoundError() from e
             raise
         except RuntimeError as e:
+            details = str(e)
+            if "tx" in details and "not found" in details:
+                raise TxNotFoundError() from e
+            raise
+        except Exception as e:
             details = str(e)
             if "tx" in details and "not found" in details:
                 raise TxNotFoundError() from e
@@ -510,7 +511,7 @@ class TxManager:
         # Try dynamic price if enabled
         if self.config.use_dynamic_gas_price and self.feemarket_client is not None:
             try:
-                response = self.feemarket_client.gas_price(
+                response = await self.feemarket_client.gas_price(
                     GasPriceRequest(denom=self.config.fee_denom)
                 )
                 if response.price is not None:
@@ -540,7 +541,7 @@ class TxManager:
             return None
 
         try:
-            state_resp = self.feemarket_client.state(StateRequest())
+            state_resp = await self.feemarket_client.state(StateRequest())
             if state_resp.state is None:
                 return None
 
@@ -550,7 +551,7 @@ class TxManager:
             if not state.window:
                 return None
 
-            params_resp = self.feemarket_client.params(ParamsRequest())
+            params_resp = await self.feemarket_client.params(ParamsRequest())
             if params_resp.params is None:
                 return None
 
@@ -616,10 +617,10 @@ class TxManager:
 
         try:
             # Check if account exists
-            _ = self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
+            _ = await self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
 
             # Check balance (estimate worst-case fee for checks)
-            resp = self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
+            resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
             if resp is not None and resp.balance is not None:
                 estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
 

@@ -8,6 +8,7 @@ across different execution environments (shell, Jupyter, CoLab).
 
 import asyncio
 from dataclasses import dataclass
+from decimal import Decimal
 from getpass import getpass
 import os
 import signal
@@ -16,23 +17,22 @@ from textwrap import dedent, indent
 import requests
 import logging
 import time
-from typing import Callable, Optional, AsyncIterator, Tuple, Type, TypeVar, Union, Awaitable, cast
-import dill
+from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
 
 from cosmpy.aerial.client import TxResponse
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
-from allora_sdk.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
-from allora_sdk.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
-from allora_sdk.protos.emissions.v3 import ReputerValueBundle, ValueBundle
-from allora_sdk.protos.emissions.v9 import GetTopicRequest
+from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
+from allora_sdk.rpc_client.protos.emissions.v3 import ReputerValueBundle, ValueBundle
+from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventWorkerSubmissionWindowOpened,
@@ -61,7 +61,7 @@ class _StopQueue:
     pass
 
 PredictionItem = Union[PredictionResult, Exception, _StopQueue]
-PredictFnResultType = str | float
+PredictFnResultType = str | float | Decimal
 PredictFnSync = Callable[[int], PredictFnResultType]
 PredictFnAsync = Callable[[int], Awaitable[PredictFnResultType]]
 PredictFn = Union[PredictFnSync, PredictFnAsync]
@@ -80,7 +80,7 @@ class AlloraWorker:
     @classmethod
     def inferer(
         cls,
-        run: PredictFn | Tuple[str, str],
+        run: PredictFn,
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -93,7 +93,9 @@ class AlloraWorker:
         Create an AlloraWorker configured as an inferer.
 
         Args:
-            run: Function that returns prediction values (str or float)
+            run: Either a function that returns prediction values (str or float), or a tuple
+                 where the first element is the path to a pickle file and the second element
+                 is the name of the function to run from that pickle file
             wallet: Wallet configuration (private key, mnemonic, or file)
             network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
@@ -163,7 +165,7 @@ class AlloraWorker:
 
     def __init__(
         self,
-        run: PredictFn | Tuple[str, str],
+        run: PredictFn,
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -175,28 +177,20 @@ class AlloraWorker:
     ) -> None:
         """
         Initialize the Allora worker.
-        
+
         Args:
-            topic_id: The Allora network topic ID to submit predictions to
-            _user_callback: Function that returns prediction values (str or float)
+            run: Either a function that returns prediction values (str or float), or a tuple
+                 where the first element is the path to a pickle file and the second element
+                 is the name of the function to run from that pickle file
             wallet: Wallet configuration (private key, mnemonic, or file)
+            network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
+            topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            log_level: `logging` package levels
+            polling_interval: Interval in seconds to poll for new submission windows
             submission_window_event_type: Event type to listen for submission windows (worker, reputer, forecaster)
             debug: Enable debug logging
         """
-        if isinstance(run, tuple):
-            pkl_file, fn_name = run
-            mod = dill.load_module_asdict(pkl_file)
-            if mod is None:
-                raise ValueError("Could not load the pickle file")
-
-            fn = mod.get(fn_name)
-            if fn is None:
-                raise ValueError("Pickle file must contain a 'run' function")
-            run = cast(PredictFn, fn)
-
         if not run:
             raise ValueError("'run' parameter must be provided")
         if not callable(run):
@@ -204,6 +198,7 @@ class AlloraWorker:
         self._user_callback = run
 
 
+        self._initialized = False
         self.topic_id = topic_id
         self._user_callback = run
         self.fee_tier = fee_tier
@@ -228,17 +223,22 @@ class AlloraWorker:
         self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
         self._subscription_id: Optional[str] = None
 
-        node_info_resp = self.client.tendermint.query.get_node_info(GetNodeInfoRequest())
+
+    async def _ensure_initialized(self):
+        if self._initialized:
+            return
+        self._initialized = True
+
+        node_info_resp = await self.client.tendermint.query.get_node_info(GetNodeInfoRequest())
         self._chain_id = node_info_resp.default_node_info.network if node_info_resp.default_node_info else ""
 
-        self._show_banner()
-        self._log_balance()
-        self._maybe_faucet_request()
+        await self._show_banner()
+        await self._log_balance()
+        await self._maybe_faucet_request()
 
 
-    def _show_banner(self):
-        resp = self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
-
+    async def _show_banner(self):
+        resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
 
         print(indent(dedent(
             rf"""
@@ -284,8 +284,10 @@ class AlloraWorker:
             return LocalWallet.from_mnemonic(mnemonic, "allo")
 
 
-    def _log_balance(self):
-        resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+    async def _log_balance(self):
+        await self._ensure_initialized()
+
+        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
             logger.error(f"Could not check balance for {str(self.wallet.address())}")
             return
@@ -295,7 +297,9 @@ class AlloraWorker:
         return
 
 
-    def _maybe_faucet_request(self):
+    async def _maybe_faucet_request(self):
+        await self._ensure_initialized()
+
         if self._chain_id != "allora-testnet-1":
             return
         if not self.client.network.faucet_url:
@@ -303,7 +307,7 @@ class AlloraWorker:
 
         MIN_ALLO = 100000000
 
-        resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
         if resp.balance is None:
             logger.error(f"    Could not check balance for {str(self.wallet.address())}")
             return
@@ -326,7 +330,7 @@ class AlloraWorker:
 
                 while True:
                     time.sleep(5)
-                    resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+                    resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
                     if resp.balance is None:
                         logger.error(f"    Could not check balance for {str(self.wallet.address())}")
                         continue
@@ -405,6 +409,8 @@ class AlloraWorker:
             >>> async for result in worker.run():
             ...     print(f"Submitted: {result}")
         """
+        await self._ensure_initialized()
+
         if self._ctx and not self._ctx.is_cancelled():
             raise RuntimeError("Worker is already running")
             
@@ -417,7 +423,7 @@ class AlloraWorker:
         logger.debug(f"Starting Allora worker for topic {self.topic_id}")
         
         try:
-            resp = self.client.emissions.query.is_worker_registered_in_topic_id(
+            resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
                 IsWorkerRegisteredInTopicIdRequest(
                     topic_id=self.topic_id,
                     address=str(self.wallet.address()),
@@ -450,7 +456,9 @@ class AlloraWorker:
         finally:
             await self._cleanup(ctx)
 
-    async def _run_with_context(self, ctx: Context) -> AsyncIterator[PredictionResult |  Exception]:
+    async def _run_with_context(self, ctx: Context) -> AsyncIterator[PredictionResult | Exception]:
+        await self._ensure_initialized()
+
         polling = asyncio.create_task(self._polling_worker(ctx))
         ctx.add_cleanup_task(polling)
 
@@ -477,6 +485,8 @@ class AlloraWorker:
             raise
             
     async def _monitor_cancellation(self, ctx: Context):
+        await self._ensure_initialized()
+
         await ctx.wait_for_cancellation()
         if self._prediction_queue is not None:
             try:
@@ -485,6 +495,8 @@ class AlloraWorker:
                 pass
 
     async def _polling_worker(self, ctx: Context):
+        await self._ensure_initialized()
+
         logger.info(f"🔄 Starting polling worker")
         
         while not ctx.is_cancelled():
@@ -509,6 +521,8 @@ class AlloraWorker:
     
 
     async def _subscribe_websocket_events(self):
+        await self._ensure_initialized()
+
         self._subscription_id = await self.client.events.subscribe_new_block_events_typed(
             self.submission_window_event_type,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
@@ -532,6 +546,8 @@ class AlloraWorker:
 
 
     async def _handle_submission_window_opened(self, event: SubmissionWindowOpenedEvent, height: int):
+        await self._ensure_initialized()
+
         ctx = self._ctx
         if ctx is None or ctx.is_cancelled():
             return
@@ -545,10 +561,12 @@ class AlloraWorker:
 
 
     async def _maybe_submit(self, ctx: Context, nonce: Optional[int] = None):
+        await self._ensure_initialized()
+
         if ctx.is_cancelled():
             return
 
-        can_submit_resp = self.client.emissions.query.can_submit_worker_payload(
+        can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
             CanSubmitWorkerPayloadRequest(
                 address=str(self.wallet.address()),
                 topic_id=self.topic_id,
@@ -559,7 +577,7 @@ class AlloraWorker:
             self.stop()
             return
 
-        resp = self.client.emissions.query.get_unfulfilled_worker_nonces(
+        resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
             GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
         )
         nonces     = { x.block_height for x in resp.nonces.nonces } if resp.nonces is not None else set()
@@ -608,13 +626,13 @@ class AlloraWorker:
                     logger.info(f"     - View on explorer: {explorer_url}")
                     self.submitted_nonces.add(nonce)
 
-                resp = self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+                resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
                 if resp.balance is None:
                     logger.error(f"Could not check balance for {str(self.wallet.address())}")
                     continue
 
-                self._log_balance()
-                self._maybe_faucet_request()
+                await self._log_balance()
+                await self._maybe_faucet_request()
 
             except Exception as e:
                 logger.error(f"Error submitting for nonce {nonce}: {e}")
@@ -632,7 +650,7 @@ class AlloraWorker:
                     await self._prediction_queue.put(result)
 
 
-    def _sanity_check_submission(self, prediction: float) -> None:
+    async def _sanity_check_submission(self, prediction: float) -> None:
         """
         Sanity check user's prediction against network consensus using z-score analysis.
 
@@ -643,9 +661,11 @@ class AlloraWorker:
         Args:
             prediction: User's prediction value to check
         """
+        await self._ensure_initialized()
+
         try:
             # Query latest network inferences to get consensus
-            response = self.client.emissions.query.get_latest_network_inferences(
+            response = await self.client.emissions.query.get_latest_network_inferences(
                 GetLatestNetworkInferencesRequest(topic_id=self.topic_id)
             )
 
@@ -696,6 +716,8 @@ class AlloraWorker:
 
 
     async def _submit(self, nonce: int):
+        await self._ensure_initialized()
+
         if not self.wallet:
             return Exception('no wallet')
 
@@ -712,7 +734,7 @@ class AlloraWorker:
 
         # Sanity check prediction against network consensus
         try:
-            self._sanity_check_submission(float(prediction))
+            await self._sanity_check_submission(float(prediction))
         except (ValueError, TypeError):
             logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 

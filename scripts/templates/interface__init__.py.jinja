@@ -1,0 +1,10 @@
+"""Generated Protocol interfaces for RPC clients."""
+{%- for filename, class_name, protocol_name in exports %}
+from .{{ filename }} import {{ protocol_name }}
+{%- endfor %}
+
+__all__ = [
+{%- for filename, class_name, protocol_name in exports %}
+    "{{ protocol_name }}",
+{%- endfor %}
+]

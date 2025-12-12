@@ -12,16 +12,20 @@ GOGOPROTO_DIR := $(PROTO_DEPS)/gogoproto
 GOOGLEAPIS_DIR := $(PROTO_DEPS)/googleapis
 ALLORA_CHAIN_DIR := $(PROTO_DEPS)/allora-chain
 
-ALLORA_PROTOS_DIR := ./src/allora_sdk/protos
-REST_CLIENT_OUT_DIR := ./src/allora_sdk/rest
+ALLORA_PROTOS_DIR := ./src/allora_sdk/rpc_client/protos
+INTERFACE_OUT_DIR := ./src/allora_sdk/rpc_client/interfaces
+REST_CLIENT_OUT_DIR := ./src/allora_sdk/rpc_client/rest
+GRPC_WRAPPER_OUT_DIR := ./src/allora_sdk/rpc_client/grpc
 
-# --- Stamps (single-file “products” for multi-file gens)
+# --- Stamps (single-file "products" for multi-file gens)
 PROTO_STAMP := $(ALLORA_PROTOS_DIR)/.generated.stamp
+INTERFACE_STAMP := $(INTERFACE_OUT_DIR)/.generated.stamp
 REST_STAMP  := $(REST_CLIENT_OUT_DIR)/.generated.stamp
+GRPC_STAMP  := $(GRPC_WRAPPER_OUT_DIR)/.generated.stamp
 
 # --- Default
 .PHONY: dev
-dev: install_as_editable $(PROTO_STAMP) $(REST_STAMP)
+dev: install_as_editable $(PROTO_STAMP) $(INTERFACE_STAMP) $(REST_STAMP) $(GRPC_STAMP)
 	@echo "✅ Ready for development."
 
 .PHONY: install_as_editable
@@ -85,7 +89,13 @@ proto-deps-update:
 $(ALLORA_PROTOS_DIR):
 	mkdir -p "$@"
 
+$(INTERFACE_OUT_DIR):
+	mkdir -p "$@"
+
 $(REST_CLIENT_OUT_DIR):
+	mkdir -p "$@"
+
+$(GRPC_WRAPPER_OUT_DIR):
 	mkdir -p "$@"
 
 # --- Protobuf generation (stamp depends on repos + generator + Makefile)
@@ -112,7 +122,7 @@ $(PROTO_STAMP): \
 		--proto_path="$(GOOGLEAPIS_DIR)" \
 		--proto_path="$(GOGOPROTO_DIR)" \
 		--python_betterproto2_out="$(ALLORA_PROTOS_DIR)" \
-		--python_betterproto2_opt=client_generation=sync_async \
+		--python_betterproto2_opt=client_generation=async \
 		$$(find "$(ALLORA_CHAIN_DIR)/x/emissions/proto" -type f -name '*.proto') \
 		$$(find "$(ALLORA_CHAIN_DIR)/x/mint/proto" -type f -name '*.proto') \
 		$$(find "$(COSMOS_SDK_DIR)/proto" -type f -name '*.proto') \
@@ -130,10 +140,53 @@ $(PROTO_STAMP): \
 .PHONY: proto
 proto: $(PROTO_STAMP)
 
+# --- Interface generation
+$(INTERFACE_STAMP): \
+  $(PROTO_STAMP) \
+  scripts/generate_interfaces_from_protos.py \
+  scripts/templates/interface.py.jinja \
+  scripts/templates/interface__init__.py.jinja \
+  Makefile \
+  | $(INTERFACE_OUT_DIR)
+	rm -rf "$(INTERFACE_OUT_DIR)"
+	mkdir -p "$(INTERFACE_OUT_DIR)"
+
+	python scripts/generate_interfaces_from_protos.py \
+		--out "$(INTERFACE_OUT_DIR)" \
+		--include-tags \
+			emissions.v9 \
+			mint.v5 \
+			cosmos.tx \
+			cosmos.base.tendermint.v1beta1 \
+			cosmos.auth.v1beta1 \
+			cosmos.bank.v1beta1 \
+			feemarket.v1 \
+		--proto-files-dirs \
+			"$(ALLORA_CHAIN_DIR)/x" \
+			"$(COSMOS_SDK_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto/feemarket" \
+		--include-dirs \
+			"$(ALLORA_CHAIN_DIR)/x/emissions/proto" \
+			"$(ALLORA_CHAIN_DIR)/x/mint/proto" \
+			"$(COSMOS_SDK_DIR)/proto" \
+			"$(COSMOS_PROTO_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto" \
+			"$(GOGOPROTO_DIR)" \
+			"$(GOOGLEAPIS_DIR)" \
+		--base-import-path "allora_sdk.rpc_client.protos"
+
+	touch "$(INTERFACE_OUT_DIR)/__init__.py"
+	touch "$@"
+
+.PHONY: interfaces
+interfaces: $(INTERFACE_STAMP)
+
 # --- REST client generation
 $(REST_STAMP): \
   $(PROTO_STAMP) \
+  $(INTERFACE_STAMP) \
   scripts/generate_rest_client_from_protos.py \
+  scripts/templates/rest_client.py.jinja \
   Makefile \
   | $(REST_CLIENT_OUT_DIR)
 	rm -rf "$(REST_CLIENT_OUT_DIR)"
@@ -160,18 +213,63 @@ $(REST_STAMP): \
 			"$(COSMOS_PROTO_DIR)/proto" \
 			"$(FEEMARKET_DIR)/proto" \
 			"$(GOGOPROTO_DIR)" \
-			"$(GOOGLEAPIS_DIR)"
+			"$(GOOGLEAPIS_DIR)" \
+		--base-import-path "allora_sdk.rpc_client.protos" \
+		--interface-import-path "allora_sdk.rpc_client.interfaces"
 
 	touch "$(REST_CLIENT_OUT_DIR)/__init__.py"
 	touch "$@"
 
-.PHONY: generate_rest_clients
-generate_rest_clients: $(REST_STAMP)
+.PHONY: rest
+rest: $(REST_STAMP)
+
+# --- gRPC wrapper generation
+$(GRPC_STAMP): \
+  $(PROTO_STAMP) \
+  $(INTERFACE_STAMP) \
+  scripts/generate_grpc_client_wrappers.py \
+  scripts/templates/grpc_client.py.jinja \
+  scripts/templates/grpc__init__.py.jinja \
+  Makefile \
+  | $(GRPC_WRAPPER_OUT_DIR)
+	rm -rf "$(GRPC_WRAPPER_OUT_DIR)"
+	mkdir -p "$(GRPC_WRAPPER_OUT_DIR)"
+
+	python scripts/generate_grpc_client_wrappers.py \
+		--out "$(GRPC_WRAPPER_OUT_DIR)" \
+		--include-tags \
+			emissions.v9 \
+			mint.v5 \
+			cosmos.tx \
+			cosmos.base.tendermint.v1beta1 \
+			cosmos.auth.v1beta1 \
+			cosmos.bank.v1beta1 \
+			feemarket.v1 \
+		--proto-files-dirs \
+			"$(ALLORA_CHAIN_DIR)/x" \
+			"$(COSMOS_SDK_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto/feemarket" \
+		--include-dirs \
+			"$(ALLORA_CHAIN_DIR)/x/emissions/proto" \
+			"$(ALLORA_CHAIN_DIR)/x/mint/proto" \
+			"$(COSMOS_SDK_DIR)/proto" \
+			"$(COSMOS_PROTO_DIR)/proto" \
+			"$(FEEMARKET_DIR)/proto" \
+			"$(GOGOPROTO_DIR)" \
+			"$(GOOGLEAPIS_DIR)" \
+		--base-import-path "allora_sdk.rpc_client.protos" \
+		--interface-import-path "allora_sdk.rpc_client.interfaces"
+
+	touch "$(GRPC_WRAPPER_OUT_DIR)/__init__.py"
+	touch "$@"
+
+.PHONY: grpc
+grpc: $(GRPC_STAMP)
 
 # --- Clean
 .PHONY: clean
 clean:
-	rm -rf "$(ALLORA_PROTOS_DIR)" "$(REST_CLIENT_OUT_DIR)" "$(PROTO_DEPS)"
+	rm -rf "$(ALLORA_PROTOS_DIR)" "$(INTERFACE_OUT_DIR)" "$(REST_CLIENT_OUT_DIR)" "$(GRPC_WRAPPER_OUT_DIR)" "$(PROTO_DEPS)"
 
 .PHONY: distclean
 distclean: clean

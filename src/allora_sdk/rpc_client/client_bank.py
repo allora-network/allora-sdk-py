@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 import logging
 from typing import Optional, Union
-from allora_sdk.protos.cosmos.bank.v1beta1 import MsgSend
-from allora_sdk.protos.cosmos.base.v1beta1 import Coin
-from allora_sdk.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
+from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import MsgSend
+from allora_sdk.rpc_client.protos.cosmos.base.v1beta1 import Coin
+from allora_sdk.rpc_client.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
 
 logger = logging.getLogger("allora_sdk")

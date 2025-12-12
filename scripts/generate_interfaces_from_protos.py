@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Cosmos-LCD REST Client Generator from Protobuf Files
+Generate Protocol interfaces from Protobuf Files
 
-Generates Python REST clients from protobuf files with google.api.http annotations.
-The generated REST clients match the exact method signatures of the protobuf QueryServiceStub classes.
+Generates Python Protocol interfaces from protobuf files with google.api.http annotations.
+These interfaces can be implemented by both REST and gRPC clients.
 """
 
 import argparse
@@ -26,7 +26,7 @@ class ProtobufAnalyzer:
     def __init__(self, base_import_path: str = "allora_sdk.rpc_client.protos"):
         self.base_import_path = base_import_path
         self.discovered_modules: List[ProtobufModule] = []
-        
+
     def discover_modules(self, include_tags: List[str], proto_files_dirs: List[Path], include_dirs: List[Path]):
         proto_files = []
         for tag in include_tags:
@@ -35,21 +35,20 @@ class ProtobufAnalyzer:
             for d in proto_files_dirs:
                 potential_files = list(d.glob(f"**/{'/'.join(tag_parts)}/**/*.proto"))
                 proto_files.extend(potential_files)
-        
+
             if not proto_files:
                 logger.warning(f"No proto files found for tag {tag}")
             files = '\n'.join([str(f) for f in proto_files])
             logger.info(f"Analyzing proto files for {tag}: \n{files}")
 
         return analyze_proto(proto_files, include_dirs)
-    
-class RestClientGenerator:
-    """Generates REST client code from protobuf module information."""
 
-    def __init__(self, base_import_path: str, interface_import_path: str, modules: ProtobufModules):
+class InterfaceGenerator:
+    """Generates Protocol interface code from protobuf module information."""
+
+    def __init__(self, base_import_path: str, modules: ProtobufModules):
         self.generated_exports: List[Tuple[str, str, str]] = []  # List of (filename, class_name, protocol_name) tuples
         self.base_import_path = base_import_path
-        self.interface_import_path = interface_import_path
         self.modules = modules
 
         # Initialize Jinja2 environment
@@ -58,10 +57,10 @@ class RestClientGenerator:
             loader=FileSystemLoader(template_dir),
             keep_trailing_newline=True
         )
-        
-    def generate_clients(self, module: ProtobufModule) -> str:
-        """Generate REST client code for a protobuf module."""
-        filename = f"{module.name.replace('.', '_')}_rest_client"
+
+    def generate_interfaces(self, module: ProtobufModule) -> str:
+        """Generate Protocol interface code for a protobuf module."""
+        filename = f"{module.name.replace('.', '_')}_interface"
 
         # Prepare data for template
         types_by_module = self._collect_types(module)
@@ -69,7 +68,7 @@ class RestClientGenerator:
 
         for name, service in module.services.items():
             if len(service.methods) == 0:
-                logging.info(f"skipping REST client generation for {name}")
+                logging.info(f"skipping interface generation for {name}")
                 continue
 
             class_name = self._get_client_class_name(module.name, service.name)
@@ -80,14 +79,13 @@ class RestClientGenerator:
             services.append(service_data)
 
         # Render template
-        template = self.jinja_env.get_template("rest_client.py.jinja")
+        template = self.jinja_env.get_template("interface.py.jinja")
         return template.render(
             base_import_path=self.base_import_path,
-            interface_import_path=self.interface_import_path,
             types_by_module=types_by_module,
             services=services
         )
-    
+
     def _collect_types(self, module: ProtobufModule) -> Dict[str, List[Tuple[str, str]]]:
         """Collect all types used in the module and organize them by source module."""
         request_types = set()
@@ -112,7 +110,7 @@ class RestClientGenerator:
             types_by_module[mod_name].append((type_name, betterproto_name))
 
         return types_by_module
-    
+
     def _prepare_service_data(self, module: ProtobufModule, service: ServiceInfo, class_name: str, protocol_name: str) -> Dict[str, Any]:
         """Prepare service data for template rendering."""
         methods_with_bindings = [m for _, m in service.methods.items() if m.http and len(m.http) > 0]
@@ -127,10 +125,9 @@ class RestClientGenerator:
             "class_name": class_name,
             "protocol_name": protocol_name,
             "title": service.name.title(),
-            "methods_with_bindings": prepared_methods,
-            "interface_filename": f"{module.name.replace('.', '_')}_interface"
+            "methods_with_bindings": prepared_methods
         }
-    
+
     def _prepare_method_data(self, module: ProtobufModule, method: MethodInfo) -> Dict[str, Any]:
         """Prepare method data for template rendering."""
         binding = method.http[0]
@@ -159,25 +156,25 @@ class RestClientGenerator:
             "query_params": query_params,
             "url_path": path
         }
-    
+
 
     def _get_client_class_name(self, module_name: str, service_name: str) -> str:
-        """Get the REST client class name."""
+        """Get the REST client class name (for compatibility)."""
         parts = module_name.split('.')
         return f"{''.join(p.title() for p in parts)}Rest{service_name}Client"
-    
+
     def _get_protocol_name(self, module_name: str, service_name: str) -> str:
         """Get the protocol interface name."""
         parts = module_name.split('.')
         return f"{''.join(p.title() for p in parts)}{service_name}Like"
-    
+
     def generate_init_file(self) -> str:
-        """Generate __init__.py file with exports for all generated clients."""
+        """Generate __init__.py file with exports for all generated interfaces."""
         if not self.generated_exports:
             return ""
 
         # Render template
-        template = self.jinja_env.get_template("rest__init__.py.jinja")
+        template = self.jinja_env.get_template("interface__init__.py.jinja")
         return template.render(exports=self.generated_exports)
 
 def _camel_to_snake(camel_str: str) -> str:
@@ -189,10 +186,10 @@ def _camel_to_snake(camel_str: str) -> str:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Generate Cosmos-LCD REST clients from protobuf files with HTTP annotations"
+        description="Generate Protocol interfaces from protobuf files with HTTP annotations"
     )
     parser.add_argument(
-        "--out", 
+        "--out",
         required=True,
         help="Output directory for generated files"
     )
@@ -208,11 +205,6 @@ def main():
         help="Base import path for protobuf modules"
     )
     parser.add_argument(
-        "--interface-import-path",
-        default="allora_sdk.rpc_client.interfaces",
-        help="Import path for Protocol interface modules"
-    )
-    parser.add_argument(
         "--proto-files-dirs",
         nargs="+",
         default=[],
@@ -224,13 +216,13 @@ def main():
         default=[],
         help="Include directories for proto file analysis"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Ensure output directory exists
     output_dir = Path(args.out)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Prepare paths
     proto_files_dirs = [Path(d) for d in args.proto_files_dirs]
     include_dirs = [Path(d) for d in args.include_dirs] if args.include_dirs else proto_files_dirs
@@ -238,7 +230,7 @@ def main():
     # Discover and analyze modules
     analyzer = ProtobufAnalyzer(args.base_import_path)
     modules = analyzer.discover_modules(args.include_tags, proto_files_dirs, include_dirs)
-    
+
     if len(modules) == 0:
         logger.error("No modules discovered. Check your include-tags and proto file paths.")
         sys.exit(1)
@@ -246,33 +238,33 @@ def main():
         logger.info(f"{len(modules)} modules discovered.")
         for _, m in modules.modules.items():
             logger.info(f"  - {m.name}")
-        
-    generator = RestClientGenerator(args.base_import_path, args.interface_import_path, modules)
-    
+
+    generator = InterfaceGenerator(args.base_import_path, modules)
+
     for name, module in modules:
         if len(module.services) == 0:
-            logger.info(f"Skipping REST client generation for {name}...")
+            logger.info(f"Skipping interface generation for {name}...")
             continue
 
-        logger.info(f"Generating REST client for {name}...")
-        
-        client_code = generator.generate_clients(module)
-        filename = f"{module.name.replace('.', '_')}_rest_client.py"
+        logger.info(f"Generating Protocol interfaces for {name}...")
+
+        interface_code = generator.generate_interfaces(module)
+        filename = f"{module.name.replace('.', '_')}_interface.py"
         output_file = output_dir / filename
-        
+
         with open(output_file, 'w') as f:
-            f.write(client_code)
-            
+            f.write(interface_code)
+
         logger.info(f"Generated {output_file}")
-    
+
     init_content = generator.generate_init_file()
     if init_content:
         init_file = output_dir / "__init__.py"
         with open(init_file, 'w') as f:
             f.write(init_content)
         logger.info(f"Generated {init_file}")
-    
-    logger.info(f"Generated REST clients for {len(modules)} modules in {output_dir}")
+
+    logger.info(f"Generated Protocol interfaces for {len(modules)} modules in {output_dir}")
 
 
 if __name__ == "__main__":

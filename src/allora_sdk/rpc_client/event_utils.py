@@ -26,8 +26,8 @@ class EventRegistry:
             self._discover_event_classes()
 
     def _discover_event_classes(self) -> None:
-        """Auto-discover Event* classes from all allora_sdk.protos subpackages."""
-        base_pkg_name = "allora_sdk.protos"
+        """Auto-discover Event* classes from all allora_sdk.rpc_client.protos subpackages."""
+        base_pkg_name = "allora_sdk.rpc_client.protos"
         try:
             base_pkg = importlib.import_module(base_pkg_name)
         except ImportError as err:

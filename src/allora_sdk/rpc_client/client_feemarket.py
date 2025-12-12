@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import logging
 from allora_sdk.rpc_client.tx_manager import TxManager
-from allora_sdk.rest import FeemarketFeemarketV1QueryLike
+from allora_sdk.rpc_client.rest import FeemarketFeemarketV1QueryLike
 
 logger = logging.getLogger("allora_sdk")
 
