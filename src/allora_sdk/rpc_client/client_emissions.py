@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Optional, Union
-from allora_sdk.protos.emissions.v3 import Nonce
-from allora_sdk.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v3 import Nonce
+from allora_sdk.rpc_client.protos.emissions.v9 import (
     BulkAddToTopicReputerWhitelistRequest,
     BulkAddToTopicWorkerWhitelistRequest,
     CreateNewTopicRequest,
@@ -16,7 +16,7 @@ from allora_sdk.protos.emissions.v9 import (
     RegisterRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
-from allora_sdk.rest import EmissionsV9QueryServiceLike
+from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
 

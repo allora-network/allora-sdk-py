@@ -1,0 +1,56 @@
+import requests_async
+import json
+{%- for module_name, types in types_by_module.items() %}
+from {{ base_import_path }}.{{ module_name }} import (
+{%- for type_name, betterproto_name in types %}
+    {{ betterproto_name }} as {{ module_name.replace('.', '_') }}_{{ type_name }},
+{%- endfor %}
+)
+{%- endfor %}
+{%- for service in services %}
+from {{ interface_import_path }}.{{ service.interface_filename }} import {{ service.protocol_name }}
+{%- endfor %}
+
+{%- for service in services %}
+
+class {{ service.class_name }}({{ service.protocol_name }}):
+    """{{ service.title }} REST client."""
+
+    def __init__(self, base_url: str):
+        """
+        Initialize REST client.
+
+        :param base_url: Base URL for the REST API
+        """
+        self.base_url = base_url.rstrip('/')
+        self.session = requests_async.AsyncSession()
+
+    def __del__(self):
+        """Clean up session on deletion."""
+        if hasattr(self, 'session'):
+            self.session.close()
+{%- for method in service.methods_with_bindings %}
+
+{%- if method.has_path_params %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }}, height: int | None = None) -> {{ method.response_type_name }}:
+{%- else %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }} | None = None, height: int | None = None) -> {{ method.response_type_name }}:
+{%- endif %}
+{%- if method.query_params %}
+        params = {
+{%- for param in method.query_params %}
+            "{{ param }}": message.{{ param }} if message else None,
+{%- endfor %}
+        }
+{%- else %}
+        params = {}
+{%- endif %}
+        url = self.base_url + f"{{ method.url_path }}"
+        headers = {"x-cosmos-block-height": height} if height else None
+        response = await self.session.get(url, params=params)
+        response.raise_for_status()
+        return {{ method.response_type_name }}().from_json(response.text)
+
+{% endfor %}
+
+{% endfor %}

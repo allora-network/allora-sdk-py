@@ -7,8 +7,8 @@ from unittest.mock import Mock, MagicMock
 from decimal import Decimal
 from allora_sdk.rpc_client.tx_manager import TxManager
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
-from allora_sdk.protos.feemarket.feemarket.v1 import GasPriceResponse
-from allora_sdk.protos.cosmos.base.v1beta1 import DecCoin
+from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceResponse
+from allora_sdk.rpc_client.protos.cosmos.base.v1beta1 import DecCoin
 
 async def test_fee_calculation_with_dynamic_prices():
     """Test that fees are calculated correctly with cosmos.Dec format gas prices."""
