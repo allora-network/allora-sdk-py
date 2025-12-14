@@ -3,6 +3,8 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DELETE_ON_ERROR:
 
+PYTHON_COMMAND := uv run python
+
 # --- Paths
 PROTO_DEPS := ./proto-deps
 COSMOS_SDK_DIR := $(PROTO_DEPS)/cosmos-sdk
@@ -25,12 +27,15 @@ GRPC_STAMP  := $(GRPC_WRAPPER_OUT_DIR)/.generated.stamp
 
 # --- Default
 .PHONY: dev
-dev: install_as_editable $(PROTO_STAMP) $(INTERFACE_STAMP) $(REST_STAMP) $(GRPC_STAMP)
+dev: install_as_editable codegen
 	@echo "✅ Ready for development."
 
 .PHONY: install_as_editable
 install_as_editable:
 	uv pip install -e ".[dev]" ".[codegen]"
+
+.PHONY: codegen
+codegen: $(PROTO_STAMP) $(INTERFACE_STAMP) $(REST_STAMP) $(GRPC_STAMP)
 
 .PHONY: wheel
 wheel:
@@ -113,7 +118,7 @@ $(PROTO_STAMP): \
 	mkdir -p "$(ALLORA_PROTOS_DIR)"
 
 	# Run protoc via uv/venv; evaluate `find` at recipe time with $$()
-	python -m grpc_tools.protoc \
+	$(PYTHON_COMMAND) -m grpc_tools.protoc \
 		--proto_path="$(ALLORA_CHAIN_DIR)/x/emissions/proto" \
 		--proto_path="$(ALLORA_CHAIN_DIR)/x/mint/proto" \
 		--proto_path="$(COSMOS_SDK_DIR)/proto" \
@@ -128,7 +133,7 @@ $(PROTO_STAMP): \
 		$$(find "$(COSMOS_SDK_DIR)/proto" -type f -name '*.proto') \
 		$$(find "$(FEEMARKET_DIR)/proto/feemarket" -type f -name '*.proto')
 
-	python scripts/generate_custom_message_pool.py \
+	$(PYTHON_COMMAND) scripts/generate_custom_message_pool.py \
 		--out "$(ALLORA_PROTOS_DIR)"
 
 	# ensure packages are importable
@@ -151,7 +156,7 @@ $(INTERFACE_STAMP): \
 	rm -rf "$(INTERFACE_OUT_DIR)"
 	mkdir -p "$(INTERFACE_OUT_DIR)"
 
-	python scripts/generate_interfaces_from_protos.py \
+	$(PYTHON_COMMAND) scripts/generate_interfaces_from_protos.py \
 		--out "$(INTERFACE_OUT_DIR)" \
 		--include-tags \
 			emissions.v9 \
@@ -192,7 +197,7 @@ $(REST_STAMP): \
 	rm -rf "$(REST_CLIENT_OUT_DIR)"
 	mkdir -p "$(REST_CLIENT_OUT_DIR)"
 
-	python scripts/generate_rest_client_from_protos.py \
+	$(PYTHON_COMMAND) scripts/generate_rest_client_from_protos.py \
 		--out "$(REST_CLIENT_OUT_DIR)" \
 		--include-tags \
 			emissions.v9 \
@@ -235,7 +240,7 @@ $(GRPC_STAMP): \
 	rm -rf "$(GRPC_WRAPPER_OUT_DIR)"
 	mkdir -p "$(GRPC_WRAPPER_OUT_DIR)"
 
-	python scripts/generate_grpc_client_wrappers.py \
+	$(PYTHON_COMMAND) scripts/generate_grpc_client_wrappers.py \
 		--out "$(GRPC_WRAPPER_OUT_DIR)" \
 		--include-tags \
 			emissions.v9 \
