@@ -1,0 +1,48 @@
+name: Forbid merge commits on non-protected branches
+
+on:
+  push:
+    branches-ignore:
+      - master
+      - dev
+
+jobs:
+  no-merge-commits:
+    name: Block merge commits on feature/hotfix branches
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # required to inspect history properly
+
+      - name: Detect merge commits in pushed range
+        run: |
+          set -euo pipefail
+
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+
+          echo "Checking commits from $BEFORE to $AFTER"
+
+          # List merge commits in the pushed range
+          MERGES=$(git rev-list --merges "$BEFORE..$AFTER" || true)
+
+          if [[ -n "$MERGES" ]]; then
+            echo "::error::Merge commits are not allowed on this branch."
+            echo ""
+            echo "Found the following merge commit(s):"
+            git show --oneline $MERGES
+            echo ""
+            echo "Policy:"
+            echo "  - Do NOT merge into feature/hotfix branches"
+            echo "  - Rebase from 'dev' instead:"
+            echo ""
+            echo "      git fetch origin"
+            echo "      git rebase origin/dev"
+            echo ""
+            exit 1
+          fi
+
+          echo "✅ No merge commits detected."
