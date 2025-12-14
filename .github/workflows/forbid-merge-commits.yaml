@@ -8,41 +8,87 @@ on:
 
 jobs:
   no-merge-commits:
-    name: Block merge commits on feature/hotfix branches
+    name: Block merge commits on non-dev/master branches
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # required to inspect history properly
+          fetch-depth: 0
 
-      - name: Detect merge commits in pushed range
+      - name: Fetch base branches
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin dev master
+
+      - name: Detect illegal merge commits
         run: |
           set -euo pipefail
 
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.sha }}"
+          BRANCH="${{ github.ref_name }}"
+          HEAD="${{ github.sha }}"
 
-          echo "Checking commits from $BEFORE to $AFTER"
+          git fetch --no-tags origin "$BRANCH"
+          git checkout -q "$HEAD"
 
-          # List merge commits in the pushed range
-          MERGES=$(git rev-list --merges "$BEFORE..$AFTER" || true)
+          DEV_REF="origin/dev"
+          MASTER_REF="origin/master"
 
-          if [[ -n "$MERGES" ]]; then
-            echo "::error::Merge commits are not allowed on this branch."
-            echo ""
-            echo "Found the following merge commit(s):"
-            git show --oneline $MERGES
+          MB_DEV="$(git merge-base HEAD "$DEV_REF" || true)"
+          MB_MASTER="$(git merge-base HEAD "$MASTER_REF" || true)"
+
+          # Fail if the branch does not descend from dev OR master
+          if [[ -z "$MB_DEV" && -z "$MB_MASTER" ]]; then
+            echo "::error::Branch '$BRANCH' does not descend from 'dev' or 'master'."
             echo ""
             echo "Policy:"
-            echo "  - Do NOT merge into feature/hotfix branches"
-            echo "  - Rebase from 'dev' instead:"
+            echo "  - All feature/hotfix branches must be created from 'dev' or 'master'."
             echo ""
-            echo "      git fetch origin"
-            echo "      git rebase origin/dev"
-            echo ""
+            echo "Fix:"
+            echo "  git checkout dev"
+            echo "  git pull origin dev"
+            echo "  git checkout -b <new-branch>"
             exit 1
           fi
 
-          echo "✅ No merge commits detected."
+          # Select the closer base branch
+          if [[ -n "$MB_DEV" && -n "$MB_MASTER" ]]; then
+            if git merge-base --is-ancestor "$MB_MASTER" "$MB_DEV"; then
+              BASE_REF="$DEV_REF"
+              BASE_NAME="dev"
+            elif git merge-base --is-ancestor "$MB_DEV" "$MB_MASTER"; then
+              BASE_REF="$MASTER_REF"
+              BASE_NAME="master"
+            else
+              echo "::error::Unable to determine base branch for '$BRANCH'."
+              echo "The branch history diverges from both 'dev' and 'master'."
+              exit 1
+            fi
+          elif [[ -n "$MB_DEV" ]]; then
+            BASE_REF="$DEV_REF"
+            BASE_NAME="dev"
+          else
+            BASE_REF="$MASTER_REF"
+            BASE_NAME="master"
+          fi
+
+          echo "Using base branch: $BASE_NAME"
+
+          # Detect merge commits unique to this branch
+          MERGES="$(git rev-list --merges "$BASE_REF..HEAD" || true)"
+
+          if [[ -n "$MERGES" ]]; then
+            echo "::error::Merge commits are not allowed on non-dev/master branches."
+            echo ""
+            echo "Merge commits found on '$BRANCH' (not present in $BASE_NAME):"
+            git show --no-patch --oneline $MERGES
+
+            echo ""
+            echo "Fix (rebase instead of merge):"
+            echo "  git fetch origin"
+            echo "  git rebase origin/$BASE_NAME"
+            exit 1
+          fi
+
+          echo "✅ Branch '$BRANCH' is valid (rebased, no merge commits)."
