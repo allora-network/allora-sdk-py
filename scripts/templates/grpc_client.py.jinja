@@ -1,0 +1,45 @@
+from grpclib.client import Channel
+{%- for module_name, types in types_by_module.items() %}
+from {{ base_import_path }}.{{ module_name }} import (
+{%- for type_name, betterproto_name in types %}
+    {{ betterproto_name }} as {{ module_name.replace('.', '_') }}_{{ type_name }},
+{%- endfor %}
+)
+{%- endfor %}
+{%- for module_name, stub_name in proto_imports %}
+from {{ base_import_path }}.{{ module_name }} import {{ stub_name }}
+{%- endfor %}
+{%- for module_name, protocol_name in interface_imports %}
+from {{ interface_import_path }}.{{ module_name }} import {{ protocol_name }}
+{%- endfor %}
+
+{%- for service in services %}
+
+class {{ service.wrapper_class_name }}({{ service.protocol_name }}):
+    """gRPC wrapper for {{ service.service_name }} that conforms to {{ service.protocol_name }}."""
+
+    def __init__(self, channel: Channel):
+        """
+        Initialize gRPC wrapper.
+
+        :param channel: gRPC channel for communication
+        """
+        self.stub = {{ service.stub_class_name }}(channel)
+{%- for method in service.methods %}
+
+{% if method.has_path_params %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }}, height: int | None = None) -> {{ method.response_type_name }}:
+{%- else %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }} | None = None, height: int | None = None) -> {{ method.response_type_name }}:
+{%- endif %}
+        """Call {{ method.name }} via gRPC."""
+        metadata = None
+        if height is not None:
+            metadata = {"x-cosmos-block-height": str(height)}
+
+        return await self.stub.{{ method.snake_name }}(
+            message=message,
+            metadata=metadata,
+        )
+{% endfor -%}
+{%- endfor -%}

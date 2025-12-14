@@ -1,6 +1,6 @@
 [project]
 name = "allora_sdk"
-version = "1.0.6"
+version = "1.1.0"
 description = "Allora Network SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,6 +8,8 @@ authors = [
     { name = "spooktheducks", email = "spook@alloralabs.xyz" },
     { name = "gh-allora", email = "gregory@alloralabs.xyz" },
     { name = "jefferythewind", email = "tim@alloralabs.xyz" },
+    { name = "conache", email = "cristian@alloralabs.xyz" },
+    { name = "clementupshot", email = "clement@alloralabs.xyz" },
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -37,6 +39,7 @@ dependencies = [
     "requests",
     "dill",
     "matplotlib",
+    "requests-async>=0.2.4",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +60,7 @@ codegen = [
     "betterproto2-compiler",
     "openapi-python-client",
     "pyyaml",
+    "jinja2>=3.1.6",
 ]
 
 [project.scripts]
@@ -117,7 +121,9 @@ deps = [
 ]
 # set_env = { PATH = "{env:PATH}" }
 allowlist_externals = ["make"]
-commands_pre = [["make", "dev"]]
+commands_pre = [
+    ["make", "dev"],
+]
 commands = [["pytest", { replace = "posargs", default = ["tests"], extend = true }]]
 
 
@@ -125,6 +131,15 @@ commands = [["pytest", { replace = "posargs", default = ["tests"], extend = true
 description = "Type check"
 deps = ["mypy==1.11.2", "types-cachetools>=5.5.0.20240820", "types-chardet>=5.0.4.6"]
 commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend = true }]]
+
+# github actions test runner
+[tool.tox.gh.python]
+"3.14t" = ["3.14t"]
+"3.14" = ["3.14", "type", "pkg_meta"]
+"3.13" = ["3.13"]
+"3.12" = ["3.12"]
+"3.11" = ["3.11"]
+"3.10" = ["3.10"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

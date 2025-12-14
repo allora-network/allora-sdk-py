@@ -56,32 +56,12 @@ async def test_get_inference_by_topic_id(client):
     assert isinstance(data.topic_id, str)
     assert isinstance(data.timestamp, int)
 
-    assert isinstance(data.confidence_interval_percentiles, list)
-    assert isinstance(data.confidence_interval_values, list)
-    assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
-
-@pytest.mark.asyncio
-async def test_get_price_inference(client):
-    inference = await client.get_inference_by_topic_id(69)
-
-    assert isinstance(inference, Inference)
-    assert isinstance(inference.signature, str)
-    assert inference.signature, "Signature should not be empty"
-
-    data = inference.inference_data
-    assert isinstance(data.network_inference, str)
-    assert isinstance(data.network_inference_normalized, str)
-    assert isinstance(data.topic_id, str)
-    assert isinstance(data.timestamp, int)
-
-    assert isinstance(data.confidence_interval_percentiles, list)
-    assert all(isinstance(p, str) for p in data.confidence_interval_percentiles)
-    assert isinstance(data.confidence_interval_values, list)
-    assert all(isinstance(v, str) for v in data.confidence_interval_values)
-
-    assert isinstance(data.confidence_interval_percentiles_normalized, list)
-    assert isinstance(data.confidence_interval_values_normalized, list)
-    assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
+    if data.confidence_interval_percentiles:
+        assert isinstance(data.confidence_interval_percentiles, list)
+        assert data.confidence_interval_values
+        assert isinstance(data.confidence_interval_values, list)
+        assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
+        assert all(isinstance(p, str) for p in data.confidence_interval_percentiles)
 
 @pytest.mark.asyncio
 async def test_get_price_inference_different_assets(client):

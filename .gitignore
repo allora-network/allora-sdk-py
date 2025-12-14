@@ -15,8 +15,10 @@ __pycache__/
 .DS_Store
 build/
 dist/
-src/allora_sdk/protos/
-src/allora_sdk/rest/
+src/allora_sdk/rpc_client/protos/
+src/allora_sdk/rpc_client/rest/
+src/allora_sdk/rpc_client/grpc/
+src/allora_sdk/rpc_client/interfaces/
 proto-deps/
 mnemonic*
 src/allora_sdk/test.py

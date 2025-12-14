@@ -11,8 +11,8 @@ from typing import List, Dict
 import argparse
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
-from allora_sdk.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, GetTxsEventResponse, OrderBy
-from allora_sdk.protos.emissions.v9 import InsertWorkerPayloadRequest
+from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, GetTxsEventResponse, OrderBy
+from allora_sdk.rpc_client.protos.emissions.v9 import InsertWorkerPayloadRequest
 
 
 def main():

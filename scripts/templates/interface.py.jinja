@@ -1,0 +1,26 @@
+from typing import Protocol, runtime_checkable
+{%- for module_name, types in types_by_module.items() %}
+from {{ base_import_path }}.{{ module_name }} import (
+{%- for type_name, betterproto_name in types %}
+    {{ betterproto_name }} as {{ module_name.replace('.', '_') }}_{{ type_name }},
+{%- endfor %}
+)
+{%- endfor %}
+
+{%- for service in services %}
+@runtime_checkable
+class {{ service.protocol_name }}(Protocol):
+    """Protocol interface for {{ service.title }}."""
+{%- if service.methods_with_bindings %}
+{%- for method in service.methods_with_bindings %}
+{%- if method.has_path_params %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }}, height: int | None = None) -> {{ method.response_type_name }}: ...
+{%- else %}
+    async def {{ method.snake_name }}(self, message: {{ method.request_type_name }} | None = None, height: int | None = None) -> {{ method.response_type_name }}: ...
+{%- endif %}
+{%- endfor %}
+{%- else %}
+    pass
+{%- endif %}
+
+{% endfor %}
