@@ -1,16 +1,18 @@
 """
-Allora Protobuf Client
+Allora RPC Client
 
-This module provides the main AlloraRPCClient class which wraps cosmpy's LedgerClient
-and provides Allora-specific functionality for interacting with the blockchain.
+This module provides the main AlloraRPCClient class which wraps either a gRPC
+or REST client and provides Allora-specific functionality for interacting with
+the blockchain.
+
+The client can make queries, submit transactions, and subscribe to websocket events
+provided it is given the appropriate configuration.
 """
 
 import logging
 from typing import Optional
 
-import grpc
 from grpclib.client import Channel
-import certifi
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
@@ -52,8 +54,8 @@ class AlloraRPCClient:
 
     def __init__(
         self,
-        network: Optional[AlloraNetworkConfig] = None,
         wallet: Optional[AlloraWalletConfig] = None,
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         debug: bool = False
     ):
         """
@@ -67,23 +69,14 @@ class AlloraRPCClient:
         """
         if debug:
             logging.basicConfig(level=logging.DEBUG)
-        
-        self.network = network if network is not None else AlloraNetworkConfig.testnet()
+
+        self.network = network
         self.ledger_client = LedgerClient(cfg=self.network.to_cosmpy_config())
         self._initialize_wallet(wallet)
 
         parsed_url = parse_url(self.network.url)
 
         if parsed_url.protocol == Protocol.GRPC:
-            # if parsed_url.secure:
-            #     with open(certifi.where(), "rb") as f:
-            #         trusted_certs = f.read()
-            #     credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
-            #     self.grpc_client = grpc.secure_channel(parsed_url.host_and_port, credentials)
-            # else:
-            #     self.grpc_client = grpc.insecure_channel(parsed_url.host_and_port)
-
-
             self.grpc_client = Channel(host=parsed_url.hostname, port=parsed_url.port, ssl=parsed_url.secure)
 
             # Set up gRPC services
@@ -181,7 +174,7 @@ class AlloraRPCClient:
     def testnet(
         cls,
         wallet: Optional[AlloraWalletConfig] = None,
-        debug: bool = True,
+        debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
@@ -195,7 +188,7 @@ class AlloraRPCClient:
     def mainnet(
         cls,
         wallet: Optional[AlloraWalletConfig] = None,
-        debug: bool = True,
+        debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
@@ -209,11 +202,11 @@ class AlloraRPCClient:
         cls,
         port: int = 26657,
         wallet: Optional[AlloraWalletConfig] = None,
-        debug: bool = True,
+        debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
-            network=AlloraNetworkConfig.local(port),
+            network=AlloraNetworkConfig.local(port=port),
             wallet=wallet,
             debug=debug
         )
