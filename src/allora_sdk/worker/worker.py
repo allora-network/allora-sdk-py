@@ -19,12 +19,12 @@ import logging
 import time
 from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
 
-from cosmpy.aerial.client import TxResponse
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
+from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
 from allora_sdk.rpc_client.protos.emissions.v3 import ReputerValueBundle, ValueBundle
 from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
@@ -71,10 +71,11 @@ SubmissionWindowOpenedEvent = Union[EventWorkerSubmissionWindowOpened, EventRepu
 
 class AlloraWorker:
     """
-    ML-friendly Allora network worker with async generator interface.
+    Allora network worker with async generator interface.
     
     Provides automatic WebSocket subscription management, environment-aware signal handling,
-    and graceful resource cleanup for submitting predictions to Allora network topics.
+    transaction/submission handling, and graceful resource cleanup for submitting predictions
+    to Allora network topics.
     """
 
     @classmethod
@@ -82,7 +83,7 @@ class AlloraWorker:
         cls,
         run: PredictFn,
         wallet: Optional[AlloraWalletConfig] = None,
-        network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
@@ -167,7 +168,7 @@ class AlloraWorker:
         self,
         run: PredictFn,
         wallet: Optional[AlloraWalletConfig] = None,
-        network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
@@ -211,8 +212,11 @@ class AlloraWorker:
 
         self.wallet = self._init_wallet(wallet)
         if not self.wallet:
-            raise Exception('no wallet')
+            raise ValueError('no wallet')
 
+        if not network:
+            raise ValueError('no network config specified')
+        self.network = network
 
         self.client = AlloraRPCClient(
             wallet=AlloraWalletConfig(wallet=self.wallet),
@@ -231,6 +235,8 @@ class AlloraWorker:
 
         node_info_resp = await self.client.tendermint.query.get_node_info(GetNodeInfoRequest())
         self._chain_id = node_info_resp.default_node_info.network if node_info_resp.default_node_info else ""
+        if self.network.chain_id != self._chain_id:
+            raise ValueError(f"Configuration specifies chain id '{self.network.chain_id}' which conflicts with network-reported chain ID '{self._chain_id}'")
 
         await self._show_banner()
         await self._log_balance()
@@ -247,7 +253,7 @@ class AlloraWorker:
                / _ \ | |   | |  | | | | |_) |  / _ \
               / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
              /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
-             __        _____  ____  _  _______ ____          Address: {self.client.wallet.address()}
+             __        _____  ____  _  _______ ____          Address: {self.wallet.address()}
              \ \      / / _ \|  _ \| |/ / ____|  _ \
               \ \ /\ / / | | | |_) | ' /|  _| | |_) |
                \ V  V /| |_| |  _ <| . \| |___|  _ <
@@ -739,12 +745,15 @@ class AlloraWorker:
             logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
         try:
-            resp = await (await self.client.emissions.tx.insert_worker_payload(
+            resp = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
                 inference_value=str(prediction),
                 nonce=nonce,
                 fee_tier=self.fee_tier
-            )).wait()
+            )
+            if isinstance(resp, int):
+                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+            resp = await resp.wait()
 
             if resp.code != 0:
                 return TxError(
