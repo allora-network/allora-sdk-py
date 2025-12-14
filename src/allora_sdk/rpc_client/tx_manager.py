@@ -19,11 +19,12 @@ from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
 from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
-from allora_sdk.rpc_client.rest.cosmos_auth_v1beta1_rest_client import CosmosAuthV1Beta1QueryLike
-from allora_sdk.rpc_client.rest.cosmos_bank_v1beta1_rest_client import CosmosBankV1Beta1QueryLike
-from allora_sdk.rpc_client.rest.cosmos_tx_v1beta1_rest_client import CosmosTxV1Beta1ServiceLike
-from allora_sdk.rpc_client.rest.feemarket_feemarket_v1_rest_client import FeemarketFeemarketV1QueryLike
-
+from allora_sdk.rpc_client.interfaces import (
+    CosmosAuthV1Beta1QueryLike,
+    CosmosBankV1Beta1QueryLike,
+    CosmosTxV1Beta1ServiceLike,
+    FeemarketFeemarketV1QueryLike,
+)
 
 logger = logging.getLogger("allora_sdk")
 
