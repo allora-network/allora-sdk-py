@@ -163,7 +163,6 @@ class AlloraWorker:
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         min_stake_uallo: Optional[int] = None,
-        stake_amount_uallo: Optional[int] = None,
         debug: bool = False,
     ):
         """
@@ -179,7 +178,6 @@ class AlloraWorker:
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
-            stake_amount_uallo: Fixed stake amount in uallo (alternative to min_stake_uallo)
             debug: Enable debug logging
 
         Returns:
@@ -197,7 +195,6 @@ class AlloraWorker:
             submission_window_event_type=EventReputerSubmissionWindowOpened,
             role=WorkerRole.REPUTER,
             min_stake_uallo=min_stake_uallo,
-            stake_amount_uallo=stake_amount_uallo,
             debug=debug,
         )
 
@@ -215,7 +212,6 @@ class AlloraWorker:
         submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
         role: WorkerRole = WorkerRole.INFERER,
         min_stake_uallo: Optional[int] = None,
-        stake_amount_uallo: Optional[int] = None,
         debug: bool = False,
     ) -> None:
         """
@@ -235,7 +231,6 @@ class AlloraWorker:
             role: Role of the worker (INFERER or REPUTER)
             ground_truth_fn: Ground truth function for reputer (only used when role=REPUTER)
             min_stake_uallo: Minimum stake in uallo to top-up to (only used when role=REPUTER)
-            stake_amount_uallo: Fixed stake amount in uallo (only used when role=REPUTER)
             debug: Enable debug logging
         """
         if not run or not callable(run):
@@ -255,7 +250,6 @@ class AlloraWorker:
         self.ground_truth_fn: Optional[GroundTruthFn] = ground_truth_fn if role == WorkerRole.REPUTER else None
         self._predict_fn: Optional[PredictFn] = cast(PredictFn, run) if role == WorkerRole.INFERER else None
         self.min_stake_uallo = min_stake_uallo
-        self.stake_amount_uallo = stake_amount_uallo
 
         if self.role == WorkerRole.REPUTER and (self.ground_truth_fn is None or not callable(self.ground_truth_fn)):
             raise ValueError("'ground_truth_fn' must be provided and callable for reputer role")
@@ -491,20 +485,17 @@ class AlloraWorker:
         """
         Check current stake and top-up if below target.
         
-        Queries current stake and adds only the delta needed to 
-        reach min_stake_uallo or stake_amount_uallo.
+        If min_stake_uallo is unset (None) or zero, skip staking.
+        Otherwise, top-up only the delta needed to reach min_stake_uallo.
         """
         await self._ensure_initialized()
         
-        # Determine target stake
-        target_stake: Optional[int] = None
-        if self.min_stake_uallo is not None:
-            target_stake = self.min_stake_uallo
-        elif self.stake_amount_uallo is not None:
-            target_stake = self.stake_amount_uallo
-        
-        if target_stake is None:
-            logger.debug("No staking configured (min_stake_uallo/stake_amount_uallo not set); skipping top-up.")
+        min_stake = self.min_stake_uallo
+        if min_stake is None:
+            logger.info("No minimum stake configured in reputer, skipping adding stake.")
+            return
+        if min_stake == 0:
+            logger.info("No minimum stake requested, skipping adding stake.")
             return
         
         sender = str(self.wallet.address())
@@ -522,14 +513,14 @@ class AlloraWorker:
             logger.warning(f"Failed to query current stake: {e}. Skipping top-up.")
             return
         
-        logger.debug(f"Reputer stake: current={current_stake} target={target_stake}")
+        logger.debug(f"Reputer stake: current={current_stake} min_stake={min_stake}")
         
-        if current_stake >= target_stake:
-            logger.debug(f"Current stake ({current_stake}) >= target ({target_stake}); no top-up needed.")
+        if current_stake >= min_stake:
+            logger.info("Stake above minimum requested stake, skipping adding stake.")
             return
         
-        delta = target_stake - current_stake
-        logger.info(f"Staking delta of {delta} uallo to reach target {target_stake} uallo")
+        delta = min_stake - current_stake
+        logger.info(f"Stake below minimum requested stake, adding stake (delta={delta} uallo)")
         
         try:
             pending_tx = await self.client.emissions.tx.add_stake(
