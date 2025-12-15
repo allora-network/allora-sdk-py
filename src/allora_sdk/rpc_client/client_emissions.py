@@ -1,7 +1,9 @@
+import hashlib
 import logging
 from typing import Dict, List, Optional, Union
-from allora_sdk.rpc_client.protos.emissions.v3 import Nonce
+from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce
 from allora_sdk.rpc_client.protos.emissions.v9 import (
+    AddStakeRequest,
     BulkAddToTopicReputerWhitelistRequest,
     BulkAddToTopicWorkerWhitelistRequest,
     CreateNewTopicRequest,
@@ -11,6 +13,9 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputInferenceForecastBundle,
     InputWorkerDataBundle,
     InsertWorkerPayloadRequest,
+    InsertReputerPayloadRequest,
+    InputReputerValueBundle,
+    InputValueBundle,
     InputForecastElement,
     InputForecast,
     RegisterRequest,
@@ -150,7 +155,6 @@ class EmissionsTxs:
         )
 
         # sign bundle with pubkey using a 32-byte digest (secp256k1 requirement)
-        import hashlib
         bundle_bytes = bytes(bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
         bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
@@ -213,6 +217,118 @@ class EmissionsTxs:
             return await self._txs.submit_transaction(
                 type_url="/emissions.v9.DelegateStakeRequest",
                 msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
+
+    async def add_stake(
+        self,
+        topic_id: int,
+        amount: int,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        gas_limit: Optional[int] = None,
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+        """
+        Add stake to a topic as a reputer.
+
+        Args:
+            topic_id: The topic ID to stake on
+            amount: Amount of uallo to stake
+            fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
+
+        Returns:
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
+        """
+        if not self._txs:
+            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+
+        sender_address = str(self._txs.wallet.address())
+
+        msg = AddStakeRequest(
+            sender=sender_address,
+            topic_id=topic_id,
+            amount=str(amount),
+        )
+
+        logger.debug(f"Adding stake of {amount} uallo to topic {topic_id}")
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.AddStakeRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.AddStakeRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
+
+    async def insert_reputer_payload(
+        self,
+        topic_id: int,
+        reputer_request_nonce: ReputerRequestNonce,
+        value_bundle: InputValueBundle,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        gas_limit: Optional[int] = None,
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+        """
+        Submit a reputer payload (loss bundle) to the Allora network.
+
+        Args:
+            topic_id: The topic ID to submit the reputer payload for
+            reputer_request_nonce: The reputer request nonce containing block height
+            value_bundle: The computed loss bundle
+            fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
+
+        Returns:
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
+        """
+        if not self._txs:
+            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+
+        reputer_address = str(self._txs.wallet.address())
+
+        # Sign the value bundle
+        bundle_bytes = bytes(value_bundle)
+        bundle_digest = hashlib.sha256(bundle_bytes).digest()
+        bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
+
+        reputer_value_bundle = InputReputerValueBundle(
+            reputer=reputer_address,
+            value_bundle=value_bundle,
+            signature=bundle_sig,
+            pubkey=self._txs.wallet.public_key().public_key_hex if self._txs.wallet.public_key() else "",
+        )
+
+        payload_request = InsertReputerPayloadRequest(
+            sender=reputer_address,
+            reputer_request_nonce=reputer_request_nonce,
+            reputer_value_bundle=reputer_value_bundle,
+        )
+
+        logger.debug(f"Submitting reputer payload for topic {topic_id}")
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.InsertReputerPayloadRequest",
+                msgs=[ payload_request ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.InsertReputerPayloadRequest",
+                msgs=[ payload_request ],
                 gas_limit=gas_limit,
                 fee_tier=fee_tier
             )
