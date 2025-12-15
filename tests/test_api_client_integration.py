@@ -1,3 +1,4 @@
+import os
 import pytest
 import pytest_asyncio
 from allora_sdk.api_client import (
@@ -11,7 +12,7 @@ DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
 @pytest_asyncio.fixture
 def client():
-    return AlloraAPIClient(chain_id=ChainID.TESTNET)
+    return AlloraAPIClient(chain_id=ChainID.TESTNET, api_key=os.getenv("ALLORA_API_KEY"))
 
 @pytest.mark.asyncio
 async def test_get_all_topics(client):
