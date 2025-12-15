@@ -51,8 +51,7 @@ The simplest way to start participating in the Allora network is to paste the fo
 **NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
 
 ```python
-from allora_sdk.worker import AlloraWorker
-import asyncio
+from allora_sdk import AlloraWorker
 
 def my_model():
     # Your ML model prediction logic
@@ -71,6 +70,7 @@ async def main():
             print(f"Prediction submitted: {result.prediction}")
 
 # IF YOU'RE RUNNING IN A PYTHON FILE:
+import asyncio
 asyncio.run(main())
 
 # IF YOU'RE RUNNING IN A NOTEBOOK:
@@ -91,8 +91,7 @@ More resources:
 ### Advanced Configuration
 
 ```python
-from allora_sdk.worker import AlloraWorker
-from allora_sdk.rpc_client.tx_manager import FeeTier
+from allora_sdk import AlloraWorker, FeeTier, AlloraWalletConfig, AlloraNetworkConfig
 
 inference_worker = AlloraWorker.inferer(
     #
@@ -156,7 +155,7 @@ Initialization is very flexible and straightforward.  The client can be initiali
 - environment variables
 
 ```python
-from allora_sdk.rpc_client import AlloraRPCClient
+from allora_sdk import AlloraRPCClient, AlloraWalletConfig, AlloraNetworkConfig
 
 # Initialize client manually
 client = AlloraRPCClient(
@@ -193,10 +192,9 @@ client = AlloraRPCClient.testnet(
 client = AlloraRPCClient.from_env()
 
 # Query network data
+# Note: `height` is optional.  Defaults to the latest block on the chain.
 request = GetLatestRegretStdNormRequest(topic_id=123)
-response = client.emissions.query.get_latest_regret_std_norm(request, height=6200000)
-
-# Some requests must be queried slightly differently
+response = client.emissions.query.get_latest_regret_std_norm(request, height=6200000) 
 
 # Submit transactions  
 response = await client.emissions.tx.insert_worker_payload(
@@ -205,7 +203,7 @@ response = await client.emissions.tx.insert_worker_payload(
     nonce=12345
 )
 
-# WebSocket subscriptions
+# WebSocket event subscriptions
 from allora_sdk.rpc_client.protos.emissions.v9 import EventWorkerSubmissionWindowOpened
 
 async def handle_event(event, block_height):
@@ -328,21 +326,23 @@ This project uses modern Python tooling for development and supports Python 3.10
 
 ### Prerequisites
 
-Install [uv](https://docs.astral.sh/uv/) (recommended) or use pip:
+Install [uv](https://docs.astral.sh/uv/).  Instructions available at [https://docs.astral.sh/uv/getting-started/installation](https://docs.astral.sh/uv/getting-started/installation).
 
 ```bash
-# Install uv (recommended)
+# Example with curl:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Or use pip
+# Example with pip:
 pip install uv
 ```
 
 ### Setup for development
 
-The Makefile handles all development setup.  Simply run:
+The Makefile handles almost all of the development setup.  Simply run:
 
 ```bash
+uv venv
+source .venv/bin/activate
 make dev
 ```
 
@@ -365,22 +365,24 @@ The SDK uses two code generation systems:
 **gRPC Generation:**
 - Generates async Python clients from .proto files
 - Sources: Cosmos SDK, Allora Chain, googleapis
-- Output: `src/allora_sdk/protos/`
+- Output: `src/allora_sdk/rpc_client/grpc/`
 - Command: `make grpc`
 
 **REST Client Generation:**
 - Analyzes protobuf HTTP annotations to generate REST clients  
 - Matches gRPC client interfaces exactly
 - Sources: Same .proto files as above
-- Output: `src/allora_sdk/rest/`
+- Output: `src/allora_sdk/rpc_client/rest/`
 - Command: `make rest`
 
 Both generators run automatically with `make dev`.
 
-### Workflow
+### Full Workflow
 
 ```bash
 # Initial setup
+uv venv
+source .venv/bin/activate
 make dev
 
 # After changes to .proto files
@@ -388,7 +390,7 @@ rm -rf src/allora_sdk/rpc_client/rest
 rm -rf src/allora_sdk/rpc_client/grpc
 rm -rf src/allora_sdk/rpc_client/interfaces
 rm -rf src/allora_sdk/rpc_client/protos
-make grpc rest
+make dev
 
 # Run tests  
 tox
@@ -403,6 +405,5 @@ make wheel      # or: uv build
 - **Development dependencies**: Under `[project.optional-dependencies.dev]`  
 - **Code generation**: Under `[project.optional-dependencies.codegen]`
 
-The project pins specific versions of crypto dependencies (cosmpy, betterproto2) while allowing flexibility for general-purpose libraries.
 
 
