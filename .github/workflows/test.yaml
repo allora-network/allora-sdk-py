@@ -57,5 +57,7 @@ jobs:
 
       - name: Run tests
         run:  uv run pytest tests
+        env:
+          ALLORA_API_KEY: ${{ secrets.ALLORA_API_KEY }}
 
 
