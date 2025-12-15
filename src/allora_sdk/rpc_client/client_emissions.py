@@ -300,13 +300,14 @@ class EmissionsTxs:
 
         reputer_address = str(self._txs.wallet.address())
 
+        value_bundle.reputer_request_nonce = reputer_request_nonce
+
         # Sign the value bundle
         bundle_bytes = bytes(value_bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
         bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
 
         reputer_value_bundle = InputReputerValueBundle(
-            reputer=reputer_address,
             value_bundle=value_bundle,
             signature=bundle_sig,
             pubkey=self._txs.wallet.public_key().public_key_hex if self._txs.wallet.public_key() else "",
@@ -314,7 +315,6 @@ class EmissionsTxs:
 
         payload_request = InsertReputerPayloadRequest(
             sender=reputer_address,
-            reputer_request_nonce=reputer_request_nonce,
             reputer_value_bundle=reputer_value_bundle,
         )
 

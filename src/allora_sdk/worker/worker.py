@@ -9,6 +9,7 @@ across different execution environments (shell, Jupyter, CoLab).
 import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from getpass import getpass
 import os
 import signal
@@ -17,7 +18,7 @@ from textwrap import dedent, indent
 import requests
 import logging
 import time
-from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
+from typing import Callable, List, Optional, AsyncIterator, Tuple, Type, Union, Awaitable, cast
 
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
@@ -26,8 +27,8 @@ import async_timeout
 
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
-from allora_sdk.rpc_client.protos.emissions.v3 import ReputerValueBundle, ValueBundle
-from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
+from allora_sdk.rpc_client.protos.emissions.v3 import ValueBundle, Nonce, ReputerRequestNonce
+from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest, GetStakeFromReputerInTopicInSelfRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
@@ -38,9 +39,17 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
     CanSubmitWorkerPayloadRequest,
+    CanSubmitReputerPayloadRequest,
     GetUnfulfilledWorkerNoncesRequest,
+    GetUnfulfilledReputerNoncesRequest,
+    GetNetworkInferencesAtBlockRequest,
     IsWorkerRegisteredInTopicIdRequest,
+    IsReputerRegisteredInTopicIdRequest,
     GetLatestNetworkInferencesRequest,
+    InputValueBundle,
+    InputWorkerAttributedValue,
+    InputWithheldWorkerAttributedValue,
+    InputOneOutInfererForecasterValues,
 )
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
@@ -67,6 +76,26 @@ PredictFnAsync = Callable[[int], Awaitable[PredictFnResultType]]
 PredictFn = Union[PredictFnSync, PredictFnAsync]
 
 SubmissionWindowOpenedEvent = Union[EventWorkerSubmissionWindowOpened, EventReputerSubmissionWindowOpened]
+
+
+class WorkerRole(Enum):
+    """Role of the worker in the Allora network."""
+    INFERER = "inferer"
+    REPUTER = "reputer"
+
+
+# Type aliases for reputer callbacks
+GroundTruthFnResultType = str | float
+GroundTruthFnSync = Callable[[int], GroundTruthFnResultType]
+GroundTruthFnAsync = Callable[[int], Awaitable[GroundTruthFnResultType]]
+GroundTruthFn = Union[GroundTruthFnSync, GroundTruthFnAsync]
+
+# Type alias for loss function: (ground_truth, predicted_value) -> loss
+LossFn = Callable[[float, float], float]
+
+def default_squared_error_loss(ground_truth: float, predicted: float) -> float:
+    """Default loss function using squared error."""
+    return (ground_truth - predicted) ** 2
 
 
 class AlloraWorker:
@@ -117,56 +146,66 @@ class AlloraWorker:
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             submission_window_event_type=EventWorkerSubmissionWindowOpened,
+            role=WorkerRole.INFERER,
             debug=debug,
         )
 
-    # @classmethod
-    # def reputer(
-    #     cls,
-    #     run: Optional[PredictFn] = None,
-    #     run_pkl: Optional[str] = None,
-    #     wallet: Optional[AlloraWalletConfig] = None,
-    #     network: Optional[AlloraNetworkConfig] = AlloraNetworkConfig.testnet(),
-    #     api_key: Optional[str] = None,
-    #     topic_id: int = 69,
-    #     fee_tier: FeeTier = FeeTier.STANDARD,
-    #     polling_interval: int = 120,
-    #     debug: bool = False,
-    # ):
-    #     """
-    #     Create an AlloraWorker configured as a reputer.
+    @classmethod
+    def reputer(
+        cls,
+        run: LossFn = default_squared_error_loss,
+        *,
+        ground_truth_fn: GroundTruthFn,
+        wallet: Optional[AlloraWalletConfig] = None,
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
+        api_key: Optional[str] = None,
+        topic_id: int = 69,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        polling_interval: int = 120,
+        min_stake_uallo: Optional[int] = None,
+        stake_amount_uallo: Optional[int] = None,
+        debug: bool = False,
+    ):
+        """
+        Create an AlloraWorker configured as a reputer.
 
-    #     Args:
-    #         run: Function that returns prediction values (str or float)
-    #         run_pkl: Path to pickle file containing a 'run' function
-    #         wallet: Wallet configuration (private key, mnemonic, or file)
-    #         network: Allora network configuration (testnet/mainnet/custom)
-    #         api_key: API key for testnet faucet (if needed)
-    #         topic_id: The Allora network topic ID to submit predictions to
-    #         fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-    #         polling_interval: Interval in seconds to poll for new submission windows
-    #         debug: Enable debug logging
+        Args:
+            run: Loss function to calculate error between ground truth and predictions
+            ground_truth_fn: Function that returns ground truth values (str or float)
+            wallet: Wallet configuration (private key, mnemonic, or file)
+            network: Allora network configuration (testnet/mainnet/custom)
+            api_key: API key for testnet faucet (if needed)
+            topic_id: The Allora network topic ID to submit reputer payloads to
+            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
+            polling_interval: Interval in seconds to poll for new submission windows
+            min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
+            stake_amount_uallo: Fixed stake amount in uallo (alternative to min_stake_uallo)
+            debug: Enable debug logging
 
-    #     Returns:
-    #         An instance of AlloraWorker configured as a reputer
-    #     """
-    #     return cls(
-    #         run=run,
-    #         run_pkl=run_pkl,
-    #         wallet=wallet,
-    #         network=network,
-    #         api_key=api_key,
-    #         topic_id=topic_id,
-    #         fee_tier=fee_tier,
-    #         polling_interval=polling_interval,
-    #         submission_window_event_type=EventReputerSubmissionWindowOpened,
-    #         debug=debug,
-    #     )
+        Returns:
+            An instance of AlloraWorker configured as a reputer
+        """
+        return cls(
+            run=run,
+            ground_truth_fn=ground_truth_fn,
+            wallet=wallet,
+            network=network,
+            api_key=api_key,
+            topic_id=topic_id,
+            fee_tier=fee_tier,
+            polling_interval=polling_interval,
+            submission_window_event_type=EventReputerSubmissionWindowOpened,
+            role=WorkerRole.REPUTER,
+            min_stake_uallo=min_stake_uallo,
+            stake_amount_uallo=stake_amount_uallo,
+            debug=debug,
+        )
 
 
     def __init__(
         self,
-        run: PredictFn,
+        run: Union[PredictFn, LossFn],
+        ground_truth_fn: Optional[GroundTruthFn] = None,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -174,6 +213,9 @@ class AlloraWorker:
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
+        role: WorkerRole = WorkerRole.INFERER,
+        min_stake_uallo: Optional[int] = None,
+        stake_amount_uallo: Optional[int] = None,
         debug: bool = False,
     ) -> None:
         """
@@ -190,23 +232,33 @@ class AlloraWorker:
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             submission_window_event_type: Event type to listen for submission windows (worker, reputer, forecaster)
+            role: Role of the worker (INFERER or REPUTER)
+            ground_truth_fn: Ground truth function for reputer (only used when role=REPUTER)
+            min_stake_uallo: Minimum stake in uallo to top-up to (only used when role=REPUTER)
+            stake_amount_uallo: Fixed stake amount in uallo (only used when role=REPUTER)
             debug: Enable debug logging
         """
-        if not run:
-            raise ValueError("'run' parameter must be provided")
-        if not callable(run):
-            raise ValueError("The 'run' function must be callable")
-        self._user_callback = run
-
+        if not run or not callable(run):
+            raise ValueError("'run' parameter must be provided and callable")
 
         self._initialized = False
         self.topic_id = topic_id
-        self._user_callback = run
         self.fee_tier = fee_tier
         self.polling_interval = polling_interval
         self.api_key = api_key
         self.submission_window_event_type = submission_window_event_type
         self.submitted_nonces = TimestampOrderedSet()
+        
+        # Role-specific attributes
+        self.role = role
+        self.loss_fn: LossFn = cast(LossFn, run) if role == WorkerRole.REPUTER else default_squared_error_loss
+        self.ground_truth_fn: Optional[GroundTruthFn] = ground_truth_fn if role == WorkerRole.REPUTER else None
+        self._predict_fn: Optional[PredictFn] = cast(PredictFn, run) if role == WorkerRole.INFERER else None
+        self.min_stake_uallo = min_stake_uallo
+        self.stake_amount_uallo = stake_amount_uallo
+
+        if self.role == WorkerRole.REPUTER and (self.ground_truth_fn is None or not callable(self.ground_truth_fn)):
+            raise ValueError("'ground_truth_fn' must be provided and callable for reputer role")
 
         setup_sdk_logging(debug=debug)
 
@@ -245,6 +297,7 @@ class AlloraWorker:
 
     async def _show_banner(self):
         resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
+        role_str = self.role.value.upper()
 
         print(indent(dedent(
             rf"""
@@ -254,7 +307,7 @@ class AlloraWorker:
               / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
              /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
              __        _____  ____  _  _______ ____          Address: {self.wallet.address()}
-             \ \      / / _ \|  _ \| |/ / ____|  _ \
+             \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {role_str}
               \ \ /\ / / | | | |_) | ' /|  _| | |_) |
                \ V  V /| |_| |  _ <| . \| |___|  _ <
                 \_/\_/  \___/|_| \_\_|\_\_____|_| \_\
@@ -397,6 +450,102 @@ class AlloraWorker:
         elif env in ("jupyter", "colab"):
             logger.debug(f"Running in {env} environment, using manual stop mechanisms")
 
+    async def _ensure_registered(self):
+        """Ensure the worker is registered for the topic based on its role."""
+        await self._ensure_initialized()
+        
+        if self.role == WorkerRole.INFERER:
+            resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
+                IsWorkerRegisteredInTopicIdRequest(
+                    topic_id=self.topic_id,
+                    address=str(self.wallet.address()),
+                ),
+            )
+            if not resp.is_registered:
+                logger.debug(f"Registering inferer {str(self.wallet.address())} for topic {self.topic_id}")
+                await self.client.emissions.tx.register(
+                    topic_id=self.topic_id,
+                    owner_addr=str(self.wallet.address()),
+                    sender_addr=str(self.wallet.address()),
+                    is_reputer=False,
+                    fee_tier=FeeTier.PRIORITY,
+                )
+        elif self.role == WorkerRole.REPUTER:
+            resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(
+                IsReputerRegisteredInTopicIdRequest(
+                    topic_id=self.topic_id,
+                    address=str(self.wallet.address()),
+                ),
+            )
+            if not resp.is_registered:
+                logger.debug(f"Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
+                await self.client.emissions.tx.register(
+                    topic_id=self.topic_id,
+                    owner_addr=str(self.wallet.address()),
+                    sender_addr=str(self.wallet.address()),
+                    is_reputer=True,
+                    fee_tier=FeeTier.PRIORITY,
+                )
+
+    async def _maybe_stake_reputer(self):
+        """
+        Check current stake and top-up if below target.
+        
+        Queries current stake and adds only the delta needed to 
+        reach min_stake_uallo or stake_amount_uallo.
+        """
+        await self._ensure_initialized()
+        
+        # Determine target stake
+        target_stake: Optional[int] = None
+        if self.min_stake_uallo is not None:
+            target_stake = self.min_stake_uallo
+        elif self.stake_amount_uallo is not None:
+            target_stake = self.stake_amount_uallo
+        
+        if target_stake is None:
+            logger.debug("No staking configured (min_stake_uallo/stake_amount_uallo not set); skipping top-up.")
+            return
+        
+        sender = str(self.wallet.address())
+        
+        # Query current stake
+        try:
+            stake_resp = await self.client.emissions.query.get_stake_from_reputer_in_topic_in_self(
+                GetStakeFromReputerInTopicInSelfRequest(
+                    reputer_address=sender,
+                    topic_id=self.topic_id,
+                )
+            )
+            current_stake = int(stake_resp.amount) if stake_resp.amount else 0
+        except Exception as e:
+            logger.warning(f"Failed to query current stake: {e}. Skipping top-up.")
+            return
+        
+        logger.debug(f"Reputer stake: current={current_stake} target={target_stake}")
+        
+        if current_stake >= target_stake:
+            logger.debug(f"Current stake ({current_stake}) >= target ({target_stake}); no top-up needed.")
+            return
+        
+        delta = target_stake - current_stake
+        logger.info(f"Staking delta of {delta} uallo to reach target {target_stake} uallo")
+        
+        try:
+            pending_tx = await self.client.emissions.tx.add_stake(
+                topic_id=self.topic_id,
+                amount=delta,
+                fee_tier=self.fee_tier,
+            )
+            if not isinstance(pending_tx, int):
+                tx_resp = await pending_tx.wait()
+                if tx_resp.code != 0:
+                    logger.error(f"Failed to add stake: code={tx_resp.code} log={tx_resp.raw_log}")
+                else:
+                    logger.info(f"Successfully staked {delta} uallo (tx={tx_resp.txhash})")
+        except Exception as e:
+            logger.error(f"Failed to add stake: {e}")
+
     async def run(self, timeout: Optional[float] = None) -> AsyncIterator[PredictionResult |  Exception]:
         """
         Run the worker and yield predictions as they"re submitted.
@@ -426,24 +575,10 @@ class AlloraWorker:
         
         self._setup_signal_handlers(ctx)
         
-        logger.debug(f"Starting Allora worker for topic {self.topic_id}")
+        logger.debug(f"Starting Allora {self.role.value} for topic {self.topic_id}")
         
         try:
-            resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
-                IsWorkerRegisteredInTopicIdRequest(
-                    topic_id=self.topic_id,
-                    address=str(self.wallet.address()),
-                ),
-            )
-            if not resp.is_registered:
-                logger.debug(f"Registering worker {str(self.wallet.address())} for topic {self.topic_id}")
-                resp = await self.client.emissions.tx.register(
-                    topic_id=self.topic_id,
-                    owner_addr=str(self.wallet.address()),
-                    sender_addr=str(self.wallet.address()),
-                    is_reputer=False,
-                    fee_tier=FeeTier.PRIORITY,
-                )
+            await self._ensure_registered()
 
             if timeout:
                 try:
@@ -558,7 +693,8 @@ class AlloraWorker:
         if ctx is None or ctx.is_cancelled():
             return
 
-        logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
+        role_name = self.role.value.capitalize()
+        logger.info(f"🚀 {role_name} submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
         
         try:
             await self._maybe_submit(ctx, event.nonce_block_height)
@@ -572,21 +708,48 @@ class AlloraWorker:
         if ctx.is_cancelled():
             return
 
-        can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
-            CanSubmitWorkerPayloadRequest(
-                address=str(self.wallet.address()),
-                topic_id=self.topic_id,
+        # Role-based whitelist check
+        if self.role == WorkerRole.INFERER:
+            can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
+                CanSubmitWorkerPayloadRequest(
+                    address=str(self.wallet.address()),
+                    topic_id=self.topic_id,
+                )
             )
-        )
-        if not can_submit_resp.can_submit_worker_payload:
-            logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
-            self.stop()
-            return
+            if not can_submit_resp.can_submit_worker_payload:
+                logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+                self.stop()
+                return
+        elif self.role == WorkerRole.REPUTER:
+            can_submit_resp = await self.client.emissions.query.can_submit_reputer_payload(
+                CanSubmitReputerPayloadRequest(
+                    address=str(self.wallet.address()),
+                    topic_id=self.topic_id,
+                )
+            )
+            if not can_submit_resp.can_submit_reputer_payload:
+                logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted as reputer on topic {self.topic_id}.  Contact the topic creator.")
+                self.stop()
+                return
 
-        resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
-            GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
-        )
-        nonces     = { x.block_height for x in resp.nonces.nonces } if resp.nonces is not None else set()
+        # Role-based nonce fetching
+        if self.role == WorkerRole.INFERER:
+            resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
+                GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
+            )
+            nonces = { x.block_height for x in resp.nonces.nonces } if resp.nonces is not None else set()
+        elif self.role == WorkerRole.REPUTER:
+            resp = await self.client.emissions.query.get_unfulfilled_reputer_nonces(
+                GetUnfulfilledReputerNoncesRequest(topic_id=self.topic_id)
+            )
+            nonces = set()
+            if resp.nonces is not None:
+                for nonce_item in resp.nonces.nonces:
+                    if nonce_item.reputer_nonce and nonce_item.reputer_nonce.block_height:
+                        nonces.add(nonce_item.reputer_nonce.block_height)
+        else:
+            nonces = set()
+        
         new_nonces = { n for n in nonces if n not in self.submitted_nonces }
 
         if nonce is not None:
@@ -603,7 +766,13 @@ class AlloraWorker:
             logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
 
             try:
-                result = await self._submit(nonce)
+                # Role-based submission
+                if self.role == WorkerRole.INFERER:
+                    result = await self._submit(nonce)
+                elif self.role == WorkerRole.REPUTER:
+                    result = await self._submit_reputer(nonce)
+                else:
+                    result = Exception(f"Unknown role: {self.role}")
                 if isinstance(result, TxError):
                     if result.code == 78 or result.code == 75: # already submitted
                         self.submitted_nonces.add(nonce)
@@ -728,12 +897,14 @@ class AlloraWorker:
             return Exception('no wallet')
 
         try:
-            if asyncio.iscoroutinefunction(self._user_callback):
-                prediction: PredictFnResultType = await self._user_callback(nonce)
+            if self._predict_fn is None:
+                return Exception("no predict fn configured")
+            if asyncio.iscoroutinefunction(self._predict_fn):
+                prediction: PredictFnResultType = await self._predict_fn(nonce)
             else:
                 # Run sync prediction in executor to avoid blocking
                 loop = asyncio.get_event_loop()
-                prediction: PredictFnResultType = await loop.run_in_executor(None, self._user_callback, nonce)
+                prediction: PredictFnResultType = await loop.run_in_executor(None, self._predict_fn, nonce)
         except Exception as err:
             logger.debug(f"Prediction function failed: {err}")
             return err
@@ -767,6 +938,184 @@ class AlloraWorker:
             
         except Exception as err:
             return err
+
+    async def _submit_reputer(self, nonce: int):
+        """Submit a reputer payload for the given nonce."""
+        await self._ensure_initialized()
+
+        if not self.wallet:
+            return Exception('no wallet')
+
+        # Stake top-up if needed
+        await self._maybe_stake_reputer()
+
+        sender = str(self.wallet.address())
+
+        # Get ground truth from user callback
+        try:
+            if self.ground_truth_fn is None:
+                return Exception("no ground truth fn configured")
+            if asyncio.iscoroutinefunction(self.ground_truth_fn):
+                ground_truth_raw = await self.ground_truth_fn(nonce)
+            else:
+                loop = asyncio.get_event_loop()
+                ground_truth_raw = await loop.run_in_executor(None, self.ground_truth_fn, nonce)
+            ground_truth = float(ground_truth_raw)
+        except Exception as err:
+            logger.error(f"Ground truth function failed: {err}")
+            return err
+
+        # Fetch network inferences at block
+        try:
+            network_inferences_resp = await self.client.emissions.query.get_network_inferences_at_block(
+                GetNetworkInferencesAtBlockRequest(
+                    topic_id=self.topic_id,
+                    block_height_last_inference=nonce,
+                )
+            )
+            value_bundle = network_inferences_resp.network_inferences
+            if value_bundle is None:
+                logger.error(f"No network inferences found at block {nonce}")
+                return Exception(f"No network inferences found at block {nonce}")
+        except Exception as err:
+            logger.error(f"Failed to get network inferences: {err}")
+            return err
+
+        # Compute loss bundle
+        try:
+            loss_bundle = self._compute_loss_bundle(ground_truth, value_bundle)
+        except Exception as err:
+            logger.error(f"Failed to compute loss bundle: {err}")
+            return err
+
+        reputer_request_nonce = ReputerRequestNonce(
+            reputer_nonce=Nonce(block_height=nonce),
+        )
+        loss_bundle.reputer_request_nonce = reputer_request_nonce
+        loss_bundle.reputer = sender
+
+        # Submit reputer payload
+        try:
+            resp = await self.client.emissions.tx.insert_reputer_payload(
+                topic_id=self.topic_id,
+                reputer_request_nonce=reputer_request_nonce,
+                value_bundle=loss_bundle,
+                fee_tier=self.fee_tier,
+            )
+            if isinstance(resp, int):
+                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+            tx_resp = await resp.wait()
+
+            if tx_resp.code != 0:
+                return TxError(
+                    codespace=tx_resp.codespace,
+                    code=tx_resp.code,
+                    tx_hash=tx_resp.txhash,
+                    message=tx_resp.raw_log,
+                )
+
+            return PredictionResult(prediction=ground_truth, tx_result=tx_resp)
+
+        except Exception as err:
+            return err
+
+    def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
+        """
+        Compute loss bundle from ground truth and network inferences.
+        
+        Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
+        """
+        def compute_loss(value_str: str) -> str:
+            try:
+                predicted = float(value_str)
+                loss = self.loss_fn(ground_truth, predicted)
+                return str(loss)
+            except (ValueError, TypeError):
+                return "0"
+
+        # Compute combined and naive losses
+        combined_loss = compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
+        naive_loss = compute_loss(value_bundle.naive_value) if value_bundle.naive_value else "0"
+
+        # Compute inferer losses
+        inferer_values: List[InputWorkerAttributedValue] = []
+        if value_bundle.inferer_values:
+            for iv in value_bundle.inferer_values:
+                inferer_values.append(InputWorkerAttributedValue(
+                    worker=iv.worker,
+                    value=compute_loss(iv.value) if iv.value else "0",
+                ))
+
+        # Compute forecaster losses
+        forecaster_values: List[InputWorkerAttributedValue] = []
+        if value_bundle.forecaster_values:
+            for fv in value_bundle.forecaster_values:
+                forecaster_values.append(InputWorkerAttributedValue(
+                    worker=fv.worker,
+                    value=compute_loss(fv.value) if fv.value else "0",
+                ))
+
+        # Compute one-out inferer losses
+        one_out_inferer_values: List[InputWithheldWorkerAttributedValue] = []
+        if value_bundle.one_out_inferer_values:
+            for ooi in value_bundle.one_out_inferer_values:
+                one_out_inferer_values.append(InputWithheldWorkerAttributedValue(
+                    worker=ooi.worker,
+                    value=compute_loss(ooi.value) if ooi.value else "0",
+                ))
+
+        # Compute one-out forecaster losses
+        one_out_forecaster_values: List[InputWithheldWorkerAttributedValue] = []
+        if value_bundle.one_out_forecaster_values:
+            for oof in value_bundle.one_out_forecaster_values:
+                one_out_forecaster_values.append(InputWithheldWorkerAttributedValue(
+                    worker=oof.worker,
+                    value=compute_loss(oof.value) if oof.value else "0",
+                ))
+
+        # Compute one-in forecaster losses
+        one_in_forecaster_values: List[InputWorkerAttributedValue] = []
+        if value_bundle.one_in_forecaster_values:
+            for oif in value_bundle.one_in_forecaster_values:
+                one_in_forecaster_values.append(InputWorkerAttributedValue(
+                    worker=oif.worker,
+                    value=compute_loss(oif.value) if oif.value else "0",
+                ))
+
+        # Compute one-out inferer-forecaster losses
+        one_out_inferer_forecaster_values: List[InputOneOutInfererForecasterValues] = []
+        if value_bundle.one_out_inferer_forecaster_values:
+            for ooif in value_bundle.one_out_inferer_forecaster_values:
+                one_out_losses: List[InputWithheldWorkerAttributedValue] = []
+                if ooif.one_out_inferer_values:
+                    for withheld in ooif.one_out_inferer_values:
+                        one_out_losses.append(
+                            InputWithheldWorkerAttributedValue(
+                                worker=withheld.worker,
+                                value=compute_loss(withheld.value)
+                                if withheld.value
+                                else "0",
+                            )
+                        )
+
+                one_out_inferer_forecaster_values.append(
+                    InputOneOutInfererForecasterValues(
+                        forecaster=ooif.forecaster,
+                        one_out_inferer_values=one_out_losses,
+                    )
+                )
+
+        return InputValueBundle(
+            topic_id=self.topic_id,
+            combined_value=combined_loss,
+            naive_value=naive_loss,
+            inferer_values=inferer_values,
+            forecaster_values=forecaster_values,
+            one_out_inferer_values=one_out_inferer_values,
+            one_out_forecaster_values=one_out_forecaster_values,
+            one_in_forecaster_values=one_in_forecaster_values,
+            one_out_inferer_forecaster_values=one_out_inferer_forecaster_values,
+        )
 
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
