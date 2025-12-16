@@ -7,28 +7,19 @@ across different execution environments (shell, Jupyter, CoLab).
 """
 
 import asyncio
-from dataclasses import dataclass
-from decimal import Decimal
-from enum import Enum
-from getpass import getpass
-import os
 import signal
 import sys
 from textwrap import dedent, indent
 import requests
 import logging
 import time
-from typing import Callable, List, Optional, AsyncIterator, Tuple, Type, Union, Awaitable, cast
+from typing import Optional, AsyncIterator, Protocol
 
-from cosmpy.aerial.wallet import LocalWallet, PrivateKey
-from cosmpy.mnemonic import generate_mnemonic
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
-from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
-from allora_sdk.rpc_client.protos.emissions.v3 import ValueBundle, Nonce, ReputerRequestNonce
-from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest, GetStakeFromReputerInTopicInSelfRequest
+from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
@@ -38,67 +29,23 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowOpened,
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
-    CanSubmitWorkerPayloadRequest,
-    CanSubmitReputerPayloadRequest,
-    GetUnfulfilledWorkerNoncesRequest,
-    GetUnfulfilledReputerNoncesRequest,
-    GetNetworkInferencesAtBlockRequest,
-    IsWorkerRegisteredInTopicIdRequest,
-    IsReputerRegisteredInTopicIdRequest,
     GetLatestNetworkInferencesRequest,
-    InputValueBundle,
-    InputWorkerAttributedValue,
-    InputWithheldWorkerAttributedValue,
-    InputOneOutInfererForecasterValues,
 )
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
+from allora_sdk.worker.inferer import Inferer, TInfererRunFn
+from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer, default_squared_error_loss
+from allora_sdk.worker.types import StopQueue, UseCase, WorkerNotWhitelistedError, WorkerResult
+from allora_sdk.worker.utils import init_worker_wallet
 
 logger = logging.getLogger("allora_sdk")
 
 
-@dataclass
-class PredictionResult:
-    prediction: float
-    tx_result: TxResponse
-
-class WorkerNotWhitelistedError(Exception):
-    pass
-
-@dataclass
-class _StopQueue:
-    pass
-
-PredictionItem = Union[PredictionResult, Exception, _StopQueue]
-PredictFnResultType = str | float | Decimal
-PredictFnSync = Callable[[int], PredictFnResultType]
-PredictFnAsync = Callable[[int], Awaitable[PredictFnResultType]]
-PredictFn = Union[PredictFnSync, PredictFnAsync]
-
-SubmissionWindowOpenedEvent = Union[EventWorkerSubmissionWindowOpened, EventReputerSubmissionWindowOpened]
+class TSubmissionWindowOpenEventType(Protocol):
+    nonce_block_height: int
 
 
-class WorkerRole(Enum):
-    """Role of the worker in the Allora network."""
-    INFERER = "inferer"
-    REPUTER = "reputer"
-
-
-# Type aliases for reputer callbacks
-GroundTruthFnResultType = str | float
-GroundTruthFnSync = Callable[[int], GroundTruthFnResultType]
-GroundTruthFnAsync = Callable[[int], Awaitable[GroundTruthFnResultType]]
-GroundTruthFn = Union[GroundTruthFnSync, GroundTruthFnAsync]
-
-# Type alias for loss function: (ground_truth, predicted_value) -> loss
-LossFn = Callable[[float, float], float]
-
-def default_squared_error_loss(ground_truth: float, predicted: float) -> float:
-    """Default loss function using squared error."""
-    return (ground_truth - predicted) ** 2
-
-
-class AlloraWorker:
+class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType, WorkerFnReturnType]:
     """
     Allora network worker with async generator interface.
     
@@ -110,7 +57,7 @@ class AlloraWorker:
     @classmethod
     def inferer(
         cls,
-        run: PredictFn,
+        predict_fn: TInfererRunFn,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -123,7 +70,7 @@ class AlloraWorker:
         Create an AlloraWorker configured as an inferer.
 
         Args:
-            run: Either a function that returns prediction values (str or float), or a tuple
+            predict_fn: A function that returns prediction values (str or float), or a tuple
                  where the first element is the path to a pickle file and the second element
                  is the name of the function to run from that pickle file
             wallet: Wallet configuration (private key, mnemonic, or file)
@@ -137,25 +84,30 @@ class AlloraWorker:
         Returns:
             An instance of AlloraWorker configured as an inferer
         """
+        wallet_initialized = init_worker_wallet(wallet)
         return cls(
-            run=run,
-            wallet=wallet,
+            use_case=Inferer(
+                topic_id=topic_id,
+                wallet=wallet_initialized,
+                fee_tier=fee_tier,
+                predict_fn=predict_fn,
+                client=None,
+            ),
+            wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             api_key=api_key,
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             submission_window_event_type=EventWorkerSubmissionWindowOpened,
-            role=WorkerRole.INFERER,
             debug=debug,
         )
 
     @classmethod
     def reputer(
         cls,
-        run: LossFn = default_squared_error_loss,
-        *,
         ground_truth_fn: GroundTruthFn,
+        loss_fn: LossFn = default_squared_error_loss,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -183,34 +135,38 @@ class AlloraWorker:
         Returns:
             An instance of AlloraWorker configured as a reputer
         """
+        wallet_initialized = init_worker_wallet(wallet)
         return cls(
-            run=run,
-            ground_truth_fn=ground_truth_fn,
-            wallet=wallet,
+            use_case=Reputer(
+                ground_truth_fn=ground_truth_fn,
+                loss_fn=loss_fn,
+                fee_tier=fee_tier,
+                topic_id=topic_id,
+                client=None,
+                min_stake_uallo=min_stake_uallo,
+                wallet=wallet_initialized,
+            ),
+            wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             api_key=api_key,
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             submission_window_event_type=EventReputerSubmissionWindowOpened,
-            role=WorkerRole.REPUTER,
-            min_stake_uallo=min_stake_uallo,
             debug=debug,
         )
 
 
     def __init__(
         self,
-        run: Union[PredictFn, LossFn],
-        ground_truth_fn: Optional[GroundTruthFn] = None,
+        use_case: UseCase[SubmissionWindowOpenEventType, WorkerFnReturnType],
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
-        submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
-        role: WorkerRole = WorkerRole.INFERER,
+        submission_window_event_type: SubmissionWindowOpenEventType = EventWorkerSubmissionWindowOpened,
         min_stake_uallo: Optional[int] = None,
         debug: bool = False,
     ) -> None:
@@ -233,8 +189,8 @@ class AlloraWorker:
             min_stake_uallo: Minimum stake in uallo to top-up to (only used when role=REPUTER)
             debug: Enable debug logging
         """
-        if not run or not callable(run):
-            raise ValueError("'run' parameter must be provided and callable")
+        if not use_case:
+            raise ValueError("'use_case' parameter is required")
 
         self._initialized = False
         self.topic_id = topic_id
@@ -244,15 +200,8 @@ class AlloraWorker:
         self.submission_window_event_type = submission_window_event_type
         self.submitted_nonces = TimestampOrderedSet()
         
-        # Role-specific attributes
-        self.role = role
-        self.loss_fn: LossFn = cast(LossFn, run) if role == WorkerRole.REPUTER else default_squared_error_loss
-        self.ground_truth_fn: Optional[GroundTruthFn] = ground_truth_fn if role == WorkerRole.REPUTER else None
-        self._predict_fn: Optional[PredictFn] = cast(PredictFn, run) if role == WorkerRole.INFERER else None
+        self.use_case = use_case
         self.min_stake_uallo = min_stake_uallo
-
-        if self.role == WorkerRole.REPUTER and (self.ground_truth_fn is None or not callable(self.ground_truth_fn)):
-            raise ValueError("'ground_truth_fn' must be provided and callable for reputer role")
 
         setup_sdk_logging(debug=debug)
 
@@ -270,7 +219,7 @@ class AlloraWorker:
             debug=debug,
         )
         self._ctx: Optional[Context] = None
-        self._prediction_queue: Optional[asyncio.Queue[PredictionItem]] = None
+        self._queue: Optional[asyncio.Queue[WorkerFnReturnType | TxError | Exception]] = None
         self._subscription_id: Optional[str] = None
 
 
@@ -291,7 +240,6 @@ class AlloraWorker:
 
     async def _show_banner(self):
         resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
-        role_str = self.role.value.upper()
 
         print(indent(dedent(
             rf"""
@@ -301,40 +249,12 @@ class AlloraWorker:
               / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
              /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
              __        _____  ____  _  _______ ____          Address: {self.wallet.address()}
-             \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {role_str}
+             \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
               \ \ /\ / / | | | |_) | ' /|  _| | |_) |
                \ V  V /| |_| |  _ <| . \| |___|  _ <
                 \_/\_/  \___/|_| \_\_|\_\_____|_| \_\
             """
         ), "   "))
-
-
-    def _init_wallet(self, wallet: AlloraWalletConfig | None):
-        if wallet:
-            if wallet.private_key:
-                return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
-            if wallet.mnemonic:
-                return LocalWallet.from_mnemonic(wallet.mnemonic, wallet.prefix)
-
-        if wallet:
-            mnemonic_file = wallet.mnemonic_file or ".allora_key"
-        else:
-            mnemonic_file = ".allora_key"
-
-        if os.path.exists(mnemonic_file):
-            with open(mnemonic_file, "r") as f:
-                mnemonic = f.read().strip()
-                return LocalWallet.from_mnemonic(mnemonic, "allo")
-        else:
-            print("Enter your Allora wallet mnemonic or press <ENTER> to have one generated for you.")
-            mnemonic = getpass("Mnemonic: ").strip()
-            if not mnemonic or  mnemonic == "":
-                mnemonic = generate_mnemonic()
-
-            with open(mnemonic_file, "w") as f:
-                f.write(mnemonic)
-            print(f"Mnemonic saved to {mnemonic_file}")
-            return LocalWallet.from_mnemonic(mnemonic, "allo")
 
 
     async def _log_balance(self):
@@ -444,105 +364,13 @@ class AlloraWorker:
         elif env in ("jupyter", "colab"):
             logger.debug(f"Running in {env} environment, using manual stop mechanisms")
 
-    async def _ensure_registered(self):
-        """Ensure the worker is registered for the topic based on its role."""
-        await self._ensure_initialized()
-        
-        if self.role == WorkerRole.INFERER:
-            resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
-                IsWorkerRegisteredInTopicIdRequest(
-                    topic_id=self.topic_id,
-                    address=str(self.wallet.address()),
-                ),
-            )
-            if not resp.is_registered:
-                logger.debug(f"Registering inferer {str(self.wallet.address())} for topic {self.topic_id}")
-                await self.client.emissions.tx.register(
-                    topic_id=self.topic_id,
-                    owner_addr=str(self.wallet.address()),
-                    sender_addr=str(self.wallet.address()),
-                    is_reputer=False,
-                    fee_tier=FeeTier.PRIORITY,
-                )
-        elif self.role == WorkerRole.REPUTER:
-            resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(
-                IsReputerRegisteredInTopicIdRequest(
-                    topic_id=self.topic_id,
-                    address=str(self.wallet.address()),
-                ),
-            )
-            if not resp.is_registered:
-                logger.debug(f"Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
-                await self.client.emissions.tx.register(
-                    topic_id=self.topic_id,
-                    owner_addr=str(self.wallet.address()),
-                    sender_addr=str(self.wallet.address()),
-                    is_reputer=True,
-                    fee_tier=FeeTier.PRIORITY,
-                )
 
-    async def _maybe_stake_reputer(self):
+    async def run(self, timeout: Optional[float] = None) -> AsyncIterator[WorkerResult[WorkerFnReturnType] |  Exception]:
         """
-        Check current stake and top-up if below target.
+        Run the worker and yield predictions as they're submitted.
         
-        If min_stake_uallo is unset (None) or zero, skip staking.
-        Otherwise, top-up only the delta needed to reach min_stake_uallo.
-        """
-        await self._ensure_initialized()
-        
-        min_stake = self.min_stake_uallo
-        if min_stake is None:
-            logger.info("No minimum stake configured in reputer, skipping adding stake.")
-            return
-        if min_stake == 0:
-            logger.info("No minimum stake requested, skipping adding stake.")
-            return
-        
-        sender = str(self.wallet.address())
-        
-        # Query current stake
-        try:
-            stake_resp = await self.client.emissions.query.get_stake_from_reputer_in_topic_in_self(
-                GetStakeFromReputerInTopicInSelfRequest(
-                    reputer_address=sender,
-                    topic_id=self.topic_id,
-                )
-            )
-            current_stake = int(stake_resp.amount) if stake_resp.amount else 0
-        except Exception as e:
-            logger.warning(f"Failed to query current stake: {e}. Skipping top-up.")
-            return
-        
-        logger.debug(f"Reputer stake: current={current_stake} min_stake={min_stake}")
-        
-        if current_stake >= min_stake:
-            logger.info("Stake above minimum requested stake, skipping adding stake.")
-            return
-        
-        delta = min_stake - current_stake
-        logger.info(f"Stake below minimum requested stake, adding stake (delta={delta} uallo)")
-        
-        try:
-            pending_tx = await self.client.emissions.tx.add_stake(
-                topic_id=self.topic_id,
-                amount=delta,
-                fee_tier=self.fee_tier,
-            )
-            if not isinstance(pending_tx, int):
-                tx_resp = await pending_tx.wait()
-                if tx_resp.code != 0:
-                    logger.error(f"Failed to add stake: code={tx_resp.code} log={tx_resp.raw_log}")
-                else:
-                    logger.info(f"Successfully staked {delta} uallo (tx={tx_resp.txhash})")
-        except Exception as e:
-            logger.error(f"Failed to add stake: {e}")
-
-    async def run(self, timeout: Optional[float] = None) -> AsyncIterator[PredictionResult |  Exception]:
-        """
-        Run the worker and yield predictions as they"re submitted.
-        
-        This is the main entry point for inference providers. It returns an async
-        generator that yields prediction submission results as they happen.
+        This is the main entry point for network actors. It returns an async
+        generator that yields submission results as they happen.
         
         Args:
             timeout: Optional timeout for the entire run (useful in notebooks)
@@ -562,14 +390,14 @@ class AlloraWorker:
             
         ctx = Context()
         self._ctx = ctx
-        self._prediction_queue = asyncio.Queue()
+        self._queue = asyncio.Queue()
         
         self._setup_signal_handlers(ctx)
         
-        logger.debug(f"Starting Allora {self.role.value} for topic {self.topic_id}")
+        logger.debug(f"Starting Allora {self.use_case.name()} for topic {self.topic_id}")
         
         try:
-            await self._ensure_registered()
+            await self.use_case.ensure_registered()
 
             if timeout:
                 try:
@@ -588,7 +416,7 @@ class AlloraWorker:
         finally:
             await self._cleanup(ctx)
 
-    async def _run_with_context(self, ctx: Context) -> AsyncIterator[PredictionResult | Exception]:
+    async def _run_with_context(self, ctx: Context) -> AsyncIterator[WorkerResult | Exception]:
         await self._ensure_initialized()
 
         polling = asyncio.create_task(self._polling_worker(ctx))
@@ -601,12 +429,12 @@ class AlloraWorker:
         
         try:
             while not ctx.is_cancelled():
-                if self._prediction_queue is None:
+                if self._queue is None:
                     break
                 try:
                     # use short timeout to allow cancellation checks
-                    result = await asyncio.wait_for(self._prediction_queue.get(), timeout=1.0)
-                    if isinstance(result, _StopQueue):  # Sentinel value for shutdown
+                    result = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                    if isinstance(result, StopQueue):  # Sentinel value for shutdown
                         break
                     yield result
                 except asyncio.TimeoutError:
@@ -620,9 +448,9 @@ class AlloraWorker:
         await self._ensure_initialized()
 
         await ctx.wait_for_cancellation()
-        if self._prediction_queue is not None:
+        if self._queue is not None:
             try:
-                self._prediction_queue.put_nowait(_StopQueue())
+                self._queue.put_nowait(StopQueue())
             except asyncio.QueueFull:
                 pass
 
@@ -656,9 +484,9 @@ class AlloraWorker:
         await self._ensure_initialized()
 
         self._subscription_id = await self.client.events.subscribe_new_block_events_typed(
-            self.submission_window_event_type,
+            self.use_case.submission_window_event_type(),
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            self._handle_submission_window_opened,
+            self._handle_submission_window_opened_event,
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
@@ -677,14 +505,14 @@ class AlloraWorker:
         )
 
 
-    async def _handle_submission_window_opened(self, event: SubmissionWindowOpenedEvent, height: int):
+    async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
         await self._ensure_initialized()
 
         ctx = self._ctx
         if ctx is None or ctx.is_cancelled():
             return
 
-        role_name = self.role.value.capitalize()
+        role_name = self.use_case.name().capitalize()
         logger.info(f"🚀 {role_name} submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
         
         try:
@@ -696,51 +524,18 @@ class AlloraWorker:
     async def _maybe_submit(self, ctx: Context, nonce: Optional[int] = None):
         await self._ensure_initialized()
 
+        if not self.wallet:
+            return Exception('no wallet')
         if ctx.is_cancelled():
             return
 
-        # Role-based whitelist check
-        if self.role == WorkerRole.INFERER:
-            can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
-                CanSubmitWorkerPayloadRequest(
-                    address=str(self.wallet.address()),
-                    topic_id=self.topic_id,
-                )
-            )
-            if not can_submit_resp.can_submit_worker_payload:
-                logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
-                self.stop()
-                return
-        elif self.role == WorkerRole.REPUTER:
-            can_submit_resp = await self.client.emissions.query.can_submit_reputer_payload(
-                CanSubmitReputerPayloadRequest(
-                    address=str(self.wallet.address()),
-                    topic_id=self.topic_id,
-                )
-            )
-            if not can_submit_resp.can_submit_reputer_payload:
-                logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted as reputer on topic {self.topic_id}.  Contact the topic creator.")
-                self.stop()
-                return
+        can_submit = await self.use_case.worker_is_whitelisted()
+        if not can_submit:
+            logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+            self.stop()
+            return
 
-        # Role-based nonce fetching
-        if self.role == WorkerRole.INFERER:
-            resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
-                GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
-            )
-            nonces = { x.block_height for x in resp.nonces.nonces } if resp.nonces is not None else set()
-        elif self.role == WorkerRole.REPUTER:
-            resp = await self.client.emissions.query.get_unfulfilled_reputer_nonces(
-                GetUnfulfilledReputerNoncesRequest(topic_id=self.topic_id)
-            )
-            nonces = set()
-            if resp.nonces is not None:
-                for nonce_item in resp.nonces.nonces:
-                    if nonce_item.reputer_nonce and nonce_item.reputer_nonce.block_height:
-                        nonces.add(nonce_item.reputer_nonce.block_height)
-        else:
-            nonces = set()
-        
+        nonces = await self.use_case.get_unfulfilled_nonces()
         new_nonces = { n for n in nonces if n not in self.submitted_nonces }
 
         if nonce is not None:
@@ -756,14 +551,9 @@ class AlloraWorker:
 
             logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
 
+            result = None
             try:
-                # Role-based submission
-                if self.role == WorkerRole.INFERER:
-                    result = await self._submit(nonce)
-                elif self.role == WorkerRole.REPUTER:
-                    result = await self._submit_reputer(nonce)
-                else:
-                    result = Exception(f"Unknown role: {self.role}")
+                result = await self.use_case.submit(nonce)
                 if isinstance(result, TxError):
                     if result.code == 78 or result.code == 75: # already submitted
                         self.submitted_nonces.add(nonce)
@@ -810,303 +600,11 @@ class AlloraWorker:
                 # inform whatever is listening about the result
                 if (
                     ctx.is_cancelled() == False and
-                    self._prediction_queue is not None and
+                    self._queue is not None and
                     result is not None
                 ):
-                    await self._prediction_queue.put(result)
+                    await self._queue.put(result)
 
-
-    async def _sanity_check_submission(self, prediction: float) -> None:
-        """
-        Sanity check user's prediction against network consensus using z-score analysis.
-
-        Warns the user if their prediction is suspiciously far from the consensus,
-        which could indicate they're predicting the wrong target variable or using
-        incorrect units.
-
-        Args:
-            prediction: User's prediction value to check
-        """
-        await self._ensure_initialized()
-
-        try:
-            # Query latest network inferences to get consensus
-            response = await self.client.emissions.query.get_latest_network_inferences(
-                GetLatestNetworkInferencesRequest(topic_id=self.topic_id)
-            )
-
-            if not response.network_inferences or not response.network_inferences.inferer_values:
-                # Not enough data to perform sanity check
-                return
-
-            # Extract individual inferer values
-            inferer_values = []
-            for inferer in response.network_inferences.inferer_values:
-                try:
-                    inferer_values.append(float(inferer.value))
-                except (ValueError, TypeError):
-                    continue
-
-            if len(inferer_values) < 3:
-                # Need at least 3 values for meaningful statistics
-                return
-
-            # Calculate mean and standard deviation
-            mean = sum(inferer_values) / len(inferer_values)
-            variance = sum((x - mean) ** 2 for x in inferer_values) / len(inferer_values)
-            std_dev = variance ** 0.5
-
-            if std_dev == 0:
-                # All predictions are identical, can't calculate z-score
-                return
-
-            # Calculate z-score
-            z_score = abs((prediction - mean) / std_dev)
-
-            # Warn if prediction is more than 3 standard deviations away
-            if z_score > 3.0:
-                logger.warning(
-                    f"⚠️⚠️⚠️  SANITY CHECK WARNING: Your prediction ({prediction:.6f}) is {z_score:.1f} "
-                    f"standard deviations from the network consensus (mean: {mean:.6f}, std: {std_dev:.6f}). "
-                    f"Please verify you're predicting the correct target variable and using the right units."
-                )
-            elif z_score > 2.0:
-                logger.info(
-                    f"ℹ️  NOTICE: Your prediction ({prediction:.6f}) is {z_score:.1f} standard deviations "
-                    f"from consensus (mean: {mean:.6f}). This may indicate a contrarian view or potential issue."
-                )
-
-        except Exception as e:
-            # Don't let sanity check failures block submissions
-            logger.debug(f"Sanity check failed (non-fatal): {e}")
-
-
-    async def _submit(self, nonce: int):
-        await self._ensure_initialized()
-
-        if not self.wallet:
-            return Exception('no wallet')
-
-        try:
-            if self._predict_fn is None:
-                return Exception("no predict fn configured")
-            if asyncio.iscoroutinefunction(self._predict_fn):
-                prediction: PredictFnResultType = await self._predict_fn(nonce)
-            else:
-                # Run sync prediction in executor to avoid blocking
-                loop = asyncio.get_event_loop()
-                prediction: PredictFnResultType = await loop.run_in_executor(None, self._predict_fn, nonce)
-        except Exception as err:
-            logger.debug(f"Prediction function failed: {err}")
-            return err
-
-        # Sanity check prediction against network consensus
-        try:
-            await self._sanity_check_submission(float(prediction))
-        except (ValueError, TypeError):
-            logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
-
-        try:
-            resp = await self.client.emissions.tx.insert_worker_payload(
-                topic_id=self.topic_id,
-                inference_value=str(prediction),
-                nonce=nonce,
-                fee_tier=self.fee_tier
-            )
-            if isinstance(resp, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            resp = await resp.wait()
-
-            if resp.code != 0:
-                return TxError(
-                    codespace=resp.codespace,
-                    code=resp.code,
-                    tx_hash=resp.txhash,
-                    message=resp.raw_log,
-                )
-
-            return PredictionResult(prediction=float(prediction), tx_result=resp)
-            
-        except Exception as err:
-            return err
-
-    async def _submit_reputer(self, nonce: int):
-        """Submit a reputer payload for the given nonce."""
-        await self._ensure_initialized()
-
-        if not self.wallet:
-            return Exception('no wallet')
-
-        # Stake top-up if needed
-        await self._maybe_stake_reputer()
-
-        sender = str(self.wallet.address())
-
-        # Get ground truth from user callback
-        try:
-            if self.ground_truth_fn is None:
-                return Exception("no ground truth fn configured")
-            if asyncio.iscoroutinefunction(self.ground_truth_fn):
-                ground_truth_raw = await self.ground_truth_fn(nonce)
-            else:
-                loop = asyncio.get_event_loop()
-                ground_truth_raw = await loop.run_in_executor(None, self.ground_truth_fn, nonce)
-            ground_truth = float(ground_truth_raw)
-        except Exception as err:
-            logger.error(f"Ground truth function failed: {err}")
-            return err
-
-        # Fetch network inferences at block
-        try:
-            network_inferences_resp = await self.client.emissions.query.get_network_inferences_at_block(
-                GetNetworkInferencesAtBlockRequest(
-                    topic_id=self.topic_id,
-                    block_height_last_inference=nonce,
-                )
-            )
-            value_bundle = network_inferences_resp.network_inferences
-            if value_bundle is None:
-                logger.error(f"No network inferences found at block {nonce}")
-                return Exception(f"No network inferences found at block {nonce}")
-        except Exception as err:
-            logger.error(f"Failed to get network inferences: {err}")
-            return err
-
-        # Compute loss bundle
-        try:
-            loss_bundle = self._compute_loss_bundle(ground_truth, value_bundle)
-        except Exception as err:
-            logger.error(f"Failed to compute loss bundle: {err}")
-            return err
-
-        reputer_request_nonce = ReputerRequestNonce(
-            reputer_nonce=Nonce(block_height=nonce),
-        )
-        loss_bundle.reputer_request_nonce = reputer_request_nonce
-        loss_bundle.reputer = sender
-
-        # Submit reputer payload
-        try:
-            resp = await self.client.emissions.tx.insert_reputer_payload(
-                topic_id=self.topic_id,
-                reputer_request_nonce=reputer_request_nonce,
-                value_bundle=loss_bundle,
-                fee_tier=self.fee_tier,
-            )
-            if isinstance(resp, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            tx_resp = await resp.wait()
-
-            if tx_resp.code != 0:
-                return TxError(
-                    codespace=tx_resp.codespace,
-                    code=tx_resp.code,
-                    tx_hash=tx_resp.txhash,
-                    message=tx_resp.raw_log,
-                )
-
-            return PredictionResult(prediction=ground_truth, tx_result=tx_resp)
-
-        except Exception as err:
-            return err
-
-    def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
-        """
-        Compute loss bundle from ground truth and network inferences.
-        
-        Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
-        """
-        def compute_loss(value_str: str) -> str:
-            try:
-                predicted = float(value_str)
-                loss = self.loss_fn(ground_truth, predicted)
-                return str(loss)
-            except (ValueError, TypeError):
-                return "0"
-
-        # Compute combined and naive losses
-        combined_loss = compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
-        naive_loss = compute_loss(value_bundle.naive_value) if value_bundle.naive_value else "0"
-
-        # Compute inferer losses
-        inferer_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.inferer_values:
-            for iv in value_bundle.inferer_values:
-                inferer_values.append(InputWorkerAttributedValue(
-                    worker=iv.worker,
-                    value=compute_loss(iv.value) if iv.value else "0",
-                ))
-
-        # Compute forecaster losses
-        forecaster_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.forecaster_values:
-            for fv in value_bundle.forecaster_values:
-                forecaster_values.append(InputWorkerAttributedValue(
-                    worker=fv.worker,
-                    value=compute_loss(fv.value) if fv.value else "0",
-                ))
-
-        # Compute one-out inferer losses
-        one_out_inferer_values: List[InputWithheldWorkerAttributedValue] = []
-        if value_bundle.one_out_inferer_values:
-            for ooi in value_bundle.one_out_inferer_values:
-                one_out_inferer_values.append(InputWithheldWorkerAttributedValue(
-                    worker=ooi.worker,
-                    value=compute_loss(ooi.value) if ooi.value else "0",
-                ))
-
-        # Compute one-out forecaster losses
-        one_out_forecaster_values: List[InputWithheldWorkerAttributedValue] = []
-        if value_bundle.one_out_forecaster_values:
-            for oof in value_bundle.one_out_forecaster_values:
-                one_out_forecaster_values.append(InputWithheldWorkerAttributedValue(
-                    worker=oof.worker,
-                    value=compute_loss(oof.value) if oof.value else "0",
-                ))
-
-        # Compute one-in forecaster losses
-        one_in_forecaster_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.one_in_forecaster_values:
-            for oif in value_bundle.one_in_forecaster_values:
-                one_in_forecaster_values.append(InputWorkerAttributedValue(
-                    worker=oif.worker,
-                    value=compute_loss(oif.value) if oif.value else "0",
-                ))
-
-        # Compute one-out inferer-forecaster losses
-        one_out_inferer_forecaster_values: List[InputOneOutInfererForecasterValues] = []
-        if value_bundle.one_out_inferer_forecaster_values:
-            for ooif in value_bundle.one_out_inferer_forecaster_values:
-                one_out_losses: List[InputWithheldWorkerAttributedValue] = []
-                if ooif.one_out_inferer_values:
-                    for withheld in ooif.one_out_inferer_values:
-                        one_out_losses.append(
-                            InputWithheldWorkerAttributedValue(
-                                worker=withheld.worker,
-                                value=compute_loss(withheld.value)
-                                if withheld.value
-                                else "0",
-                            )
-                        )
-
-                one_out_inferer_forecaster_values.append(
-                    InputOneOutInfererForecasterValues(
-                        forecaster=ooif.forecaster,
-                        one_out_inferer_values=one_out_losses,
-                    )
-                )
-
-        return InputValueBundle(
-            topic_id=self.topic_id,
-            combined_value=combined_loss,
-            naive_value=naive_loss,
-            inferer_values=inferer_values,
-            forecaster_values=forecaster_values,
-            one_out_inferer_values=one_out_inferer_values,
-            one_out_forecaster_values=one_out_forecaster_values,
-            one_in_forecaster_values=one_in_forecaster_values,
-            one_out_inferer_forecaster_values=one_out_inferer_forecaster_values,
-        )
 
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
@@ -1121,7 +619,7 @@ class AlloraWorker:
                 self._subscription_id = None
         
         await ctx.cleanup()
-        self._prediction_queue = None
+        self._queue = None
         self._ctx = None
         
         logger.debug("Worker cleanup completed")
