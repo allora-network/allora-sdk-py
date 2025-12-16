@@ -8,18 +8,12 @@ and graceful resource cleanup for submitting predictions to Allora network topic
 
 from .worker import (
     AlloraWorker,
-    PredictFnResultType,
-    WorkerRole,
-    GroundTruthFnResultType,
     LossFn,
     default_squared_error_loss,
 )
 
 __all__ = [
     "AlloraWorker",
-    "PredictFnResultType",
-    "WorkerRole",
-    "GroundTruthFnResultType",
     "LossFn",
     "default_squared_error_loss",
 ]
