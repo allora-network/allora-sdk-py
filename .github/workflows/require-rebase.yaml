@@ -1,0 +1,43 @@
+name: Require branch to be rebased onto base
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  require-rebase:
+    name: Ensure branch is up to date with base (rebased)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check base branch is ancestor
+        run: |
+          set -euo pipefail
+
+          BASE="origin/${{ github.base_ref }}"
+          HEAD="origin/${{ github.head_ref }}"
+
+          echo "Base branch: $BASE"
+          echo "Head branch: $HEAD"
+
+          git fetch origin "${{ github.base_ref }}" "${{ github.head_ref }}"
+
+          if git merge-base --is-ancestor "$BASE" "$HEAD"; then
+            echo "✅ Branch is rebased onto latest ${BASE#origin/}"
+          else
+            echo "::error::Branch is not rebased onto latest ${BASE#origin/}"
+            echo ""
+            echo "Policy:"
+            echo "  - Feature/hotfix branches must be rebased"
+            echo "  - Do not merge the base branch"
+            echo ""
+            echo "Fix:"
+            echo "  git fetch origin"
+            echo "  git rebase origin/${{ github.base_ref }}"
+            exit 1
+          fi

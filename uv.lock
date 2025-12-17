@@ -117,7 +117,7 @@ wheels = [
 
 [[package]]
 name = "allora-sdk"
-version = "1.0.5"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -135,6 +135,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pydantic" },
     { name = "requests" },
+    { name = "requests-async" },
     { name = "websockets" },
 ]
 
@@ -142,6 +143,7 @@ dependencies = [
 codegen = [
     { name = "betterproto2-compiler" },
     { name = "grpcio-tools" },
+    { name = "jinja2" },
     { name = "openapi-python-client" },
     { name = "pyyaml" },
 ]
@@ -171,6 +173,7 @@ requires-dist = [
     { name = "grpclib", specifier = ">=0.4.8" },
     { name = "hdwallets", specifier = ">=0.1.2" },
     { name = "httpx", marker = "extra == 'dev'" },
+    { name = "jinja2", marker = "extra == 'codegen'", specifier = ">=3.1.6" },
     { name = "lightgbm" },
     { name = "matplotlib" },
     { name = "mnemonic", specifier = ">=0.21" },
@@ -185,6 +188,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'codegen'" },
     { name = "requests" },
     { name = "requests", specifier = "~=2.32" },
+    { name = "requests-async", specifier = ">=0.2.4" },
     { name = "starlette", marker = "extra == 'dev'" },
     { name = "tox", marker = "extra == 'dev'" },
     { name = "types-cachetools", marker = "extra == 'dev'", specifier = ">=5.5.0.20240820" },
@@ -994,6 +998,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
+]
+
+[package.optional-dependencies]
+socks = [
+    { name = "socksio" },
 ]
 
 [[package]]
@@ -2238,6 +2247,18 @@ wheels = [
 ]
 
 [[package]]
+name = "requests-async"
+version = "0.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx", extra = ["socks"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/4b/249e19be15ff3f5eb9884010ace898d1935e15ac8bfdff40d7e26a10740d/requests_async-0.2.4.tar.gz", hash = "sha256:7eaa42cbfe4d0f1a5f1ef78625c625248cac5c5323afcbd76e7a2a26b85b56b9", size = 7961, upload-time = "2025-08-05T03:35:11.04Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/cf/bea41de8b7c81963d25230da39978ed0853258b7d481f60ce027bd889aa6/requests_async-0.2.4-py3-none-any.whl", hash = "sha256:a967efb84eb03a2053a847b1bfbac5917df8100d101368d883e20ae9ab15f7a2", size = 6895, upload-time = "2025-08-05T03:35:09.703Z" },
+]
+
+[[package]]
 name = "rich"
 version = "14.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2619,6 +2640,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+]
+
+[[package]]
+name = "socksio"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/5c/48a7d9495be3d1c651198fd99dbb6ce190e2274d0f28b9051307bdec6b85/socksio-1.0.0.tar.gz", hash = "sha256:f88beb3da5b5c38b9890469de67d0cb0f9d494b78b106ca1845f96c10b91c4ac", size = 19055, upload-time = "2020-04-17T15:50:34.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/c3/6eeb6034408dac0fa653d126c9204ade96b819c936e136c5e8a6897eee9c/socksio-1.0.0-py3-none-any.whl", hash = "sha256:95dc1f15f9b34e8d7b16f06d74b8ccf48f609af32ab33c608d08761c5dcbb1f3", size = 12763, upload-time = "2020-04-17T15:50:31.878Z" },
 ]
 
 [[package]]

@@ -25,12 +25,12 @@ class AlloraWalletConfig:
     prefix: str = "allo"
 
     @classmethod
-    def from_env(cls) -> 'AlloraWalletConfig':
+    def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
         return cls(
-            private_key=os.getenv("PRIVATE_KEY"),
-            mnemonic=os.getenv("MNEMONIC"),
-            mnemonic_file=os.getenv("MNEMONIC_FILE"),
-            prefix=os.getenv("ADDRESS_PREFIX", "allo"),
+            private_key=os.getenv((env_prefix or "") + "PRIVATE_KEY"),
+            mnemonic=os.getenv((env_prefix or "") + "MNEMONIC"),
+            mnemonic_file=os.getenv((env_prefix or "") + "MNEMONIC_FILE"),
+            prefix=os.getenv((env_prefix or "") + "ADDRESS_PREFIX", "allo"),
         )
 
     def __post_init__(self):
@@ -58,54 +58,86 @@ class AlloraNetworkConfig:
     congestion_aware_fees: bool = False
 
     @classmethod
-    def testnet(cls) -> 'AlloraNetworkConfig':
+    def testnet(
+        cls,
+        chain_id="allora-testnet-1",
+        url="grpc+https://allora-grpc.testnet.allora.network:443",
+        websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
+        faucet_url="https://faucet.testnet.allora.network",
+        fee_denom="uallo",
+        fee_minimum_gas_price=10.0,
+        use_dynamic_gas_price=True,
+        gas_price_cache_ttl_secs=30,
+        congestion_aware_fees=False,
+    ) -> 'AlloraNetworkConfig':
         return cls(
-            chain_id="allora-testnet-1",
-            url="grpc+https://allora-grpc.testnet.allora.network:443",
-            websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
-            faucet_url="https://faucet.testnet.allora.network",
-            fee_denom="uallo",
-            fee_minimum_gas_price=10.0,
-            use_dynamic_gas_price=True,
-            gas_price_cache_ttl_secs=30,
-            congestion_aware_fees=False,
+            chain_id=chain_id,
+            url=url,
+            websocket_url=websocket_url,
+            faucet_url=faucet_url,
+            fee_denom=fee_denom,
+            fee_minimum_gas_price=fee_minimum_gas_price,
+            use_dynamic_gas_price=use_dynamic_gas_price,
+            gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
+            congestion_aware_fees=congestion_aware_fees,
         )
 
     @classmethod
-    def mainnet(cls) -> 'AlloraNetworkConfig':
+    def mainnet(
+        cls,
+        chain_id="allora-mainnet-1",
+        url="grpc+https://allora-grpc.mainnet.allora.network:443",
+        websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
+        fee_denom="uallo",
+        fee_minimum_gas_price=250_000_000.0,
+        use_dynamic_gas_price=True,
+        gas_price_cache_ttl_secs=30,
+        congestion_aware_fees=False,
+    ) -> 'AlloraNetworkConfig':
         return cls(
-            chain_id="allora-mainnet-1",
-            url="grpc+https://allora-grpc.mainnet.allora.network:443",
-            websocket_url="wss://allora-rpc.mainnet.allora.network/websocket",
-            fee_denom="uallo",
-            fee_minimum_gas_price=250_000_000.0,
-            use_dynamic_gas_price=True,
-            gas_price_cache_ttl_secs=30,
-            congestion_aware_fees=False,
+            chain_id=chain_id,
+            url=url,
+            websocket_url=websocket_url,
+            fee_denom=fee_denom,
+            fee_minimum_gas_price=fee_minimum_gas_price,
+            use_dynamic_gas_price=use_dynamic_gas_price,
+            gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
+            congestion_aware_fees=congestion_aware_fees,
         )
 
     @classmethod
-    def local(cls, port: int = 26657) -> 'AlloraNetworkConfig':
+    def local(
+        cls,
+        chain_id="allora-local",
+        websocket_url="ws://localhost:26657/websocket",
+        fee_denom="uallo",
+        fee_minimum_gas_price=0.0,
+        use_dynamic_gas_price=False,
+        gas_price_cache_ttl_secs=30,
+        congestion_aware_fees=False,
+        port: int = 26657,
+        url: str | None = None,
+    ) -> 'AlloraNetworkConfig':
         return cls(
-            chain_id="allora-local",
-            url=f"grpc+http://localhost:{port}",
-            websocket_url=f"ws://localhost:26657/websocket",
-            fee_denom="uallo",
-            fee_minimum_gas_price=0.0,
-            use_dynamic_gas_price=False,
-            gas_price_cache_ttl_secs=30,
-            congestion_aware_fees=False,
+            chain_id=chain_id,
+            url=url or f"grpc+http://localhost:{port}",
+            websocket_url=websocket_url,
+            fee_denom=fee_denom,
+            fee_minimum_gas_price=fee_minimum_gas_price,
+            use_dynamic_gas_price=use_dynamic_gas_price,
+            gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
+            congestion_aware_fees=congestion_aware_fees,
         )
 
     @classmethod
-    def from_env(cls) -> 'AlloraNetworkConfig':
+    def from_env(cls, env_prefix: str | None = None) -> 'AlloraNetworkConfig':
         return cls(
-            chain_id=require_env("CHAIN_ID"),
-            url=require_env("RPC_ENDPOINT"),
-            websocket_url=require_env("WEBSOCKET_ENDPOINT"),
-            faucet_url=require_env("FAUCET_URL"),
-            fee_denom=require_env("FEE_DENOM"),
-            fee_minimum_gas_price=float(require_env("FEE_MIN_GAS_PRICE")),
+            chain_id=require_env((env_prefix or "") + "CHAIN_ID"),
+            url=require_env((env_prefix or "") + "RPC_ENDPOINT"),
+            websocket_url=require_env((env_prefix or "") + "WEBSOCKET_ENDPOINT"),
+            faucet_url=require_env((env_prefix or "") + "FAUCET_URL"),
+            fee_denom=require_env((env_prefix or "") + "FEE_DENOM"),
+            fee_minimum_gas_price=float(require_env((env_prefix or "") + "FEE_MIN_GAS_PRICE")),
         )
     
     def to_cosmpy_config(self) -> NetworkConfig:

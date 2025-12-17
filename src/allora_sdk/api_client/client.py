@@ -1,3 +1,4 @@
+import pprint
 import aiohttp
 from enum import Enum
 from typing import List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
@@ -29,13 +30,17 @@ class Topic(BaseModel):
 class InferenceData(BaseModel):
     network_inference: str
     network_inference_normalized: str
+    confidence_interval_percentiles: Optional[list[str]] = Field(None)
+    confidence_interval_percentiles_normalized: Optional[list[str]] = Field(None)
+    confidence_interval_values: Optional[list[str]] = Field(None)
+    confidence_interval_values_normalized: Optional[list[str]] = Field(None)
     topic_id: str
     timestamp: int
     extra_data: str
 
 class Inference(BaseModel):
     signature: str
-    token_decimals: int
+    token_decimals: Optional[int] = Field(None)
     inference_data: InferenceData
 
 class TopicsResponse(BaseModel):
@@ -117,6 +122,7 @@ class AlloraAPIClient:
             f"allora/consumer/{signature_format.value}?allora_topic_id={topic_id}&inference_value_type=uint256",
             Inference,
         )
+        pprint.pprint(response)
 
         if not response.data.inference_data:
             raise ValueError("Failed to fetch price inference")
@@ -150,5 +156,6 @@ class AlloraAPIClient:
         }
         response_data = await self.fetcher.fetch(url, headers)
 
+        pprint.pprint(response_data)
         return APIResponse[response_model](**response_data)
 
