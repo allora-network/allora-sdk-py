@@ -25,10 +25,6 @@ class {{ service.class_name }}({{ service.protocol_name }}):
         self.base_url = base_url.rstrip('/')
         self.session = requests_async.AsyncSession()
 
-    def __del__(self):
-        """Clean up session on deletion."""
-        if hasattr(self, 'session'):
-            self.session.close()
 {%- for method in service.methods_with_bindings %}
 
 {%- if method.has_path_params %}
@@ -47,9 +43,10 @@ class {{ service.class_name }}({{ service.protocol_name }}):
 {%- endif %}
         url = self.base_url + f"{{ method.url_path }}"
         headers = {"x-cosmos-block-height": height} if height else None
-        response = await self.session.get(url, params=params)
+        async with self.session as session:
+            response = await session.get(url, params=params, headers=headers)
         response.raise_for_status()
-        return {{ method.response_type_name }}().from_json(response.text)
+        return {{ method.response_type_name }}().from_json(response.text, ignore_unknown_fields=True)
 
 {% endfor %}
 

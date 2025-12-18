@@ -12,7 +12,7 @@ import importlib
 import pkgutil
 import inspect
 import time
-from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
+from typing import AsyncIterable, Awaitable, ClassVar, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
 import traceback
 import betterproto2
@@ -46,7 +46,11 @@ async def default_websocket_connect(url: str) -> WebSocketLike:
 
 
 
-T = TypeVar('T', bound=betterproto2.Message)
+class TBetterproto2Message(Protocol):
+    # __name__: ClassVar[str]
+    pass
+
+T = TypeVar('T', bound=TBetterproto2Message)
 
 class NewBlockEventsData(BaseModel):
     height: str
@@ -167,13 +171,12 @@ class EventFilter:
     
 
 
-GenericSyncCallbackFn  = Callable[[Dict[str, Any], int], None]
-GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
-GenericCallbackFn      = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
-
-TypedSyncCallbackFn  = Callable[[T, int], None]
-TypedAsyncCallbackFn = Callable[[T, int], Awaitable[None]]
-TypedCallbackFn      = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
+type GenericSyncCallbackFn  = Callable[[Dict[str, Any], int], None]
+type GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
+type GenericCallbackFn      = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
+type TypedSyncCallbackFn[T]  = Callable[[T, int], None]
+type TypedAsyncCallbackFn[T] = Callable[[T, int], Awaitable[None]]
+type TypedCallbackFn[T]      = Union[TypedSyncCallbackFn[T], TypedAsyncCallbackFn[T]]
 
 
 class AlloraWebsocketSubscriber:
@@ -840,11 +843,11 @@ class AlloraWebsocketSubscriber:
         
         return subscription_id
     
-    async def subscribe_new_block_events_typed(
+    async def subscribe_new_block_events_typed[TEvent: TBetterproto2Message](
         self,
-        event_class: Type[T],
+        event_class: type[TEvent],
         event_attribute_conditions: List[EventAttributeCondition],
-        callback: TypedCallbackFn,
+        callback: TypedCallbackFn[TEvent],
         subscription_id: Optional[str] = None,
     ) -> str:
         """
@@ -904,7 +907,7 @@ class AlloraWebsocketSubscriber:
         logger.debug(f"✅ Completed typed subscription: {event_name} -> {event_class.__name__} (ID: {subscription_id})")
         return subscription_id
     
-    def _get_event_type_from_class(self, event_class: Type[betterproto2.Message]) -> Optional[str]:
+    def _get_event_type_from_class(self, event_class: type[TBetterproto2Message]) -> Optional[str]:
         """Get the event type string from a protobuf class."""
         
         # First try direct class match

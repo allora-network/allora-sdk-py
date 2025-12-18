@@ -1,5 +1,6 @@
 import asyncio
 from enum import Enum
+import traceback
 import grpc
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -72,14 +73,15 @@ class FeeTier(Enum):
 
 class TxError(Exception):
     """Base exception for transaction errors."""
-    def __init__(self, codespace: str, code: int, message: str, tx_hash: str):
+    def __init__(self, codespace: str, code: int, message: str, tx_hash: Optional[str] = None):
         self.codespace = codespace
         self.code = code
         self.message = message
         self.tx_hash = tx_hash
 
     def __str__(self):
-        return f"TxError: codespace={self.codespace} code={self.code} tx_hash={self.tx_hash} {self.message}"
+        tx_info = f"tx_hash={self.tx_hash}" if self.tx_hash else "simulation"
+        return f"TxError: codespace={self.codespace} code={self.code} {tx_info} {self.message}"
 
 class InsufficientBalanceError(Exception):
     """Raised when account doesn't have enough balance for fees."""
@@ -87,7 +89,10 @@ class InsufficientBalanceError(Exception):
 
 class OutOfGasError(Exception):
     """Raised when transaction runs out of gas."""
-    pass
+    def __init__(self, message: str, gas_wanted: Optional[int] = None, gas_used: Optional[int] = None):
+        super().__init__(message)
+        self.gas_wanted = gas_wanted
+        self.gas_used = gas_used
 
 class InsufficientFeesError(Exception):
     pass
@@ -160,9 +165,24 @@ class TxManager:
         fee_tier: FeeTier = FeeTier.STANDARD,
         max_retries: int = 2,
         timeout: Optional[timedelta] = None,
+        account_seq: Optional[int] = None,
     ):
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+
+        estimated_gas_limit = gas_limit
+        if estimated_gas_limit is None:
+            try:
+                estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
+                logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
+                fee_preview = await self._calculate_optimal_fee(
+                    estimated_gas_limit,
+                    self._fee_multipliers[fee_tier],
+                )
+                logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+            except Exception as e:
+                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+                estimated_gas_limit = None
 
         pending = PendingTx(
             manager=self,
@@ -176,7 +196,9 @@ class TxManager:
         self.parent_tx_id += 1
 
         # Kick off processing as a background task; caller can await the PendingTx
-        asyncio.create_task(self._attempt_submissions(pending, gas_limit))
+        asyncio.create_task(
+            self._attempt_submissions(pending, estimated_gas_limit, account_seq=account_seq)
+        )
 
         return pending
     
@@ -211,66 +233,76 @@ class TxManager:
         if resp.info is None:
             raise Exception('account_info query response is none')
         info = resp.info
-        
-        any_messages = [self._create_any_message(msg, type_url) for msg in msgs]
-        
-        tx = Transaction()
-        for msg in any_messages:
-            tx.add_message(msg)
-        
-        dummy_gas_limit = 200000
-        dummy_fee = Coin(amount=1, denom=self.config.fee_denom)
-        
-        tx.seal(
-            signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
-            fee=TxFee(amount=[dummy_fee], gas_limit=dummy_gas_limit),
-        )
-        
-        tx.complete()
-        
-        assert tx.tx is not None
-        
-        tx_raw = CosmpyTxRaw(
-            body_bytes=cast(Message, tx.tx.body).SerializeToString(),
-            auth_info_bytes=cast(Message, tx.tx.auth_info).SerializeToString(),
-            signatures=[b''],
-        )
-        
-        tx_bytes = tx_raw.SerializeToString()
-        
-        sim_request = SimulateRequest(tx_bytes=tx_bytes)
-        
-        try:
-            sim_response = await self.tx_client.simulate(sim_request)
-            
-            if sim_response is None or sim_response.gas_info is None:
-                raise Exception('Simulation response is None or missing gas_info')
-            
-            gas_used = int(sim_response.gas_info.gas_used)
-            logger.debug(f"Simulation successful: estimated gas = {gas_used}")
-            
-            # Add a 20% safety margin to the estimate
-            return int(gas_used * 1.2)
-            
-        except grpc.RpcError as e:
-            error_details = e.details() if hasattr(e, 'details') else str(e)
-            logger.error(f"Simulation failed: {error_details}")
-            
-            # Check for common errors
-            error_str = str(error_details).lower() if error_details else ""
-            if "account sequence mismatch" in error_str:
-                raise AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_details}")
-            
-            raise Exception(f"Transaction simulation failed: {error_details}")
-        except Exception as e:
-            logger.error(f"Simulation error: {e}")
-            raise
 
-    async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int]):
+        any_messages = [self._create_any_message(msg, type_url) for msg in msgs]
+
+        # Start with the configured default as the lower bound
+        base_gas_limit = await self._estimate_gas(type_url)
+        current_gas_limit = max(base_gas_limit, 200000)
+        # Don't allow runaway retry loops during simulation
+        max_simulation_gas = max(int(current_gas_limit * 5), 2_000_000)
+
+        attempt = 0
+        while True:
+            attempt += 1
+            tx = Transaction()
+            for msg in any_messages:
+                tx.add_message(msg)
+
+            dummy_fee = Coin(amount=1, denom=self.config.fee_denom)
+
+            tx.seal(
+                signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
+                fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit),
+            )
+
+            tx.complete()
+
+            assert tx.tx is not None
+
+            tx_raw = CosmpyTxRaw(
+                body_bytes=cast(Message, tx.tx.body).SerializeToString(),
+                auth_info_bytes=cast(Message, tx.tx.auth_info).SerializeToString(),
+                signatures=[b''],
+            )
+
+            tx_bytes = tx_raw.SerializeToString()
+
+            sim_request = SimulateRequest(tx_bytes=tx_bytes)
+
+            try:
+                sim_response = await self.tx_client.simulate(sim_request)
+
+                if sim_response is None or sim_response.gas_info is None:
+                    raise Exception('Simulation response is None or missing gas_info')
+
+                gas_used = int(sim_response.gas_info.gas_used)
+                logger.debug(f"Simulation successful after {attempt} attempt(s): estimated gas = {gas_used}")
+
+                # Add a 20% safety margin to the estimate
+                return int(gas_used * 1.2)
+
+            except grpc.RpcError as e:
+                err = self._exception_from_simulation_error(e)
+                if isinstance(err, OutOfGasError) and current_gas_limit < max_simulation_gas:
+                    next_limit = min(max_simulation_gas, int(current_gas_limit * 1.5))
+                    logger.debug(
+                        f"Simulation ran out of gas at {current_gas_limit}, "
+                        f"retrying with {next_limit}"
+                    )
+                    current_gas_limit = next_limit
+                    continue
+
+                logger.error(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
+                raise err
+
+    async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
         start = datetime.now()
 
         gas_multiplier = 1.0
         fee_multiplier = self._fee_multipliers[pending.fee_tier]
+        current_gas_limit = gas_limit
+        next_account_seq = account_seq
 
         for attempt in range(pending.max_retries + 1):
             try:
@@ -279,23 +311,27 @@ class TxManager:
                 pending.attempt = attempt
 
                 gas_multiplier = 1.0 + (attempt * 0.3)
-                tx_hash, used_gas_limit, used_fee = await self._build_and_broadcast(
+                tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
-                    gas_limit,
+                    current_gas_limit,
                     fee_multiplier,
                     gas_multiplier,
+                    next_account_seq,
                 )
 
                 # Update known properties
                 pending.last_tx_hash = tx_hash
                 pending.last_gas_limit = used_gas_limit
                 pending.last_fee = used_fee
+                current_gas_limit = used_gas_limit
+                next_account_seq = used_sequence
 
                 # Await current attempt
                 resp = await self.wait_for_tx(tx_hash, timeout=timedelta(seconds=30), poll_period=timedelta(seconds=2))
                 assert resp.tx_response is not None
                 self._log_tx_response(resp.tx_response)
+                next_account_seq = used_sequence + 1
                 self._raise_for_status(resp.tx_response)
 
                 logger.debug(f"✅ Transaction included in block!")
@@ -303,11 +339,32 @@ class TxManager:
                 pending._final_future.set_result(resp.tx_response)
                 return
 
-            except OutOfGasError:
+            except OutOfGasError as oog_err:
                 gas_multiplier = 1.0 + (attempt * 0.3)
+
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
-                    raise Exception("Transaction failed after multiple attempts due to insufficient gas")
-                logger.debug(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
+                    pending._final_future.set_exception(oog_err)
+                    return
+
+                suggested_limit = (
+                    int(oog_err.gas_wanted * 1.2) if getattr(oog_err, "gas_wanted", None) else None
+                )
+
+                if suggested_limit is None and pending.last_gas_limit is not None:
+                    suggested_limit = int(pending.last_gas_limit * 1.3)
+
+                if suggested_limit is None and current_gas_limit is not None:
+                    suggested_limit = int(current_gas_limit * 1.3)
+
+                if suggested_limit is None:
+                    estimated = await self._estimate_gas(pending.type_url)
+                    suggested_limit = int(estimated * 1.5)
+
+                current_gas_limit = suggested_limit
+                logger.debug(
+                    f"Gas estimation too low, retrying with higher gas limit {current_gas_limit} "
+                    f"(attempt {attempt + 2})"
+                )
                 continue
 
             except InsufficientFeesError:
@@ -324,12 +381,14 @@ class TxManager:
             except AccountSequenceMismatchError:
                 # Account sequence will be recalculated on next attempt
                 # TODO: maybe build a nonce manager?
+                next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to repeated account sequence mismatches")
                 logger.debug("Account sequence mismatch, retrying...")
                 continue
 
             except TxTimeoutError:
+                next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
@@ -352,7 +411,8 @@ class TxManager:
         gas_limit: Optional[int],
         fee_multiplier: float,
         gas_multiplier: float,
-    ) -> tuple[str, int, Coin]:
+        account_seq: Optional[int] = None,
+    ) -> tuple[str, int, Coin, int]:
         any_messages = [ self._create_any_message(msg, type_url) for msg in msgs ]
 
         tx = Transaction()
@@ -369,10 +429,11 @@ class TxManager:
         if resp.info is None:
             raise Exception('account_info query response is none')
         info = resp.info
-        logger.debug(f"Account info: seq={info.sequence}, num={info.account_number}")
+        resolved_seq = account_seq if account_seq is not None else info.sequence
+        logger.debug(f"Account info: seq={resolved_seq}, num={info.account_number}")
 
         tx.seal(
-            signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence) ],
+            signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
         )
 
@@ -405,9 +466,10 @@ class TxManager:
         tx_hash = broadcast_result.tx_response.txhash
         logger.debug("⏳ Waiting for transaction to be included in block...")
 
-        return tx_hash, gas_limit, fee
+        return tx_hash, gas_limit, fee, resolved_seq
 
-    async def wait_for_tx(self,
+    async def wait_for_tx(
+        self,
         hash: str,
         timeout: Optional[Union[int, float, timedelta]] = None,
         poll_period: Optional[Union[int, float, timedelta]] = None,
@@ -467,15 +529,44 @@ class TxManager:
         if err is not None:
             raise err
 
+    def _classify_error_from_message(self, error_msg: str) -> type[Exception]:
+        """
+        Classify error type based on error message content.
+
+        Args:
+            error_msg: Error message string to classify
+
+        Returns:
+            Exception class that best matches the error message
+        """
+        error_lower = error_msg.lower()
+
+        if "out of gas" in error_lower:
+            return OutOfGasError
+        elif "account sequence mismatch" in error_lower:
+            return AccountSequenceMismatchError
+        elif "insufficient fees" in error_lower:
+            return InsufficientFeesError
+        else:
+            return TxError
+
     def _exception_from_tx_response(self, resp: TxResponse):
         if resp.code == 0:
             return None
 
-        if "out of gas" in resp.raw_log.lower():
-            return OutOfGasError(f"Transaction ran out of gas: {resp.raw_log}")
-        elif "account sequence mismatch" in resp.raw_log.lower():
+        error_class = self._classify_error_from_message(resp.raw_log)
+
+        if error_class == OutOfGasError:
+            gas_wanted = getattr(resp, "gas_wanted", None)
+            gas_used = getattr(resp, "gas_used", None)
+            return OutOfGasError(
+                f"Transaction ran out of gas: {resp.raw_log}",
+                gas_wanted=int(gas_wanted) if gas_wanted else None,
+                gas_used=int(gas_used) if gas_used else None,
+            )
+        elif error_class == AccountSequenceMismatchError:
             return AccountSequenceMismatchError(f"Sequence mismatch: {resp.raw_log}")
-        elif "insufficient fees" in resp.raw_log.lower():
+        elif error_class == InsufficientFeesError:
             return InsufficientFeesError("insufficient fees")
         else:
             return TxError(
@@ -483,6 +574,40 @@ class TxManager:
                 code=resp.code,
                 message=resp.raw_log,
                 tx_hash=resp.txhash
+            )
+
+    def _exception_from_simulation_error(self, error: grpc.RpcError) -> Exception:
+        """
+        Parse gRPC error from simulation and return appropriate exception.
+
+        Applies same error classification as _exception_from_tx_response
+        for consistency between simulation and actual transaction errors.
+
+        Args:
+            error: gRPC error from simulation call
+
+        Returns:
+            Appropriate exception type based on error details
+        """
+        error_details = error.details() if hasattr(error, 'details') else str(error)
+        error_msg = error_details or str(error)
+        error_class = self._classify_error_from_message(error_msg)
+
+        if error_class == OutOfGasError:
+            return OutOfGasError(f"Simulation ran out of gas: {error_msg}")
+        elif error_class == AccountSequenceMismatchError:
+            return AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_msg}")
+        elif error_class == InsufficientFeesError:
+            return InsufficientFeesError(f"Insufficient fees during simulation: {error_msg}")
+        else:
+            code = error.code() if hasattr(error, 'code') else None
+            code_value = code.value[0] if code else 1
+
+            return TxError(
+                codespace="simulation",
+                code=code_value,
+                message=error_msg,
+                tx_hash=None
             )
 
     async def _estimate_gas(self, type_url: str) -> int:
@@ -523,7 +648,7 @@ class TxManager:
                     self._cached_gas_price = price
                     self._gas_price_cache_time = datetime.now()
                     logger.debug(f"Using dynamic gas price: {price} {self.config.fee_denom}/gas")
-                    return float(price)
+                    return float(price) * 10
             except Exception as e:
                 logger.debug(f"Failed to query dynamic gas price, using static: {e}")
 
@@ -674,4 +799,3 @@ class TxManager:
         
         wrapped_message = BetterprotoWrapper(message, type_url)
         return wrapped_message
-

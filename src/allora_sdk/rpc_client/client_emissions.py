@@ -94,6 +94,7 @@ class EmissionsTxs:
         proof: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
+        account_seq: Optional[int] = None,
         simulate: bool = False,
     ) -> Union[PendingTx, int]:
         """
@@ -186,7 +187,8 @@ class EmissionsTxs:
                 type_url="/emissions.v9.InsertWorkerPayloadRequest",
                 msgs=[ payload_request ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                account_seq=account_seq,
             )
 
 
@@ -277,6 +279,7 @@ class EmissionsTxs:
         value_bundle: InputValueBundle,
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
+        account_seq: Optional[int] = None,
         simulate: bool = False,
     ) -> Union[PendingTx, int]:
         """
@@ -330,7 +333,8 @@ class EmissionsTxs:
                 type_url="/emissions.v9.InsertReputerPayloadRequest",
                 msgs=[ payload_request ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                account_seq=account_seq,
             )
 
     async def create_topic(

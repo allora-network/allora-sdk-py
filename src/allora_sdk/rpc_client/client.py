@@ -147,6 +147,18 @@ class AlloraRPCClient:
             raise ValueError(f"Invalid wallet credentials: {e}")
     
 
+    async def raise_for_chain_id_mismatch(self):
+        chain_id = await self.chain_id()
+        if self.network.chain_id != chain_id:
+            raise ValueError(f"Configuration specifies chain id '{self.network.chain_id}' which conflicts with network-reported chain ID '{chain_id}'")
+        return chain_id
+
+
+    async def chain_id(self):
+        node_info_resp = await self.tendermint.query.get_node_info(tendermint_v1beta1.GetNodeInfoRequest())
+        return node_info_resp.default_node_info.network if node_info_resp.default_node_info else ""
+
+
     @property
     def address(self) -> Optional[str]:
         """Get the wallet address if wallet is initialized."""

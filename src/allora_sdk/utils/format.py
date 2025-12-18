@@ -4,32 +4,68 @@ Formatting utilities for Allora SDK.
 
 from decimal import Decimal
 
-def allo_str_to_uallo(allo: str):
+def allo_to_uallo(allo: str | Decimal | float | int):
     """
-    Convert ALLO string to uALLO (micro ALLO) integer representation.
+    Convert ALLO amount to uALLO (micro ALLO) integer representation.
 
     Args:
-        allo: Amount in ALLO as a string (e.g., "1.5")
+        allo: Amount in ALLO as string, Decimal, float, or int
 
     Returns:
         Amount in uALLO as an integer
 
     Examples:
-        >>> allo_str_to_uallo("1.0")
+        >>> allo_to_uallo(1.0)
         1000000000000000000
-        >>> allo_str_to_uallo("0.5")
+        >>> allo_to_uallo("0.5")
         500000000000000000
-        >>> allo_str_to_uallo("2.345678901234567890")
+        >>> allo_to_uallo(Decimal("2.345678901234567890"))
         2345678901234567890
     """
-    # Convert string to Decimal for precise arithmetic
-    allo_decimal = Decimal(allo)
+    if isinstance(allo, str):
+        allo_decimal = Decimal(allo)
+    elif isinstance(allo, (float, int)):
+        allo_decimal = Decimal(str(allo))
+    elif isinstance(allo, Decimal):
+        allo_decimal = allo
+    else:
+        raise TypeError("allo must be of type str, Decimal, float, or int")
 
     # Convert from ALLO to uALLO by multiplying by 10^18
     uallo_decimal = allo_decimal * (Decimal(10) ** 18)
 
-    # Return as integer
+    # Return as big int
     return int(uallo_decimal)
+
+def uallo_to_allo(uallo: str | int, decimals: int = 18) -> Decimal:
+    """
+    Convert uALLO (micro ALLO) to ALLO denomination.
+
+    Args:
+        uallo: Amount in uALLO as string or int
+        decimals: Number of decimal places (default 18 for ALLO)
+
+    Returns:
+        Amount in ALLO as Decimal
+
+    Examples:
+        >>> uallo_to_allo("1000000000000000000")  # 1e18 uALLO
+        Decimal('1')
+        >>> uallo_to_allo("500000000000000000")   # 0.5e18 uALLO
+        Decimal('0.5')
+        >>> uallo_to_allo("1234567890123456789")
+        Decimal('1.234567890123456789')
+    """
+    if isinstance(uallo, str):
+        uallo_decimal = Decimal(uallo)
+    else:
+        uallo_decimal = Decimal(str(uallo))
+
+    # Convert from micro denomination to base denomination
+    divisor = Decimal(10) ** decimals
+    allo_decimal = uallo_decimal / divisor
+
+    return allo_decimal
 
 def format_allo_from_uallo(uallo_amount: str | int, decimals: int = 18) -> str:
     """

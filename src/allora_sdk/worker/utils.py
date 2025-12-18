@@ -1,10 +1,12 @@
 import inspect
 import os
 from getpass import getpass
-from typing import Any, Awaitable, Callable, TypeVar, Union, cast
+from typing import Any, Awaitable, Callable, ParamSpec, TypeVar, Union, cast
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
-from allora_sdk.rpc_client.config import AlloraWalletConfig
+from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
 
 
 def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
@@ -36,18 +38,20 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
 
 
 R = TypeVar("R")
+P = ParamSpec("P")
+
 MaybeAwaitable = Union[R, Awaitable[R]]
 
-async def resolve_maybe_awaitable(predict_fn: Callable[[Any], MaybeAwaitable[R]], *args) -> R:
-    # Prefer a cheap direct call first; this handles true async + weird sync-returning-awaitable.
-    try:
-        out = predict_fn(*args)
-    except Exception:
-        raise
+async def resolve_maybe_awaitable(
+    fn: Callable[P, MaybeAwaitable[R]],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> R:
+    out = fn(*args, **kwargs)
 
     if inspect.isawaitable(out):
         return await cast(Awaitable[R], out)
-    return cast(R, out)
 
+    return cast(R, out)
 
 

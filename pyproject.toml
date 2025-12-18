@@ -40,6 +40,7 @@ dependencies = [
     "dill",
     "matplotlib",
     "requests-async>=0.2.4",
+    "grpcio-tools>=1.71.2",
 ]
 
 [project.optional-dependencies]
@@ -144,3 +145,9 @@ commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend =
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["asyncio: mark test as async test"]
+
+[dependency-groups]
+dev = [
+    "betterproto2-compiler>=0.7.1",
+    "pyright>=1.1.407",
+]

@@ -2,7 +2,8 @@ import asyncio
 import logging
 from decimal import Decimal
 
-from allora_sdk import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet
+
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     CanSubmitWorkerPayloadRequest,
@@ -12,7 +13,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsWorkerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.worker.types import TRunFn, UseCase, WorkerResult
+from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
 
 logger = logging.getLogger("allora_sdk")
@@ -22,19 +23,19 @@ type TInfererRunFnResult = str | float | Decimal
 type TInfererRunFn = TRunFn[TInfererRunFnResult]
 
 
-class Inferer(UseCase[EventWorkerSubmissionWindowOpened, TInfererRunFnResult]):
+class Inferer:
     def __init__(
         self,
         wallet: LocalWallet,
         client: AlloraRPCClient,
         topic_id: int,
-        predict_fn: TInfererRunFn,
+        run: TInfererRunFn,
         fee_tier: FeeTier,
     ):
         self.wallet = wallet
         self.client = client
         self.topic_id = topic_id
-        self.predict_fn = predict_fn
+        self.predict_fn = run
         self.fee_tier = fee_tier
 
 
@@ -53,18 +54,21 @@ class Inferer(UseCase[EventWorkerSubmissionWindowOpened, TInfererRunFnResult]):
                 address=str(self.wallet.address()),
             ),
         )
-        if not resp.is_registered:
-            logger.debug(f"Registering inferer {str(self.wallet.address())} for topic {self.topic_id}")
-            tx = await self.client.emissions.tx.register(
-                topic_id=self.topic_id,
-                owner_addr=str(self.wallet.address()),
-                sender_addr=str(self.wallet.address()),
-                is_reputer=False,
-                fee_tier=FeeTier.PRIORITY,
-            )
-            if isinstance(tx, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            await tx.wait()
+        if resp.is_registered:
+            return False
+
+        logger.debug(f"Registering inferer {str(self.wallet.address())} for topic {self.topic_id}")
+        tx = await self.client.emissions.tx.register(
+            topic_id=self.topic_id,
+            owner_addr=str(self.wallet.address()),
+            sender_addr=str(self.wallet.address()),
+            is_reputer=False,
+            fee_tier=FeeTier.PRIORITY,
+        )
+        if isinstance(tx, int):
+            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+        await tx.wait()
+        return True
 
 
     async def worker_is_whitelisted(self) -> bool:
@@ -85,7 +89,7 @@ class Inferer(UseCase[EventWorkerSubmissionWindowOpened, TInfererRunFnResult]):
         return nonces
 
 
-    async def submit(self, nonce: int):
+    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
         try:
             if self.predict_fn is None:
                 return Exception("no predict fn configured")
@@ -106,21 +110,31 @@ class Inferer(UseCase[EventWorkerSubmissionWindowOpened, TInfererRunFnResult]):
                 topic_id=self.topic_id,
                 inference_value=str(prediction),
                 nonce=nonce,
-                fee_tier=self.fee_tier
+                fee_tier=self.fee_tier,
+                account_seq=account_seq,
             )
             if isinstance(resp, int):
                 raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
             resp = await resp.wait()
 
-            if resp.code != 0:
-                return TxError(
-                    codespace=resp.codespace,
-                    code=resp.code,
-                    tx_hash=resp.txhash,
-                    message=resp.raw_log,
-                )
+            return WorkerResult(submission=prediction, tx_result=resp)
 
-            return WorkerResult(data=prediction, tx_result=resp)
+        except TxError as err:
+            already_submitted = False
+            if err.code == 78 or err.code == 75: # already submitted
+                already_submitted = True
+            elif "inference already submitted" in err.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
+                already_submitted = True
+
+            if already_submitted:
+                return AlreadySubmittedError(
+                    codespace=err.codespace,
+                    code=err.code,
+                    tx_hash=err.tx_hash,
+                    message=err.message,
+                )
+            else:
+                return err
 
         except Exception as err:
             return err

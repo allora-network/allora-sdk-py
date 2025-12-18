@@ -6,22 +6,37 @@ from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce, ValueBundle
-from allora_sdk.rpc_client.protos.emissions.v9 import CanSubmitReputerPayloadRequest, EventReputerSubmissionWindowOpened, GetNetworkInferencesAtBlockRequest, GetStakeFromReputerInTopicInSelfRequest, GetUnfulfilledReputerNoncesRequest, InputOneOutInfererForecasterValues, InputValueBundle, InputWithheldWorkerAttributedValue, InputWorkerAttributedValue, IsReputerRegisteredInTopicIdRequest
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    CanSubmitReputerPayloadRequest,
+    EventReputerSubmissionWindowOpened,
+    GetNetworkInferencesAtBlockRequest,
+    GetStakeFromReputerInTopicInSelfRequest,
+    GetUnfulfilledReputerNoncesRequest,
+    InputOneOutInfererForecasterValues,
+    InputValueBundle,
+    InputWithheldWorkerAttributedValue,
+    InputWorkerAttributedValue,
+    IsReputerRegisteredInTopicIdRequest,
+)
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.worker.types import UseCase, WorkerResult
+from allora_sdk.utils.format import uallo_to_allo
+from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
+from allora_sdk.worker.utils import resolve_maybe_awaitable
 
 logger = logging.getLogger("allora_sdk")
 
+# (epoch) -> ground_truth
+type GroundTruthFn = Callable[[int], str | float | Decimal] | Callable[[int], Awaitable[str | float | Decimal]]
 
-type GroundTruthFn = Callable[[int], Awaitable[str | float | Decimal]]      # (epoch) -> ground_truth
-type LossFn = Callable[[float, float], float]                               # (ground_truth, predicted_value) -> loss
+# (ground_truth, predicted_value) -> loss
+type LossFn = Callable[[float, float], float]
 
 def default_squared_error_loss(ground_truth: float, predicted: float) -> float:
     """Default loss function using squared error."""
     return (ground_truth - predicted) ** 2
 
 
-class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
+class Reputer:
     def __init__(
         self,
         wallet: LocalWallet,
@@ -56,18 +71,21 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
                 address=str(self.wallet.address()),
             ),
         )
-        if not resp.is_registered:
-            logger.debug(f"Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
-            tx = await self.client.emissions.tx.register(
-                topic_id=self.topic_id,
-                owner_addr=str(self.wallet.address()),
-                sender_addr=str(self.wallet.address()),
-                is_reputer=True,
-                fee_tier=self.fee_tier,
-            )
-            if isinstance(tx, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            await tx.wait()
+        if resp.is_registered:
+            return False
+
+        logger.debug(f"   Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
+        tx = await self.client.emissions.tx.register(
+            topic_id=self.topic_id,
+            owner_addr=str(self.wallet.address()),
+            sender_addr=str(self.wallet.address()),
+            is_reputer=True,
+            fee_tier=self.fee_tier,
+        )
+        if isinstance(tx, int):
+            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+        await tx.wait()
+        return True
 
 
     async def worker_is_whitelisted(self) -> bool:
@@ -92,11 +110,11 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
         return nonces
 
 
-    async def submit(self, nonce: int):
+    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
         """Submit a reputer payload for the given nonce."""
 
         # Stake top-up if needed
-        await self._maybe_stake()
+        # await self._maybe_stake()
 
         sender = str(self.wallet.address())
 
@@ -104,14 +122,11 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
         try:
             if self.ground_truth_fn is None:
                 return Exception("no ground truth fn configured")
-            if asyncio.iscoroutinefunction(self.ground_truth_fn):
-                ground_truth_raw = await self.ground_truth_fn(nonce)
-            else:
-                loop = asyncio.get_event_loop()
-                ground_truth_raw = await loop.run_in_executor(None, self.ground_truth_fn, nonce)
+
+            ground_truth_raw = await resolve_maybe_awaitable(self.ground_truth_fn, nonce)
             ground_truth = float(ground_truth_raw)
         except Exception as err:
-            logger.error(f"Ground truth function failed: {err}")
+            logger.error(f"❌ Ground truth function failed: {err}")
             return err
 
         # Fetch network inferences at block
@@ -124,17 +139,17 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             )
             value_bundle = network_inferences_resp.network_inferences
             if value_bundle is None:
-                logger.error(f"No network inferences found at block {nonce}")
+                logger.error(f"❌ No network inferences found at block {nonce}")
                 return Exception(f"No network inferences found at block {nonce}")
         except Exception as err:
-            logger.error(f"Failed to get network inferences: {err}")
+            logger.error(f"❌ Failed to get network inferences: {err}")
             return err
 
         # Compute loss bundle
         try:
-            loss_bundle = self._compute_loss_bundle(ground_truth, value_bundle)
+            loss_bundle = await self._compute_loss_bundle(ground_truth, value_bundle)
         except Exception as err:
-            logger.error(f"Failed to compute loss bundle: {err}")
+            logger.error(f"❌ Failed to compute loss bundle: {err}")
             return err
 
         reputer_request_nonce = ReputerRequestNonce(
@@ -143,48 +158,53 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
         loss_bundle.reputer_request_nonce = reputer_request_nonce
         loss_bundle.reputer = sender
 
-        # Submit reputer payload
         try:
             resp = await self.client.emissions.tx.insert_reputer_payload(
                 topic_id=self.topic_id,
                 reputer_request_nonce=reputer_request_nonce,
                 value_bundle=loss_bundle,
                 fee_tier=self.fee_tier,
+                account_seq=account_seq,
             )
             if isinstance(resp, int):
                 raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+
             tx_resp = await resp.wait()
+            return WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
-            if tx_resp.code != 0:
-                return TxError(
-                    codespace=tx_resp.codespace,
-                    code=tx_resp.code,
-                    tx_hash=tx_resp.txhash,
-                    message=tx_resp.raw_log,
+        except TxError as err:
+            logger.error(f"❌ TX ERROR: {err}")
+            if err.code == 68:
+                return AlreadySubmittedError(
+                    codespace=err.codespace,
+                    code=err.code,
+                    tx_hash=err.tx_hash,
+                    message=err.message,
                 )
-
-            return WorkerResult(data=loss_bundle, tx_result=tx_resp)
+            else:
+                return err
 
         except Exception as err:
+            logger.error(f"❌ XYZZY: {err.__class__.__name__} {err}")
             return err
 
-    def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
+    async def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
         """
         Compute loss bundle from ground truth and network inferences.
 
         Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
         """
-        def compute_loss(value_str: str) -> str:
+        async def compute_loss(value_str: str) -> str:
             try:
                 predicted = float(value_str)
-                loss = self.loss_fn(ground_truth, predicted)
+                loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
                 return str(loss)
             except (ValueError, TypeError):
                 return "0"
 
         # Compute combined and naive losses
-        combined_loss = compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
-        naive_loss = compute_loss(value_bundle.naive_value) if value_bundle.naive_value else "0"
+        combined_loss = await compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
+        naive_loss = await compute_loss(value_bundle.naive_value) if value_bundle.naive_value else "0"
 
         # Compute inferer losses
         inferer_values: List[InputWorkerAttributedValue] = []
@@ -192,7 +212,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             for iv in value_bundle.inferer_values:
                 inferer_values.append(InputWorkerAttributedValue(
                     worker=iv.worker,
-                    value=compute_loss(iv.value) if iv.value else "0",
+                    value=await compute_loss(iv.value) if iv.value else "0",
                 ))
 
         # Compute forecaster losses
@@ -201,7 +221,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             for fv in value_bundle.forecaster_values:
                 forecaster_values.append(InputWorkerAttributedValue(
                     worker=fv.worker,
-                    value=compute_loss(fv.value) if fv.value else "0",
+                    value=await compute_loss(fv.value) if fv.value else "0",
                 ))
 
         # Compute one-out inferer losses
@@ -210,7 +230,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             for ooi in value_bundle.one_out_inferer_values:
                 one_out_inferer_values.append(InputWithheldWorkerAttributedValue(
                     worker=ooi.worker,
-                    value=compute_loss(ooi.value) if ooi.value else "0",
+                    value=await compute_loss(ooi.value) if ooi.value else "0",
                 ))
 
         # Compute one-out forecaster losses
@@ -219,7 +239,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             for oof in value_bundle.one_out_forecaster_values:
                 one_out_forecaster_values.append(InputWithheldWorkerAttributedValue(
                     worker=oof.worker,
-                    value=compute_loss(oof.value) if oof.value else "0",
+                    value=await compute_loss(oof.value) if oof.value else "0",
                 ))
 
         # Compute one-in forecaster losses
@@ -228,7 +248,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             for oif in value_bundle.one_in_forecaster_values:
                 one_in_forecaster_values.append(InputWorkerAttributedValue(
                     worker=oif.worker,
-                    value=compute_loss(oif.value) if oif.value else "0",
+                    value=await compute_loss(oif.value) if oif.value else "0",
                 ))
 
         # Compute one-out inferer-forecaster losses
@@ -241,7 +261,7 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
                         one_out_losses.append(
                             InputWithheldWorkerAttributedValue(
                                 worker=withheld.worker,
-                                value=compute_loss(withheld.value)
+                                value=await compute_loss(withheld.value)
                                 if withheld.value
                                 else "0",
                             )
@@ -275,11 +295,8 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
         Otherwise, top-up only the delta needed to reach min_stake_uallo.
         """
         min_stake = self.min_stake_uallo
-        if min_stake is None:
-            logger.info("No minimum stake configured in reputer, skipping adding stake.")
-            return
-        if min_stake == 0:
-            logger.info("No minimum stake requested, skipping adding stake.")
+        if min_stake is None or min_stake == 0:
+            logger.warning("⚠️ No minimum stake configured in reputer, skipping adding stake.")
             return
 
         sender = str(self.wallet.address())
@@ -294,13 +311,13 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
             )
             current_stake = int(stake_resp.amount) if stake_resp.amount else 0
         except Exception as e:
-            logger.warning(f"Failed to query current stake: {e}. Skipping top-up.")
+            logger.warning(f"⚠️ Failed to query current stake: {e}. Skipping top-up.")
             return
 
-        logger.debug(f"Reputer stake: current={current_stake} min_stake={min_stake}")
+        logger.info(f"   Reputer stake: current={uallo_to_allo(current_stake)} min_stake={uallo_to_allo(min_stake)}")
 
         if current_stake >= min_stake:
-            logger.info("Stake above minimum requested stake, skipping adding stake.")
+            logger.debug("    Stake above minimum requested stake, skipping adding stake.")
             return
 
         delta = min_stake - current_stake
@@ -317,9 +334,9 @@ class Reputer(UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]):
 
             tx_resp = await pending_tx.wait()
             if tx_resp.code != 0:
-                logger.error(f"Failed to add stake: code={tx_resp.code} log={tx_resp.raw_log}")
+                logger.error(f"❌ Failed to add stake: code={tx_resp.code} log={tx_resp.raw_log}")
             else:
-                logger.info(f"Successfully staked {delta} uallo (tx={tx_resp.txhash})")
+                logger.info(f"✅ Successfully staked {uallo_to_allo(delta)} ALLO (tx={tx_resp.txhash})")
 
         except Exception as e:
             logger.error(f"Failed to add stake: {e}")
