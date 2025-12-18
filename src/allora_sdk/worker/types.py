@@ -1,20 +1,21 @@
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Protocol, Union
+from typing import Any, Awaitable, Callable, ClassVar, Optional, Protocol, Union
+from allora_sdk.rpc_client.client_websocket_events import TBetterproto2Message
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
 
 
-type TQueueItem[RunFnReturnType] = Union[WorkerResult[RunFnReturnType], Exception, StopQueue]
+type TQueueItem[RunFnReturnType] = WorkerResult[RunFnReturnType] | Exception | StopQueue
 
-type TRunFn[RunFnReturnType] = Union[
-    Callable[[int], RunFnReturnType],
-    Callable[[int], Awaitable[RunFnReturnType]],
-]
+type TRunFn[RunFnReturnType] = Callable[[int], RunFnReturnType] | Callable[[int], Awaitable[RunFnReturnType]]
 
+
+class AlreadySubmittedError(TxError):
+    pass
 
 @dataclass
 class WorkerResult[ResultDataType]:
-    data: ResultDataType
+    submission: ResultDataType
     tx_result: TxResponse
 
 class WorkerNotWhitelistedError(Exception):
@@ -25,12 +26,16 @@ class StopQueue:
     pass
 
 
-class UseCase[WindowOpenedEvent, RunFnReturnType](Protocol):
+class TSubmissionWindowOpenEventType(Protocol):
+    nonce_block_height: int
+
+
+class UseCase[WindowOpenedEvent: TSubmissionWindowOpenEventType, RunFnReturnType: Any](Protocol):
     def name(self) -> str: ...
-    def submission_window_event_type(self) -> WindowOpenedEvent: ...
-    async def ensure_registered(self) -> None: ...
+    def submission_window_event_type(self) -> type[WindowOpenedEvent]: ...
+    async def ensure_registered(self) -> bool: ...
     async def worker_is_whitelisted(self) -> bool: ...
     async def get_unfulfilled_nonces(self) -> set[int]: ...
-    async def submit(self, nonce: int) -> WorkerResult[RunFnReturnType] | TxError | Exception: ...
+    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[RunFnReturnType] | TxError | Exception: ...
 
 

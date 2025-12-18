@@ -10,11 +10,13 @@ import asyncio
 import signal
 import sys
 from textwrap import dedent, indent
+import traceback
 import requests
 import logging
 import time
 from typing import Optional, AsyncIterator, Protocol
 
+from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
@@ -23,32 +25,31 @@ from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
     GetLatestNetworkInferencesRequest,
+    InputValueBundle,
 )
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
-from allora_sdk.worker.inferer import Inferer, TInfererRunFn
+from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
 from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer, default_squared_error_loss
-from allora_sdk.worker.types import StopQueue, UseCase, WorkerNotWhitelistedError, WorkerResult
+from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TQueueItem, TSubmissionWindowOpenEventType, UseCase, WorkerNotWhitelistedError, WorkerResult
 from allora_sdk.worker.utils import init_worker_wallet
 
 logger = logging.getLogger("allora_sdk")
 
 
-class TSubmissionWindowOpenEventType(Protocol):
-    nonce_block_height: int
 
 
 class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType, WorkerFnReturnType]:
     """
     Allora network worker with async generator interface.
-    
+
     Provides automatic WebSocket subscription management, environment-aware signal handling,
     transaction/submission handling, and graceful resource cleanup for submitting predictions
     to Allora network topics.
@@ -57,7 +58,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     @classmethod
     def inferer(
         cls,
-        predict_fn: TInfererRunFn,
+        run: TInfererRunFn,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -70,9 +71,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         Create an AlloraWorker configured as an inferer.
 
         Args:
-            predict_fn: A function that returns prediction values (str or float), or a tuple
-                 where the first element is the path to a pickle file and the second element
-                 is the name of the function to run from that pickle file
+            run: A function that returns prediction values (str/float/Decimal/int)
             wallet: Wallet configuration (private key, mnemonic, or file)
             network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
@@ -85,21 +84,25 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             An instance of AlloraWorker configured as an inferer
         """
         wallet_initialized = init_worker_wallet(wallet)
-        return cls(
+        client = AlloraRPCClient(
+            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            network=network,
+            debug=debug,
+        )
+        return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
                 topic_id=topic_id,
                 wallet=wallet_initialized,
                 fee_tier=fee_tier,
-                predict_fn=predict_fn,
-                client=None,
+                run=run,
+                client=client,
             ),
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
-            network=network,
+            address=str(wallet_initialized.address()),
+            client=client,
             api_key=api_key,
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
-            submission_window_event_type=EventWorkerSubmissionWindowOpened,
             debug=debug,
         )
 
@@ -116,7 +119,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         polling_interval: int = 120,
         min_stake_uallo: Optional[int] = None,
         debug: bool = False,
-    ):
+    ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
 
@@ -136,23 +139,27 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             An instance of AlloraWorker configured as a reputer
         """
         wallet_initialized = init_worker_wallet(wallet)
-        return cls(
+        client = AlloraRPCClient(
+            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            network=network,
+            debug=debug,
+        )
+        return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
                 ground_truth_fn=ground_truth_fn,
                 loss_fn=loss_fn,
                 fee_tier=fee_tier,
                 topic_id=topic_id,
-                client=None,
+                client=client,
                 min_stake_uallo=min_stake_uallo,
                 wallet=wallet_initialized,
             ),
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
-            network=network,
+            address=str(wallet_initialized.address()),
+            client=client,
             api_key=api_key,
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
-            submission_window_event_type=EventReputerSubmissionWindowOpened,
             debug=debug,
         )
 
@@ -160,66 +167,48 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     def __init__(
         self,
         use_case: UseCase[SubmissionWindowOpenEventType, WorkerFnReturnType],
-        wallet: Optional[AlloraWalletConfig] = None,
-        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
+        client: AlloraRPCClient,
+        address: str,
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
-        submission_window_event_type: SubmissionWindowOpenEventType = EventWorkerSubmissionWindowOpened,
-        min_stake_uallo: Optional[int] = None,
         debug: bool = False,
     ) -> None:
         """
         Initialize the Allora worker.
 
         Args:
-            run: Either a function that returns prediction values (str or float), or a tuple
-                 where the first element is the path to a pickle file and the second element
-                 is the name of the function to run from that pickle file
-            wallet: Wallet configuration (private key, mnemonic, or file)
-            network: Allora network configuration (testnet/mainnet/custom)
+            use_case: The use case instance (e.g. Inferer)
+            client: An initialized AlloraRPCClient
+            address: Wallet address string
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
-            submission_window_event_type: Event type to listen for submission windows (worker, reputer, forecaster)
-            role: Role of the worker (INFERER or REPUTER)
-            ground_truth_fn: Ground truth function for reputer (only used when role=REPUTER)
-            min_stake_uallo: Minimum stake in uallo to top-up to (only used when role=REPUTER)
             debug: Enable debug logging
         """
         if not use_case:
-            raise ValueError("'use_case' parameter is required")
+            raise ValueError("no use_case provided")
+        if not client:
+            raise ValueError('no client provided')
 
         self._initialized = False
+        self.use_case = use_case
+        self.client = client
+        self.address = address
+        self.api_key = api_key
         self.topic_id = topic_id
         self.fee_tier = fee_tier
         self.polling_interval = polling_interval
-        self.api_key = api_key
-        self.submission_window_event_type = submission_window_event_type
+
         self.submitted_nonces = TimestampOrderedSet()
-        
-        self.use_case = use_case
-        self.min_stake_uallo = min_stake_uallo
+
 
         setup_sdk_logging(debug=debug)
 
-        self.wallet = self._init_wallet(wallet)
-        if not self.wallet:
-            raise ValueError('no wallet')
-
-        if not network:
-            raise ValueError('no network config specified')
-        self.network = network
-
-        self.client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=self.wallet),
-            network=network,
-            debug=debug,
-        )
         self._ctx: Optional[Context] = None
-        self._queue: Optional[asyncio.Queue[WorkerFnReturnType | TxError | Exception]] = None
+        self._queue: Optional[asyncio.Queue[TQueueItem[WorkerFnReturnType]]] = None
         self._subscription_id: Optional[str] = None
 
 
@@ -228,10 +217,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             return
         self._initialized = True
 
-        node_info_resp = await self.client.tendermint.query.get_node_info(GetNodeInfoRequest())
-        self._chain_id = node_info_resp.default_node_info.network if node_info_resp.default_node_info else ""
-        if self.network.chain_id != self._chain_id:
-            raise ValueError(f"Configuration specifies chain id '{self.network.chain_id}' which conflicts with network-reported chain ID '{self._chain_id}'")
+        self._chain_id = await self.client.raise_for_chain_id_mismatch()
 
         await self._show_banner()
         await self._log_balance()
@@ -248,7 +234,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                / _ \ | |   | |  | | | | |_) |  / _ \
               / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
              /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
-             __        _____  ____  _  _______ ____          Address: {self.wallet.address()}
+             __        _____  ____  _  _______ ____          Address: {self.address}
              \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
               \ \ /\ / / | | | |_) | ' /|  _| | |_) |
                \ V  V /| |_| |  _ <| . \| |___|  _ <
@@ -260,13 +246,13 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     async def _log_balance(self):
         await self._ensure_initialized()
 
-        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
-            logger.error(f"Could not check balance for {str(self.wallet.address())}")
+            logger.error(f"Could not check balance for {self.address}")
             return
         balance = int(resp.balance.amount)
         balance_formatted = format_allo_from_uallo(balance)
-        logger.info(f"   Worker wallet: {str(self.wallet.address())}  ||  Balance: {balance_formatted}")
+        logger.info(f"   Worker wallet: {self.address}  ||  Balance: {balance_formatted}")
         return
 
 
@@ -280,9 +266,9 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         MIN_ALLO = 100000000
 
-        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+        resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
-            logger.error(f"    Could not check balance for {str(self.wallet.address())}")
+            logger.error(f"    Could not check balance for {self.address}")
             return
         balance = int(resp.balance.amount)
 
@@ -294,7 +280,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             try:
                 faucet_resp = requests.post(self.client.network.faucet_url + "/api/request", data={
                     "chain": "allora-testnet-1",
-                    "address": str(self.wallet.address()),
+                    "address": self.address,
                 }, headers={
                     "x-api-key": self.api_key,
                 })
@@ -303,9 +289,9 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
                 while True:
                     time.sleep(5)
-                    resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+                    resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
                     if resp.balance is None:
-                        logger.error(f"    Could not check balance for {str(self.wallet.address())}")
+                        logger.error(f"    Could not check balance for {self.address}")
                         continue
                     balance = int(resp.balance.amount)
                     balance_formatted = format_allo_from_uallo(balance)
@@ -323,7 +309,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
             time.sleep(15)
 
-        
+
     def _detect_environment(self) -> str:
         if "ipykernel" in sys.modules:
             return "jupyter"
@@ -331,17 +317,17 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             return "colab"
         else:
             return "shell"
-            
+
     def _setup_signal_handlers(self, ctx: Context):
         env = self._detect_environment()
-        
+
         if env == "shell":
             # Track if we've already received a SIGINT
             sigint_received = False
-            
+
             def signal_handler(signum, frame):
                 nonlocal sigint_received
-                
+
                 if signum == signal.SIGINT:
                     if not sigint_received:
                         # First Ctrl-C: graceful shutdown
@@ -357,7 +343,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                     # SIGTERM: always graceful
                     logger.info(f"Received signal {signum}, initiating graceful shutdown")
                     ctx.cancel()
-                
+
             for sig in (signal.SIGINT, signal.SIGTERM):
                 signal.signal(sig, signal_handler)
 
@@ -368,16 +354,16 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     async def run(self, timeout: Optional[float] = None) -> AsyncIterator[WorkerResult[WorkerFnReturnType] |  Exception]:
         """
         Run the worker and yield predictions as they're submitted.
-        
+
         This is the main entry point for network actors. It returns an async
         generator that yields submission results as they happen.
-        
+
         Args:
             timeout: Optional timeout for the entire run (useful in notebooks)
-            
+
         Yields:
             str: Prediction submission results with transaction links
-            
+
         Example:
             >>> worker = AlloraWorker(topic_id=13, _user_callback=my_model.predict)
             >>> async for result in worker.run():
@@ -387,17 +373,19 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         if self._ctx and not self._ctx.is_cancelled():
             raise RuntimeError("Worker is already running")
-            
+
         ctx = Context()
         self._ctx = ctx
         self._queue = asyncio.Queue()
-        
+
         self._setup_signal_handlers(ctx)
-        
+
         logger.debug(f"Starting Allora {self.use_case.name()} for topic {self.topic_id}")
-        
+
         try:
-            await self.use_case.ensure_registered()
+            did_register = await self.use_case.ensure_registered()
+            if did_register:
+                logger.info(f"✅ Registered {self.use_case.name()} {self.address} for topic {self.topic_id}")
 
             if timeout:
                 try:
@@ -409,7 +397,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             else:
                 async for prediction in self._run_with_context(ctx):
                     yield prediction
-                    
+
         except (asyncio.CancelledError, KeyboardInterrupt):
             logger.debug("Worker stopped by cancellation")
             ctx.cancel()
@@ -426,7 +414,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         cleanup_task = asyncio.create_task(self._monitor_cancellation(ctx))
         ctx.add_cleanup_task(cleanup_task)
-        
+
         try:
             while not ctx.is_cancelled():
                 if self._queue is None:
@@ -439,11 +427,11 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                     yield result
                 except asyncio.TimeoutError:
                     continue  # check cancellation and try again
-                    
+
         except asyncio.CancelledError:
             # propagate ctx cancellation
             raise
-            
+
     async def _monitor_cancellation(self, ctx: Context):
         await self._ensure_initialized()
 
@@ -458,7 +446,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         await self._ensure_initialized()
 
         logger.info(f"🔄 Starting polling worker")
-        
+
         while not ctx.is_cancelled():
             try:
                 await self._maybe_submit(ctx)
@@ -468,17 +456,18 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             except asyncio.TimeoutError:
                 pass
             except WorkerNotWhitelistedError:
-                logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+                logger.error(f"The wallet {self.address} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
                 self.stop()
                 break
             except Exception as e:
                 logger.error(f"Error in polling worker: {e}")
+                traceback.print_exc()
                 pass
 
             await asyncio.sleep(self.polling_interval)
-        
+
         logger.debug(f"🔄 Polling worker stopped for topic {self.topic_id}")
-    
+
 
     async def _subscribe_websocket_events(self):
         await self._ensure_initialized()
@@ -514,7 +503,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         role_name = self.use_case.name().capitalize()
         logger.info(f"🚀 {role_name} submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
-        
+
         try:
             await self._maybe_submit(ctx, event.nonce_block_height)
         except Exception as e:
@@ -524,14 +513,12 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     async def _maybe_submit(self, ctx: Context, nonce: Optional[int] = None):
         await self._ensure_initialized()
 
-        if not self.wallet:
-            return Exception('no wallet')
         if ctx.is_cancelled():
             return
 
         can_submit = await self.use_case.worker_is_whitelisted()
         if not can_submit:
-            logger.error(f"The wallet {str(self.wallet.address())} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+            logger.error(f"❌ The wallet {self.address} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
             self.stop()
             return
 
@@ -543,27 +530,23 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         nonces_str     = f"{nonces}" if len(nonces) > 0 else "-"
         new_nonces_str = f"{new_nonces}" if len(new_nonces) > 0 else "-"
-        logger.info(f"   Topic {self.topic_id}: unfulfilled nonces: {nonces_str}, our unfulfilled nonces: {new_nonces_str}")
+        logger.info(f"   Topic {self.topic_id}: unfulfilled nonces: {nonces_str}")
+        logger.info(f"   Our unfulfilled nonces: {new_nonces_str}")
 
-        for nonce in new_nonces:
-            if not self._ctx or self._ctx.is_cancelled():
-                break
-
-            logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
-
+        async def submit(nonce: int, account_seq: int):
             result = None
             try:
-                result = await self.use_case.submit(nonce)
-                if isinstance(result, TxError):
-                    if result.code == 78 or result.code == 75: # already submitted
-                        self.submitted_nonces.add(nonce)
-                        logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
-                    elif "inference already submitted" in result.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
-                        self.submitted_nonces.add(nonce)
-                        logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce}")
-                    elif result.code != 0:
-                        logger.error(f"❌ Error submitting for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
-                        self.submitted_nonces.add(nonce)
+                result = await self.use_case.submit(nonce, account_seq)
+                if isinstance(result, AlreadySubmittedError):
+                    logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce} code={result.code}")
+                    self.submitted_nonces.add(nonce)
+
+                elif isinstance(result, TxError):
+                    logger.error(f"❌ Error submitting for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
+                    self.submitted_nonces.add(nonce)
+
+                elif isinstance(result, TxTimeoutError):
+                    logger.error(f"⚠️ Transaction timed out: topic_id={self.topic_id} nonce={nonce}")
 
                 elif isinstance(result, Exception):
                     logger.error(f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}")
@@ -582,20 +565,20 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                     logger.info(f"     - View on explorer: {explorer_url}")
                     self.submitted_nonces.add(nonce)
 
-                resp = await self.client.bank.query.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom="uallo"))
+                resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
                 if resp.balance is None:
-                    logger.error(f"Could not check balance for {str(self.wallet.address())}")
-                    continue
+                    logger.error(f"❌ Could not check balance for {self.address}")
+                    return
 
                 await self._log_balance()
                 await self._maybe_faucet_request()
 
             except Exception as e:
-                logger.error(f"Error submitting for nonce {nonce}: {e}")
+                logger.error(f"❌ Error submitting for nonce {nonce}: {e}")
 
             finally:
                 # disallow unbounded growth of the nonce tracking set with a reasonable default
-                self.submitted_nonces.prune_older_than(2 * 60 * 60)
+                self.submitted_nonces.prune_older_than(24 * 60 * 60)
 
                 # inform whatever is listening about the result
                 if (
@@ -606,9 +589,31 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                     await self._queue.put(result)
 
 
+        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
+        if not account_seq or not account_seq.info:
+            logger.error(f"❌ Could not check account sequence for {self.address}")
+            return
+        base_sequence = account_seq.info.sequence
+
+        new_nonces = sorted(list(new_nonces))
+        new_nonces = new_nonces[len(new_nonces)-1:] if len(new_nonces) > 10 else new_nonces
+        tasks = []
+        for i, nonce in enumerate(new_nonces):
+            if not self._ctx or self._ctx.is_cancelled():
+                break
+
+            next_sequence = base_sequence + i
+            logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting... account_seq={next_sequence}")
+            task = asyncio.create_task(submit(nonce, next_sequence))
+            tasks.append(task)
+
+        if len(tasks) > 0:
+            await asyncio.wait(tasks)
+
+
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
-        
+
         if self._subscription_id:
             try:
                 await self.client.events.unsubscribe(self._subscription_id)
@@ -617,11 +622,11 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                 logger.warning(f"Error during unsubscribe: {e}")
             finally:
                 self._subscription_id = None
-        
+
         await ctx.cleanup()
         self._queue = None
         self._ctx = None
-        
+
         logger.debug("Worker cleanup completed")
 
 
@@ -630,6 +635,5 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         if self._ctx:
             logger.debug("Manually stopping worker")
             self._ctx.cancel()
-
 
 
