@@ -143,6 +143,79 @@ inference_worker = AlloraWorker.inferer(
 )
 ```
 
+### Reputer Configuration
+
+Reputers evaluate inference quality by computing losses between ground truth and predictions. The SDK supports automatic loss function selection based on the topic's on-chain configuration.
+
+```python
+from allora_sdk.worker import AlloraWorker
+
+async def get_ground_truth(nonce: int) -> float:
+    # Return the actual value for the given epoch/nonce
+    return 100.0
+
+# Simplest reputer setup - loss function auto-selected based on topic config
+reputer = AlloraWorker.reputer(
+    ground_truth_fn=get_ground_truth,
+    topic_id=1,
+    api_key="UP-...",
+)
+
+# Custom loss function example
+def my_custom_loss(ground_truth: float, predicted: float) -> float:
+    return abs(ground_truth - predicted)  # MAE
+
+reputer_custom = AlloraWorker.reputer(
+    ground_truth_fn=get_ground_truth,
+    loss_fn=my_custom_loss,  # Override auto-selection
+    topic_id=1,
+    api_key="UP-...",
+)
+```
+
+**Supported Default Loss Methods:**
+
+When `loss_fn` is not provided, the SDK auto-selects from these implementations based on the topic's `loss_method`:
+
+| Method | Aliases | Description |
+|--------|---------|-------------|
+| `sqe` | `mse`, `squared_error` | Squared Error |
+| `abse` | `mae`, `absolute_error` | Absolute Error |
+| `huber` | - | Huber Loss (delta=1.0) |
+| `logcosh` | `log_cosh` | Log-Cosh Loss |
+| `bce` | `binary_cross_entropy` | Binary Cross Entropy |
+| `poisson` | - | Poisson Loss |
+| `ztae` | - | Z-Transformed Absolute Error* |
+| `zptae` | - | Z Power-Tanh Absolute Error* |
+
+*Note: `ztae` and `zptae` require a standard deviation (std) parameter. The default functions use std=1.0. For proper use, create custom functions with `make_ztae_loss(std=...)` or `make_zptae_loss(std=...)`.
+
+You can also use these loss functions directly:
+
+```python
+from allora_sdk.loss_methods import (
+    get_default_loss_fn,
+    squared_error_loss,
+    absolute_error_loss,
+    huber_loss,
+    make_ztae_loss,
+    make_zptae_loss,
+)
+
+# Get by name
+loss_fn = get_default_loss_fn("mse")
+
+# Or use directly
+loss = squared_error_loss(ground_truth=100.0, predicted=95.0)  # Returns 25.0
+
+# For ztae/zptae, create with your data's std:
+ztae = make_ztae_loss(std=0.02)  # std = historical volatility
+loss = ztae(ground_truth=0.01, predicted=0.02)
+
+zptae = make_zptae_loss(std=0.02, alpha=0.25, beta=2.0)
+loss = zptae(ground_truth=0.01, predicted=0.02)
+```
+
 ## Allora RPC Client
 
 Low-level blockchain client for advanced users. Supports queries, transactions, and WebSocket subscriptions.

@@ -47,7 +47,7 @@ class Inferer:
         return EventWorkerSubmissionWindowOpened
 
 
-    async def ensure_registered(self):
+    async def initialize(self) -> bool:
         resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
             IsWorkerRegisteredInTopicIdRequest(
                 topic_id=self.topic_id,
