@@ -11,6 +11,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowOpened,
     GetNetworkInferencesAtBlockRequest,
     GetStakeFromReputerInTopicInSelfRequest,
+    GetTopicRequest,
     GetUnfulfilledReputerNoncesRequest,
     InputOneOutInfererForecasterValues,
     InputValueBundle,
@@ -19,6 +20,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
+from allora_sdk.loss_methods.defaults import get_default_loss_fn, is_supported_loss_method, UnsupportedLossMethodError
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
@@ -43,7 +45,7 @@ class Reputer:
         client: AlloraRPCClient,
         topic_id: int,
         ground_truth_fn: GroundTruthFn,
-        loss_fn: LossFn,
+        loss_fn: Optional[LossFn] = None,
         min_stake_uallo: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
     ):
@@ -64,7 +66,11 @@ class Reputer:
         return EventReputerSubmissionWindowOpened
 
 
-    async def ensure_registered(self):
+    async def initialize(self) -> bool:
+        # Auto-select loss function for reputers if not explicitly provided
+        await self._maybe_auto_select_loss_fn()
+
+        # Check if reputer is already registered
         resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(
             IsReputerRegisteredInTopicIdRequest(
                 topic_id=self.topic_id,
@@ -114,7 +120,7 @@ class Reputer:
         """Submit a reputer payload for the given nonce."""
 
         # Stake top-up if needed
-        # await self._maybe_stake()
+        await self._maybe_stake()
 
         sender = str(self.wallet.address())
 
@@ -188,6 +194,37 @@ class Reputer:
             logger.error(f"❌ XYZZY: {err.__class__.__name__} {err}")
             return err
 
+    async def _maybe_auto_select_loss_fn(self) -> None:
+        """
+        Auto-select the reputer loss function based on the topic's on-chain `loss_method`.
+
+        If `self.loss_fn` is already set, this is a no-op.
+        """
+        if self.loss_fn is not None:
+            return
+
+        topic_resp = await self.client.emissions.query.get_topic(
+            GetTopicRequest(topic_id=int(self.topic_id))
+        )
+        topic = topic_resp.topic
+        if topic is None:
+            raise ValueError(f"Topic {self.topic_id} not found on chain")
+
+        loss_method = getattr(topic, "loss_method", "") or ""
+        if not loss_method:
+            logger.info("Topic has no loss_method configured, defaulting to squared error (sqe)")
+            self.loss_fn = default_squared_error_loss
+            return
+
+        if not is_supported_loss_method(loss_method):
+            raise UnsupportedLossMethodError(
+                loss_method=loss_method,
+                supported=["sqe", "abse", "huber", "logcosh", "bce", "poisson", "ztae", "zptae"],
+            )
+
+        self.loss_fn = get_default_loss_fn(loss_method)
+        logger.info(f"Auto-selected loss function for topic loss_method='{loss_method}'")
+
     async def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
         """
         Compute loss bundle from ground truth and network inferences.
@@ -197,6 +234,8 @@ class Reputer:
         async def compute_loss(value_str: str) -> str:
             try:
                 predicted = float(value_str)
+                if self.loss_fn is None:
+                    raise ValueError("no loss fn configured")
                 loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
                 return str(loss)
             except (ValueError, TypeError):
