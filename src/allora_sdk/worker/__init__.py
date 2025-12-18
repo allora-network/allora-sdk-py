@@ -6,9 +6,18 @@ Provides automatic WebSocket subscription management, environment-aware signal h
 and graceful resource cleanup for submitting predictions to Allora network topics.
 """
 
-from .worker import AlloraWorker, PredictFnResultType
+from .worker import (
+    AlloraWorker,
+    PredictFnResultType,
+    PredictionResult,
+    ForecastFnResultType,
+    ForecastResult,
+)
 
 __all__ = [
     "AlloraWorker",
     "PredictFnResultType",
+    "PredictionResult",
+    "ForecastFnResultType",
+    "ForecastResult",
 ]
