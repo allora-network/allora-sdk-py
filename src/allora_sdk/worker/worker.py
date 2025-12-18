@@ -17,7 +17,7 @@ from textwrap import dedent, indent
 import requests
 import logging
 import time
-from typing import Callable, Optional, AsyncIterator, Type, Union, Awaitable
+from typing import Callable, Dict, Optional, AsyncIterator, Type, Union, Awaitable
 
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 from cosmpy.mnemonic import generate_mnemonic
@@ -53,6 +53,13 @@ class PredictionResult:
     prediction: float
     tx_result: TxResponse
 
+
+@dataclass
+class ForecastResult:
+    forecasts: Dict[str, float]  # {inferer_address: predicted_value}
+    tx_result: TxResponse
+
+
 class WorkerNotWhitelistedError(Exception):
     pass
 
@@ -65,6 +72,12 @@ PredictFnResultType = str | float | Decimal
 PredictFnSync = Callable[[int], PredictFnResultType]
 PredictFnAsync = Callable[[int], Awaitable[PredictFnResultType]]
 PredictFn = Union[PredictFnSync, PredictFnAsync]
+
+# Forecaster types: function returns {inferer_address: predicted_value}
+ForecastFnResultType = Dict[str, float]
+ForecastFnSync = Callable[[int], ForecastFnResultType]
+ForecastFnAsync = Callable[[int], Awaitable[ForecastFnResultType]]
+ForecastFn = Union[ForecastFnSync, ForecastFnAsync]
 
 SubmissionWindowOpenedEvent = Union[EventWorkerSubmissionWindowOpened, EventReputerSubmissionWindowOpened]
 
@@ -120,6 +133,51 @@ class AlloraWorker:
             debug=debug,
         )
 
+    @classmethod
+    def forecaster(
+        cls,
+        run: ForecastFn,
+        wallet: Optional[AlloraWalletConfig] = None,
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
+        api_key: Optional[str] = None,
+        topic_id: int = 69,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        polling_interval: int = 120,
+        debug: bool = False,
+    ):
+        """
+        Create an AlloraWorker configured as a forecaster.
+
+        A forecaster predicts how well other inferers will perform.
+        The run function should return a dict mapping inferer addresses
+        to predicted values: {inferer_address: predicted_value}.
+
+        Args:
+            run: Function that returns {inferer_address: predicted_value} dict
+            wallet: Wallet configuration (private key, mnemonic, or file)
+            network: Allora network configuration (testnet/mainnet/custom)
+            api_key: API key for testnet faucet (if needed)
+            topic_id: The Allora network topic ID to submit predictions to
+            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
+            polling_interval: Interval in seconds to poll for new submission windows
+            debug: Enable debug logging
+
+        Returns:
+            An instance of AlloraWorker configured as a forecaster
+        """
+        return cls(
+            run=run,
+            wallet=wallet,
+            network=network,
+            api_key=api_key,
+            topic_id=topic_id,
+            fee_tier=fee_tier,
+            polling_interval=polling_interval,
+            submission_window_event_type=EventWorkerSubmissionWindowOpened,
+            is_forecaster=True,
+            debug=debug,
+        )
+
     # @classmethod
     # def reputer(
     #     cls,
@@ -166,7 +224,7 @@ class AlloraWorker:
 
     def __init__(
         self,
-        run: PredictFn,
+        run: Union[PredictFn, ForecastFn],
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -174,6 +232,7 @@ class AlloraWorker:
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         submission_window_event_type: Type[SubmissionWindowOpenedEvent] = EventWorkerSubmissionWindowOpened,
+        is_forecaster: bool = False,
         debug: bool = False,
     ) -> None:
         """
@@ -206,6 +265,7 @@ class AlloraWorker:
         self.polling_interval = polling_interval
         self.api_key = api_key
         self.submission_window_event_type = submission_window_event_type
+        self.is_forecaster = is_forecaster
         self.submitted_nonces = TimestampOrderedSet()
 
         setup_sdk_logging(debug=debug)
@@ -729,15 +789,23 @@ class AlloraWorker:
 
         try:
             if asyncio.iscoroutinefunction(self._user_callback):
-                prediction: PredictFnResultType = await self._user_callback(nonce)
+                result = await self._user_callback(nonce)
             else:
                 # Run sync prediction in executor to avoid blocking
-                loop = asyncio.get_event_loop()
-                prediction: PredictFnResultType = await loop.run_in_executor(None, self._user_callback, nonce)
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, self._user_callback, nonce)
         except Exception as err:
             logger.debug(f"Prediction function failed: {err}")
             return err
 
+        # Branch based on worker type
+        if self.is_forecaster:
+            return await self._submit_forecast(nonce, result)
+        else:
+            return await self._submit_inference(nonce, result)
+
+    async def _submit_inference(self, nonce: int, prediction: PredictFnResultType):
+        """Submit an inference (single prediction value)."""
         # Sanity check prediction against network consensus
         try:
             await self._sanity_check_submission(float(prediction))
@@ -764,7 +832,49 @@ class AlloraWorker:
                 )
 
             return PredictionResult(prediction=float(prediction), tx_result=resp)
-            
+
+        except Exception as err:
+            return err
+
+    async def _submit_forecast(self, nonce: int, forecasts: ForecastFnResultType):
+        """Submit forecasts for multiple inferers."""
+        if not forecasts:
+            logger.warning("Empty forecasts dict provided, skipping submission")
+            return Exception("Empty forecasts dict")
+
+        # Convert to forecast_elements format: [{inferer: addr, value: str}, ...]
+        forecast_elements = [
+            {"inferer": addr, "value": str(pred)}
+            for addr, pred in forecasts.items()
+        ]
+
+        # Calculate aggregate for inference_value (required field)
+        aggregate = sum(forecasts.values()) / len(forecasts)
+
+        logger.info(f"Submitting forecasts for {len(forecasts)} inferers (aggregate: {aggregate:.6f})")
+
+        try:
+            resp = await self.client.emissions.tx.insert_worker_payload(
+                topic_id=self.topic_id,
+                inference_value=str(aggregate),
+                nonce=nonce,
+                forecast_elements=forecast_elements,
+                fee_tier=self.fee_tier
+            )
+            if isinstance(resp, int):
+                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+            resp = await resp.wait()
+
+            if resp.code != 0:
+                return TxError(
+                    codespace=resp.codespace,
+                    code=resp.code,
+                    tx_hash=resp.txhash,
+                    message=resp.raw_log,
+                )
+
+            return ForecastResult(forecasts=forecasts, tx_result=resp)
+
         except Exception as err:
             return err
 
