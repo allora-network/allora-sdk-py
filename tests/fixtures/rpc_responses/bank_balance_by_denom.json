@@ -1,0 +1,16 @@
+{
+  "endpoint": "/cosmos/bank/v1beta1/balances/allo1lvdpcyf7jtdn45gradfmxzwqlapxa9zd3kr4pj/by_denom",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:41.970931",
+  "url": "https://allora-api.testnet.allora.network/cosmos/bank/v1beta1/balances/allo1lvdpcyf7jtdn45gradfmxzwqlapxa9zd3kr4pj/by_denom",
+  "params": {
+    "denom": "uallo"
+  },
+  "headers": null,
+  "data": {
+    "balance": {
+      "denom": "uallo",
+      "amount": "2972067113923661158792"
+    }
+  }
+}

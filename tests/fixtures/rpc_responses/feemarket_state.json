@@ -1,0 +1,18 @@
+{
+  "endpoint": "/feemarket/v1/state",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:46.517567",
+  "url": "https://allora-api.testnet.allora.network/feemarket/v1/state",
+  "params": null,
+  "headers": null,
+  "data": {
+    "state": {
+      "base_gas_price": "10.000000000000000000",
+      "learning_rate": "0.125000000000000000",
+      "window": [
+        "0"
+      ],
+      "index": "0"
+    }
+  }
+}

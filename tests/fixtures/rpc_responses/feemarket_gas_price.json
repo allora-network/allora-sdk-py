@@ -1,0 +1,13 @@
+{
+  "endpoint": "/feemarket/v1/gas_price",
+  "status": 501,
+  "captured_at": "2025-12-19T00:54:46.128654",
+  "url": "https://allora-api.testnet.allora.network/feemarket/v1/gas_price",
+  "params": null,
+  "headers": null,
+  "data": {
+    "code": 12,
+    "message": "Not Implemented",
+    "details": []
+  }
+}

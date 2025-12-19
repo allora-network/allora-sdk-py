@@ -1,0 +1,17 @@
+{
+  "endpoint": "/cosmos/auth/v1beta1/params",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:41.202070",
+  "url": "https://allora-api.testnet.allora.network/cosmos/auth/v1beta1/params",
+  "params": null,
+  "headers": null,
+  "data": {
+    "params": {
+      "max_memo_characters": "256",
+      "tx_sig_limit": "7",
+      "tx_size_cost_per_byte": "10",
+      "sig_verify_cost_ed25519": "590",
+      "sig_verify_cost_secp256k1": "1000"
+    }
+  }
+}

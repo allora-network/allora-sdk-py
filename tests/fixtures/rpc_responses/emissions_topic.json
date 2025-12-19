@@ -1,0 +1,32 @@
+{
+  "endpoint": "/emissions/v9/topics/1",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:43.441665",
+  "url": "https://allora-api.testnet.allora.network/emissions/v9/topics/1",
+  "params": null,
+  "headers": null,
+  "data": {
+    "topic": {
+      "id": "1",
+      "creator": "allo1lzf3xp0zqg4239mrswd0cclsgt3y8fl7l84hxu",
+      "metadata": "ETH 10min Prediction",
+      "loss_method": "mse",
+      "epoch_last_ended": "7038657",
+      "epoch_length": "120",
+      "ground_truth_lag": "120",
+      "p_norm": "3",
+      "alpha_regret": "0.1",
+      "allow_negative": false,
+      "epsilon": "0.01",
+      "initial_regret": "-4.6354400918506867409087527239705949",
+      "worker_submission_window": "12",
+      "merit_sortition_alpha": "0.1",
+      "active_inferer_quantile": "0.25",
+      "active_forecaster_quantile": "0.25",
+      "active_reputer_quantile": "0.25"
+    },
+    "weight": "2784670287521891.291868593695406555269",
+    "effective_revenue": "616667",
+    "topic_stake": "1445546827603163674635785"
+  }
+}

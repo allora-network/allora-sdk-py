@@ -1,0 +1,24 @@
+{
+  "endpoint": "/mint/v5/params",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:46.707216",
+  "url": "https://allora-api.testnet.allora.network/mint/v5/params",
+  "params": null,
+  "headers": null,
+  "data": {
+    "params": {
+      "mint_denom": "uallo",
+      "max_supply": "1000000000000000000000000000",
+      "f_emission": "0.035000000000000000",
+      "one_month_smoothing_degree": "0.100000000000000000",
+      "ecosystem_treasury_percent_of_total_supply": "0.214500000000000000",
+      "foundation_treasury_percent_of_total_supply": "0.177000000000000000",
+      "participants_percent_of_total_supply": "0.123000000000000000",
+      "investors_percent_of_total_supply": "0.310500000000000000",
+      "team_percent_of_total_supply": "0.175000000000000000",
+      "maximum_monthly_percentage_yield": "0.009500000000000000",
+      "investors_preseed_percent_of_total_supply": "0.000000000000000000",
+      "emission_enabled": true
+    }
+  }
+}

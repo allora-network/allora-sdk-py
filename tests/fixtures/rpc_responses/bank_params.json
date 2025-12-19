@@ -1,0 +1,14 @@
+{
+  "endpoint": "/cosmos/bank/v1beta1/params",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:42.725369",
+  "url": "https://allora-api.testnet.allora.network/cosmos/bank/v1beta1/params",
+  "params": null,
+  "headers": null,
+  "data": {
+    "params": {
+      "send_enabled": [],
+      "default_send_enabled": true
+    }
+  }
+}

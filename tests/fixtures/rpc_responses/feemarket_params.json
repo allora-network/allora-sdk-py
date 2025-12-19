@@ -1,0 +1,24 @@
+{
+  "endpoint": "/feemarket/v1/params",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:46.323258",
+  "url": "https://allora-api.testnet.allora.network/feemarket/v1/params",
+  "params": null,
+  "headers": null,
+  "data": {
+    "params": {
+      "alpha": "0.000000000000000000",
+      "beta": "1.000000000000000000",
+      "gamma": "0.000000000000000000",
+      "delta": "0.000000000000000000",
+      "min_base_gas_price": "10.000000000000000000",
+      "min_learning_rate": "0.125000000000000000",
+      "max_learning_rate": "0.125000000000000000",
+      "max_block_utilization": "30000000",
+      "window": "1",
+      "fee_denom": "uallo",
+      "enabled": true,
+      "distribute_fees": true
+    }
+  }
+}

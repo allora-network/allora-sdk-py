@@ -1,0 +1,20 @@
+{
+  "endpoint": "/cosmos/bank/v1beta1/supply",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:42.351583",
+  "url": "https://allora-api.testnet.allora.network/cosmos/bank/v1beta1/supply",
+  "params": null,
+  "headers": null,
+  "data": {
+    "supply": [
+      {
+        "denom": "uallo",
+        "amount": "862454786684673951882938470"
+      }
+    ],
+    "pagination": {
+      "next_key": null,
+      "total": "1"
+    }
+  }
+}

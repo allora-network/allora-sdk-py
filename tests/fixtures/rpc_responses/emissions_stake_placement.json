@@ -1,0 +1,13 @@
+{
+  "endpoint": "/emissions/v9/stake_placement/1/allo1lvdpcyf7jtdn45gradfmxzwqlapxa9zd3kr4pj",
+  "status": 501,
+  "captured_at": "2025-12-19T00:54:45.362740",
+  "url": "https://allora-api.testnet.allora.network/emissions/v9/stake_placement/1/allo1lvdpcyf7jtdn45gradfmxzwqlapxa9zd3kr4pj",
+  "params": null,
+  "headers": null,
+  "data": {
+    "code": 12,
+    "message": "Not Implemented",
+    "details": []
+  }
+}

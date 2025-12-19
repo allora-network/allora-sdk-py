@@ -55,6 +55,7 @@ dev = [
     "starlette",
     "httpx",
     "tox",
+    "aioresponses>=0.7.6",
 ]
 codegen = [
     "grpcio-tools",
@@ -119,6 +120,7 @@ deps = [
     "fastapi",
     "starlette",
     "httpx",
+    "aioresponses>=0.7.6",
 ]
 # set_env = { PATH = "{env:PATH}" }
 allowlist_externals = ["make"]
@@ -148,6 +150,9 @@ markers = ["asyncio: mark test as async test"]
 
 [dependency-groups]
 dev = [
+    "aioresponses>=0.7.8",
     "betterproto2-compiler>=0.7.1",
     "pyright>=1.1.407",
+    "pytest>=8.4.1",
+    "respx>=0.22.0",
 ]
