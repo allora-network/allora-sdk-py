@@ -103,6 +103,19 @@ wheels = [
 ]
 
 [[package]]
+name = "aioresponses"
+version = "0.7.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/03/532bbc645bdebcf3b6af3b25d46655259d66ce69abba7720b71ebfabbade/aioresponses-0.7.8.tar.gz", hash = "sha256:b861cdfe5dc58f3b8afac7b0a6973d5d7b2cb608dd0f6253d16b8ee8eaf6df11", size = 40253, upload-time = "2025-01-19T18:14:03.222Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/b7/584157e43c98aa89810bc2f7099e7e01c728ecf905a66cf705106009228f/aioresponses-0.7.8-py2.py3-none-any.whl", hash = "sha256:b73bd4400d978855e55004b23a3a84cb0f018183bcf066a85ad392800b5b9a94", size = 12518, upload-time = "2025-01-19T18:13:59.633Z" },
+]
+
+[[package]]
 name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -125,6 +138,7 @@ dependencies = [
     { name = "betterproto2" },
     { name = "cosmpy" },
     { name = "dill" },
+    { name = "grpcio-tools" },
     { name = "grpclib" },
     { name = "hdwallets" },
     { name = "lightgbm" },
@@ -148,6 +162,7 @@ codegen = [
     { name = "pyyaml" },
 ]
 dev = [
+    { name = "aioresponses" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mypy" },
@@ -160,15 +175,26 @@ dev = [
     { name = "types-chardet" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "aioresponses" },
+    { name = "betterproto2-compiler" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "respx" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.12" },
+    { name = "aioresponses", marker = "extra == 'dev'", specifier = ">=0.7.6" },
     { name = "async-timeout", specifier = ">=5.0.1" },
     { name = "betterproto2", specifier = "~=0.7.0" },
     { name = "betterproto2-compiler", marker = "extra == 'codegen'" },
     { name = "cosmpy", specifier = ">=0.11.1" },
     { name = "dill" },
     { name = "fastapi", marker = "extra == 'dev'" },
+    { name = "grpcio-tools", specifier = ">=1.71.2" },
     { name = "grpcio-tools", marker = "extra == 'codegen'" },
     { name = "grpclib", specifier = ">=0.4.8" },
     { name = "hdwallets", specifier = ">=0.1.2" },
@@ -196,6 +222,15 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
 ]
 provides-extras = ["dev", "codegen"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "aioresponses", specifier = ">=0.7.8" },
+    { name = "betterproto2-compiler", specifier = ">=0.7.1" },
+    { name = "pyright", specifier = ">=1.1.407" },
+    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "respx", specifier = ">=0.22.0" },
+]
 
 [[package]]
 name = "annotated-types"
@@ -1502,6 +1537,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nodeenv"
+version = "1.9.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/16/fc88b08840de0e0a72a2f9d8c6bae36be573e475a6326ae854bcc549fc45/nodeenv-1.9.1.tar.gz", hash = "sha256:6ec12890a2dab7946721edbfbcd91f3319c6ccc9aec47be7c7e6b7011ee6645f", size = 47437, upload-time = "2024-06-04T18:44:11.171Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/1d/1b658dbd2b9fa9c4c9f32accbfc0205d532c8c6194dc0f2a4c0428e7128a/nodeenv-1.9.1-py2.py3-none-any.whl", hash = "sha256:ba11c9782d29c27c70ffbdda2d7415098754709be8a7056d79a737cd901155c9", size = 22314, upload-time = "2024-06-04T18:44:08.352Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2110,6 +2154,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyright"
+version = "1.1.407"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nodeenv" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/1b/0aa08ee42948b61745ac5b5b5ccaec4669e8884b53d31c8ec20b2fcd6b6f/pyright-1.1.407.tar.gz", hash = "sha256:099674dba5c10489832d4a4b2d302636152a9a42d317986c38474c76fe562262", size = 4122872, upload-time = "2025-10-24T23:17:15.145Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dc/93/b69052907d032b00c40cb656d21438ec00b3a471733de137a3f65a49a0a0/pyright-1.1.407-py3-none-any.whl", hash = "sha256:6dd419f54fcc13f03b52285796d65e639786373f433e243f8b94cf93a7444d21", size = 5997008, upload-time = "2025-10-24T23:17:13.159Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2256,6 +2313,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a7/4b/249e19be15ff3f5eb9884010ace898d1935e15ac8bfdff40d7e26a10740d/requests_async-0.2.4.tar.gz", hash = "sha256:7eaa42cbfe4d0f1a5f1ef78625c625248cac5c5323afcbd76e7a2a26b85b56b9", size = 7961, upload-time = "2025-08-05T03:35:11.04Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/cf/bea41de8b7c81963d25230da39978ed0853258b7d481f60ce027bd889aa6/requests_async-0.2.4-py3-none-any.whl", hash = "sha256:a967efb84eb03a2053a847b1bfbac5917df8100d101368d883e20ae9ab15f7a2", size = 6895, upload-time = "2025-08-05T03:35:09.703Z" },
+]
+
+[[package]]
+name = "respx"
+version = "0.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/7c/96bd0bc759cf009675ad1ee1f96535edcb11e9666b985717eb8c87192a95/respx-0.22.0.tar.gz", hash = "sha256:3c8924caa2a50bd71aefc07aa812f2466ff489f1848c96e954a5362d17095d91", size = 28439, upload-time = "2024-12-19T22:33:59.374Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/67/afbb0978d5399bc9ea200f1d4489a23c9a1dad4eee6376242b8182389c79/respx-0.22.0-py2.py3-none-any.whl", hash = "sha256:631128d4c9aba15e56903fb5f66fb1eff412ce28dd387ca3a81339e52dbd3ad0", size = 25127, upload-time = "2024-12-19T22:33:57.837Z" },
 ]
 
 [[package]]

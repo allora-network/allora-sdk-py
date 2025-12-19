@@ -1,0 +1,112 @@
+{
+  "endpoint": "/cosmos/auth/v1beta1/accounts",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:40.616900",
+  "url": "https://allora-api.testnet.allora.network/cosmos/auth/v1beta1/accounts",
+  "params": {
+    "pagination.limit": "10"
+  },
+  "headers": null,
+  "data": {
+    "accounts": [
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "AuKJdiKeHnSqcOf9IbeV241oBS4sLjeme/ou2izrNvby"
+        },
+        "account_number": "8400",
+        "sequence": "998"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqz0lgsc5qe55a0gc4rzgsxmdkkwt5dfe59tf",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "AzZkeTZxa1SfQlVhiBqK5kzWe4aqhF6tgp019HJ8wq1g"
+        },
+        "account_number": "748621",
+        "sequence": "15"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqq946yu2c2eskmwc9q2fzfl7fx97nez4asvmk",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "Ax9MbENsYVOoKtWZHzneIOaQcp/H3nF+tzsyOrllkPfF"
+        },
+        "account_number": "763074",
+        "sequence": "12"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqq2x5qgcj402vf0wzqeyxma8hzh2urunert4t",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "AtcQPlpyNYVo6zRxR5Kua0AyKJZFqD/5P79gsTSjAPO/"
+        },
+        "account_number": "129497",
+        "sequence": "23"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqt5h4c3suh37ra9xcjg9jrzv48vhnt5g52sz",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "AhWBOhsGz8b1s5csTV1SVxaf4nkOA9ZID3XXf0YOs3Cc"
+        },
+        "account_number": "309069",
+        "sequence": "1531"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqv6t4w4ph0gdz7tpz844xyn4acvnc43g80e8",
+        "pub_key": null,
+        "account_number": "446804",
+        "sequence": "0"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqdthp5aj03jyw628lzewqfvseaw2tr6gdzky",
+        "pub_key": null,
+        "account_number": "262061",
+        "sequence": "0"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqwlvzzcpuu0nm5px3jdhdr89s0l9xnvhcddc",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "A6yBkgu0+Sas4ATeKkjvLWctP+6WT5gvqAk/A/u+W2Uz"
+        },
+        "account_number": "15378",
+        "sequence": "2"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqskawh2rpwv3hswnl35pqwc4jej26jeu89ra",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "ApFNF5yEnfPsCSOxcq6wQDfoyeA0lwKF1W0n8FrxTiNX"
+        },
+        "account_number": "47648",
+        "sequence": "32184"
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.BaseAccount",
+        "address": "allo1qqqjz6rr4sfrjsrywggut8w33js7xk450947eu",
+        "pub_key": {
+          "@type": "/cosmos.crypto.secp256k1.PubKey",
+          "key": "A2g0Iu0qb24UV3LMRdtLe+F4Snu4RAroWOp+ZorNXCFz"
+        },
+        "account_number": "430534",
+        "sequence": "66"
+      }
+    ],
+    "pagination": {
+      "next_key": "AAE+Qs5StpFMAjQHMdaeABgYjtI=",
+      "total": "0"
+    }
+  }
+}

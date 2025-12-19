@@ -40,6 +40,7 @@ dependencies = [
     "dill",
     "matplotlib",
     "requests-async>=0.2.4",
+    "grpcio-tools>=1.71.2",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,7 @@ dev = [
     "starlette",
     "httpx",
     "tox",
+    "aioresponses>=0.7.6",
 ]
 codegen = [
     "grpcio-tools",
@@ -118,6 +120,7 @@ deps = [
     "fastapi",
     "starlette",
     "httpx",
+    "aioresponses>=0.7.6",
 ]
 # set_env = { PATH = "{env:PATH}" }
 allowlist_externals = ["make"]
@@ -144,3 +147,12 @@ commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend =
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["asyncio: mark test as async test"]
+
+[dependency-groups]
+dev = [
+    "aioresponses>=0.7.8",
+    "betterproto2-compiler>=0.7.1",
+    "pyright>=1.1.407",
+    "pytest>=8.4.1",
+    "respx>=0.22.0",
+]

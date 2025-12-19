@@ -1,0 +1,19 @@
+{
+  "endpoint": "/cosmos/auth/v1beta1/account_info/allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:41.396753",
+  "url": "https://allora-api.testnet.allora.network/cosmos/auth/v1beta1/account_info/allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+  "params": null,
+  "headers": null,
+  "data": {
+    "info": {
+      "address": "allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+      "pub_key": {
+        "@type": "/cosmos.crypto.secp256k1.PubKey",
+        "key": "AuKJdiKeHnSqcOf9IbeV241oBS4sLjeme/ou2izrNvby"
+      },
+      "account_number": "8400",
+      "sequence": "998"
+    }
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "endpoint": "/cosmos/auth/v1beta1/module_accounts",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:41.582743",
+  "url": "https://allora-api.testnet.allora.network/cosmos/auth/v1beta1/module_accounts",
+  "params": null,
+  "headers": null,
+  "data": {
+    "accounts": [
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo12nrdvtljnm87axjlqdndas8eedzvzza5uqfdh5",
+          "pub_key": null,
+          "account_number": "16",
+          "sequence": "0"
+        },
+        "name": "allorapendingrewards",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo17099f3pwtd7u0je2x3ajrem6cfydj9xj5ccq2a",
+          "pub_key": null,
+          "account_number": "15",
+          "sequence": "0"
+        },
+        "name": "allorarewards",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo18svmgepd58pdhdlygeul5j8h9lv6jlj7kkhy7n",
+          "pub_key": null,
+          "account_number": "14",
+          "sequence": "0"
+        },
+        "name": "allorastaking",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1fl48vsnmsdzcv85q5d2q4z5ajdha8yu3mgnvww",
+          "pub_key": null,
+          "account_number": "10",
+          "sequence": "0"
+        },
+        "name": "bonded_tokens_pool",
+        "permissions": [
+          "burner",
+          "staking"
+        ]
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1jv65s3grqf6v6jl3dp4t6c9t9rk99cd8fv7l7x",
+          "pub_key": null,
+          "account_number": "9",
+          "sequence": "0"
+        },
+        "name": "distribution",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo12uxa8rw9hte3z2nuswjzpmfen289n30uag6agp",
+          "pub_key": null,
+          "account_number": "17",
+          "sequence": "0"
+        },
+        "name": "ecosystem",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo17xpfvakm2amg962yls6f84z3kell8c5l72eruy",
+          "pub_key": null,
+          "account_number": "8",
+          "sequence": "0"
+        },
+        "name": "fee_collector",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo176rcyfn5k9d0wcxel3kmwvxh0hy3xcwehleq3a",
+          "pub_key": null,
+          "account_number": "794433",
+          "sequence": "0"
+        },
+        "name": "feeibc",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1el68mjnzv87uurqks8u29tec0cj32970407f3h",
+          "pub_key": null,
+          "account_number": "794434",
+          "sequence": "0"
+        },
+        "name": "feemarket",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo13pxn9n3qw79e03844rdadagmg0nshmwfsnklnq",
+          "pub_key": null,
+          "account_number": "566743",
+          "sequence": "0"
+        },
+        "name": "feemarket-fee-collector",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo10d07y265gmmuvt4z0w9aw880jnsr700j53fxp2",
+          "pub_key": null,
+          "account_number": "12",
+          "sequence": "0"
+        },
+        "name": "gov",
+        "permissions": [
+          "burner"
+        ]
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1vlthgax23ca9syk7xgaz347xmf4nuneffmv5mf",
+          "pub_key": null,
+          "account_number": "794435",
+          "sequence": "0"
+        },
+        "name": "interchainaccounts",
+        "permissions": []
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1m3h30wlvsf8llruxtpukdvsy0km2kum8xzamse",
+          "pub_key": null,
+          "account_number": "13",
+          "sequence": "0"
+        },
+        "name": "mint",
+        "permissions": [
+          "minter"
+        ]
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1tygms3xhhs3yv487phx3dw4a95jn7t7l0g0ac6",
+          "pub_key": null,
+          "account_number": "11",
+          "sequence": "0"
+        },
+        "name": "not_bonded_tokens_pool",
+        "permissions": [
+          "burner",
+          "staking"
+        ]
+      },
+      {
+        "@type": "/cosmos.auth.v1beta1.ModuleAccount",
+        "base_account": {
+          "address": "allo1yl6hdjhmkf37639730gffanpzndzdpmhqvv2q6",
+          "pub_key": null,
+          "account_number": "794436",
+          "sequence": "0"
+        },
+        "name": "transfer",
+        "permissions": [
+          "minter",
+          "burner"
+        ]
+      }
+    ]
+  }
+}

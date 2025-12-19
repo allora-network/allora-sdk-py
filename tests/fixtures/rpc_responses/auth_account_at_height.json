@@ -1,0 +1,15 @@
+{
+  "endpoint": "/cosmos/auth/v1beta1/accounts/allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+  "status": 500,
+  "captured_at": "2025-12-19T00:54:41.007705",
+  "url": "https://allora-api.testnet.allora.network/cosmos/auth/v1beta1/accounts/allo1qqqz894m8dfx3qvdj648kjchfhq5y7yk993rvz",
+  "params": null,
+  "headers": {
+    "x-cosmos-block-height": "1000"
+  },
+  "data": {
+    "code": 2,
+    "message": "codespace sdk code 18: invalid request: failed to load state at height 1000; no commit info found (latest height: 7038752)",
+    "details": []
+  }
+}

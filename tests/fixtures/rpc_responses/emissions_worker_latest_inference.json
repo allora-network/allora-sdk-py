@@ -1,0 +1,15 @@
+{
+  "endpoint": "/emissions/v9/worker_latest_inference_by_topicId/1",
+  "status": 501,
+  "captured_at": "2025-12-19T00:54:45.170891",
+  "url": "https://allora-api.testnet.allora.network/emissions/v9/worker_latest_inference_by_topicId/1",
+  "params": {
+    "worker_address": "allo1lvdpcyf7jtdn45gradfmxzwqlapxa9zd3kr4pj"
+  },
+  "headers": null,
+  "data": {
+    "code": 12,
+    "message": "Not Implemented",
+    "details": []
+  }
+}

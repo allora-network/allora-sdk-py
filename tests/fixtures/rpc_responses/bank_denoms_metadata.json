@@ -1,0 +1,15 @@
+{
+  "endpoint": "/cosmos/bank/v1beta1/denoms_metadata",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:42.918332",
+  "url": "https://allora-api.testnet.allora.network/cosmos/bank/v1beta1/denoms_metadata",
+  "params": null,
+  "headers": null,
+  "data": {
+    "metadatas": [],
+    "pagination": {
+      "next_key": null,
+      "total": "0"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "endpoint": "/mint/v5/inflation",
+  "status": 200,
+  "captured_at": "2025-12-19T00:54:46.900337",
+  "url": "https://allora-api.testnet.allora.network/mint/v5/inflation",
+  "params": null,
+  "headers": null,
+  "data": {
+    "inflation": "2.922197236550902400"
+  }
+}
