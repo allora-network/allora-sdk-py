@@ -110,7 +110,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
     def reputer(
         cls,
         ground_truth_fn: GroundTruthFn,
-        loss_fn: LossFn = default_squared_error_loss,
+        loss_fn: Optional[LossFn] = None,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -124,8 +124,10 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         Create an AlloraWorker configured as a reputer.
 
         Args:
-            run: Loss function to calculate error between ground truth and predictions
             ground_truth_fn: Function that returns ground truth values (str or float)
+            loss_fn: Loss function to calculate error between ground truth and predictions.
+                     If None (default), the SDK will automatically select the appropriate
+                     loss function based on the topic's on-chain `loss_method` configuration.
             wallet: Wallet configuration (private key, mnemonic, or file)
             network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
@@ -137,6 +139,10 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
 
         Returns:
             An instance of AlloraWorker configured as a reputer
+
+        Raises:
+            UnsupportedLossMethodError: If loss_fn is None and the topic's loss_method
+                                        is not supported by the SDK's default implementations.
         """
         wallet_initialized = init_worker_wallet(wallet)
         client = AlloraRPCClient(
@@ -383,7 +389,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         logger.debug(f"Starting Allora {self.use_case.name()} for topic {self.topic_id}")
 
         try:
-            did_register = await self.use_case.ensure_registered()
+            did_register = await self.use_case.initialize()
             if did_register:
                 logger.info(f"✅ Registered {self.use_case.name()} {self.address} for topic {self.topic_id}")
 
