@@ -31,11 +31,11 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowOpened,
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
-    GetLatestNetworkInferencesRequest,
     InputValueBundle,
 )
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
+from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
 from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
 from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer, default_squared_error_loss
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TQueueItem, TSubmissionWindowOpenEventType, UseCase, WorkerNotWhitelistedError, WorkerResult
@@ -159,6 +159,59 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                 client=client,
                 min_stake_uallo=min_stake_uallo,
                 wallet=wallet_initialized,
+            ),
+            address=str(wallet_initialized.address()),
+            client=client,
+            api_key=api_key,
+            topic_id=topic_id,
+            fee_tier=fee_tier,
+            polling_interval=polling_interval,
+            debug=debug,
+        )
+
+    @classmethod
+    def forecaster(
+        cls,
+        run: TForecasterRunFn,
+        wallet: Optional[AlloraWalletConfig] = None,
+        network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
+        api_key: Optional[str] = None,
+        topic_id: int = 69,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        polling_interval: int = 120,
+        debug: bool = False,
+    ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
+        """
+        Create an AlloraWorker configured as a forecaster.
+
+        Forecasters submit forecasts for multiple inferers in a single transaction.
+
+        Args:
+            run: A function that returns a dict mapping `{inferer_address: predicted_value}`
+            wallet: Wallet configuration (private key, mnemonic, or file)
+            network: Allora network configuration (testnet/mainnet/custom)
+            api_key: API key for testnet faucet (if needed)
+            topic_id: The Allora network topic ID to submit forecasts to
+            fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
+            polling_interval: Interval in seconds to poll for new submission windows
+            debug: Enable debug logging
+
+        Returns:
+            An instance of AlloraWorker configured as a forecaster
+        """
+        wallet_initialized = init_worker_wallet(wallet)
+        client = AlloraRPCClient(
+            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            network=network,
+            debug=debug,
+        )
+        return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
+            use_case=Forecaster(
+                topic_id=topic_id,
+                wallet=wallet_initialized,
+                fee_tier=fee_tier,
+                run=run,
+                client=client,
             ),
             address=str(wallet_initialized.address()),
             client=client,
