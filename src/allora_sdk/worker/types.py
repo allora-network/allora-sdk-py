@@ -1,14 +1,11 @@
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ClassVar, Optional, Protocol, Union
-from allora_sdk.rpc_client.client_websocket_events import TBetterproto2Message
+from typing import Any, Awaitable, Callable, Protocol
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
-
 
 type TQueueItem[RunFnReturnType] = WorkerResult[RunFnReturnType] | Exception | StopQueue
 
 type TRunFn[RunFnReturnType] = Callable[[int], RunFnReturnType] | Callable[[int], Awaitable[RunFnReturnType]]
-
 
 class AlreadySubmittedError(TxError):
     pass

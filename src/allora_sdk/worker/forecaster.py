@@ -1,15 +1,16 @@
 import logging
 from cosmpy.aerial.wallet import LocalWallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.protos.emissions.v9 import (
-    CanSubmitWorkerPayloadRequest,
-    EventWorkerSubmissionWindowOpened,
-    GetUnfulfilledWorkerNoncesRequest,
-    IsWorkerRegisteredInTopicIdRequest,
-)
+from allora_sdk.rpc_client.protos.emissions.v9 import EventWorkerSubmissionWindowOpened
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import (
+    can_submit_worker_payload,
+    get_unfulfilled_worker_nonces,
+    is_already_submitted_error,
+    register_worker,
+    resolve_maybe_awaitable,
+)
 
 logger = logging.getLogger("allora_sdk")
 
@@ -49,43 +50,13 @@ class Forecaster:
         return EventWorkerSubmissionWindowOpened
 
     async def initialize(self) -> bool:
-        resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
-            IsWorkerRegisteredInTopicIdRequest(
-                topic_id=self.topic_id,
-                address=str(self.wallet.address()),
-            ),
-        )
-        if resp.is_registered:
-            return False
-
-        logger.debug(f"Registering forecaster {str(self.wallet.address())} for topic {self.topic_id}")
-        tx = await self.client.emissions.tx.register(
-            topic_id=self.topic_id,
-            owner_addr=str(self.wallet.address()),
-            sender_addr=str(self.wallet.address()),
-            is_reputer=False,
-            fee_tier=FeeTier.PRIORITY,
-        )
-        if isinstance(tx, int):
-            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-        await tx.wait()
-        return True
+        return await register_worker(self.client, self.wallet, self.topic_id, FeeTier.PRIORITY)
 
     async def worker_is_whitelisted(self) -> bool:
-        can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
-            CanSubmitWorkerPayloadRequest(
-                address=str(self.wallet.address()),
-                topic_id=self.topic_id,
-            )
-        )
-        return can_submit_resp.can_submit_worker_payload
+        return await can_submit_worker_payload(self.client, self.wallet, self.topic_id)
 
     async def get_unfulfilled_nonces(self) -> set[int]:
-        resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
-            GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
-        )
-        nonces = {x.block_height for x in resp.nonces.nonces} if resp.nonces is not None else set[int]()
-        return nonces
+        return await get_unfulfilled_worker_nonces(self.client, self.topic_id)
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
         try:
@@ -131,13 +102,7 @@ class Forecaster:
             return WorkerResult(submission=forecasts, tx_result=resp)
 
         except TxError as err:
-            already_submitted = False
-            if err.code in (68, 75, 78):
-                already_submitted = True
-            elif "already submitted" in (err.message or "").lower():
-                already_submitted = True
-
-            if already_submitted:
+            if is_already_submitted_error(err):
                 return AlreadySubmittedError(
                     codespace=err.codespace,
                     code=err.code,

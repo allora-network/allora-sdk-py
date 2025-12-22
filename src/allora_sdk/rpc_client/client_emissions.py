@@ -19,6 +19,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputForecastElement,
     InputForecast,
     RegisterRequest,
+    RewardDelegateStakeRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
@@ -267,6 +268,58 @@ class EmissionsTxs:
         else:
             return await self._txs.submit_transaction(
                 type_url="/emissions.v9.AddStakeRequest",
+                msgs=[ msg ],
+                gas_limit=gas_limit,
+                fee_tier=fee_tier
+            )
+
+    async def reward_delegate_stake(
+        self,
+        topic_id: int,
+        reputer: str,
+        fee_tier: FeeTier = FeeTier.STANDARD,
+        gas_limit: Optional[int] = None,
+        simulate: bool = False,
+    ) -> Union[PendingTx, int]:
+        """
+        Claim and restake pending delegation rewards for a reputer.
+
+        This transaction claims any pending rewards from delegate stake and
+        automatically restakes them to the same reputer on the same topic.
+
+        Args:
+            topic_id: The topic ID where the reputer is staked
+            reputer: The reputer address to claim rewards from
+            fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
+            gas_limit: Optional gas limit (used only if simulate=False)
+            simulate: If True, only simulate and return estimated gas (int).
+                     If False, execute the transaction and return PendingTx.
+
+        Returns:
+            If simulate=True: Estimated gas units required (int)
+            If simulate=False: PendingTx object that can be awaited for the result
+        """
+        if not self._txs:
+            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+
+        sender_address = str(self._txs.wallet.address())
+
+        msg = RewardDelegateStakeRequest(
+            sender=sender_address,
+            topic_id=topic_id,
+            reputer=reputer,
+        )
+
+        logger.debug(f"Claiming and restaking delegate rewards for topic {topic_id}, reputer {reputer}")
+
+        if simulate:
+            return await self._txs.simulate_transaction(
+                type_url="/emissions.v9.RewardDelegateStakeRequest",
+                msgs=[ msg ],
+            )
+        else:
+            return await self._txs.submit_transaction(
+                type_url="/emissions.v9.RewardDelegateStakeRequest",
                 msgs=[ msg ],
                 gas_limit=gas_limit,
                 fee_tier=fee_tier

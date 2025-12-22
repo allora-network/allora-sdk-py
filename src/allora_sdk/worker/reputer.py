@@ -1,29 +1,33 @@
-import asyncio
 from decimal import Decimal
 import logging
-from typing import Awaitable, Callable, List, Optional, Type, Union
+from typing import Awaitable, Callable, List, Optional
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce, ValueBundle
 from allora_sdk.rpc_client.protos.emissions.v9 import (
-    CanSubmitReputerPayloadRequest,
+    ActorType,
     EventReputerSubmissionWindowOpened,
+    EventRewardsSettled,
     GetNetworkInferencesAtBlockRequest,
     GetStakeFromReputerInTopicInSelfRequest,
     GetTopicRequest,
-    GetUnfulfilledReputerNoncesRequest,
     InputOneOutInfererForecasterValues,
     InputValueBundle,
     InputWithheldWorkerAttributedValue,
     InputWorkerAttributedValue,
-    IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.loss_methods.defaults import get_default_loss_fn, is_supported_loss_method, UnsupportedLossMethodError
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import (
+    can_submit_reputer_payload,
+    get_unfulfilled_reputer_nonces,
+    is_already_submitted_error,
+    register_reputer,
+    resolve_maybe_awaitable,
+)
 
 logger = logging.getLogger("allora_sdk")
 
@@ -48,6 +52,7 @@ class Reputer:
         loss_fn: Optional[LossFn] = None,
         min_stake_uallo: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
+        auto_stake: bool = False,
     ):
         self.wallet = wallet
         self.client = client
@@ -56,6 +61,7 @@ class Reputer:
         self.loss_fn = loss_fn
         self.min_stake_uallo = min_stake_uallo
         self.fee_tier = fee_tier
+        self.auto_stake = auto_stake
 
 
     def name(self) -> str:
@@ -69,51 +75,13 @@ class Reputer:
     async def initialize(self) -> bool:
         # Auto-select loss function for reputers if not explicitly provided
         await self._maybe_auto_select_loss_fn()
-
-        # Check if reputer is already registered
-        resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(
-            IsReputerRegisteredInTopicIdRequest(
-                topic_id=self.topic_id,
-                address=str(self.wallet.address()),
-            ),
-        )
-        if resp.is_registered:
-            return False
-
-        logger.debug(f"   Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
-        tx = await self.client.emissions.tx.register(
-            topic_id=self.topic_id,
-            owner_addr=str(self.wallet.address()),
-            sender_addr=str(self.wallet.address()),
-            is_reputer=True,
-            fee_tier=self.fee_tier,
-        )
-        if isinstance(tx, int):
-            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-        await tx.wait()
-        return True
-
+        return await register_reputer(self.client, self.wallet, self.topic_id, self.fee_tier)
 
     async def worker_is_whitelisted(self) -> bool:
-        can_submit_resp = await self.client.emissions.query.can_submit_reputer_payload(
-            CanSubmitReputerPayloadRequest(
-                address=str(self.wallet.address()),
-                topic_id=self.topic_id,
-            )
-        )
-        return can_submit_resp.can_submit_reputer_payload
-
+        return await can_submit_reputer_payload(self.client, self.wallet, self.topic_id)
 
     async def get_unfulfilled_nonces(self) -> set[int]:
-        resp = await self.client.emissions.query.get_unfulfilled_reputer_nonces(
-            GetUnfulfilledReputerNoncesRequest(topic_id=self.topic_id)
-        )
-        nonces = set[int]()
-        if resp.nonces is not None:
-            for nonce_item in resp.nonces.nonces:
-                if nonce_item.reputer_nonce and nonce_item.reputer_nonce.block_height:
-                    nonces.add(nonce_item.reputer_nonce.block_height)
-        return nonces
+        return await get_unfulfilled_reputer_nonces(self.client, self.topic_id)
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
@@ -179,19 +147,17 @@ class Reputer:
             return WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
         except TxError as err:
-            logger.error(f"❌ TX ERROR: {err}")
-            if err.code == 68:
+            if is_already_submitted_error(err):
                 return AlreadySubmittedError(
                     codespace=err.codespace,
                     code=err.code,
                     tx_hash=err.tx_hash,
                     message=err.message,
                 )
-            else:
-                return err
+            return err
 
         except Exception as err:
-            logger.error(f"❌ XYZZY: {err.__class__.__name__} {err}")
+            logger.debug(f"Unexpected error in reputer submit: {err}")
             return err
 
     async def _maybe_auto_select_loss_fn(self) -> None:
@@ -379,6 +345,55 @@ class Reputer:
 
         except Exception as e:
             logger.error(f"Failed to add stake: {e}")
+
+    async def handle_rewards_settled(self, event: EventRewardsSettled, block_height: int) -> None:
+        """
+        Handle EventRewardsSettled to automatically claim and restake rewards.
+
+        This is called when rewards are distributed. It triggers the
+        RewardDelegateStake transaction to claim and restake rewards.
+        """
+        sender = str(self.wallet.address())
+
+        # Verify this event is for reputers (actor_type comes as string with quotes)
+        if "ACTOR_TYPE_REPUTER" not in str(event.actor_type):
+            return
+
+        # Verify this event is for our topic
+        if event.topic_id != self.topic_id:
+            return
+
+        # Verify our address is in the rewards list
+        if sender not in event.addresses:
+            return
+
+        # Find our reward amount for logging
+        try:
+            idx = event.addresses.index(sender)
+            reward_amount = event.rewards[idx] if idx < len(event.rewards) else "unknown"
+        except (ValueError, IndexError):
+            reward_amount = "unknown"
+
+        logger.info(f"[AUTO-STAKE] Rewards settled: topic={self.topic_id}, reward={reward_amount} uallo")
+
+        try:
+            pending_tx = await self.client.emissions.tx.reward_delegate_stake(
+                topic_id=self.topic_id,
+                reputer=sender,
+                fee_tier=self.fee_tier,
+            )
+            if isinstance(pending_tx, int):
+                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
+
+            tx_resp = await pending_tx.wait()
+
+            if tx_resp.code != 0:
+                logger.error(f"[AUTO-STAKE] Failed to restake: code={tx_resp.code} log={tx_resp.raw_log}")
+            else:
+                logger.info(f"[AUTO-STAKE] Restaked {reward_amount} uallo (tx={tx_resp.txhash})")
+
+        except Exception as e:
+            logger.error(f"[AUTO-STAKE] Failed to restake rewards: {e}")
 
 
 _implements: type[UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]] = Reputer

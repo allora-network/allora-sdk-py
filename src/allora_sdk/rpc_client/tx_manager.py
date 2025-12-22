@@ -136,6 +136,7 @@ class TxManager:
             "/emissions.v9.FundTopicRequest": 150000,
             "/emissions.v9.BulkAddToTopicWorkerWhitelistRequest": 200000,
             "/emissions.v9.BulkAddToTopicReputerWhitelistRequest": 200000,
+            "/emissions.v9.RewardDelegateStakeRequest": 150000,
             "/cosmos.bank.v1beta1.MsgSend": 250000,
             "/cosmos.staking.v1beta1.MsgDelegate": 100000,
             "/cosmos.staking.v1beta1.MsgUndelegate": 100000,

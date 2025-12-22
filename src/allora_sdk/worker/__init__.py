@@ -11,9 +11,15 @@ from .worker import (
     LossFn,
     default_squared_error_loss,
 )
+from .types import WorkerResult
+from .forecaster import TForecasterRunFnResult
+from .inferer import TInfererRunFnResult
 
 __all__ = [
     "AlloraWorker",
     "LossFn",
     "default_squared_error_loss",
+    "WorkerResult",
+    "TForecasterRunFnResult",
+    "TInfererRunFnResult",
 ]
