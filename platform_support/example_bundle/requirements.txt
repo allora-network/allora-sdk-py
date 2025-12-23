@@ -1,0 +1,2 @@
+# Example dependencies with pinned versions
+numpy==1.26.4

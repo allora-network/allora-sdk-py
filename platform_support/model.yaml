@@ -1,0 +1,73 @@
+# Allora Model Bundle Schema v0.1
+# This file defines the metadata and configuration for an Allora model bundle.
+# This schema is designed to be forward-compatible with MLflow-style packaging.
+
+schema_version: "0.1"
+
+# Model identity (required)
+name: "my-trading-strategy"
+version: "1.0.0"
+
+# Python runtime (required)
+python:
+  version: "3.11"  # Supported: 3.10, 3.11, 3.12, 3.13
+
+# Entrypoint definition (required)
+# Specifies how to load and call the user's inference function
+entrypoint:
+  # Type of entrypoint (currently only "python_function" is supported)
+  kind: "python_function"
+
+  # Importable module path (when bundle root is on PYTHONPATH)
+  module: "src.my_strategy.runner"
+
+  # Function name within the module
+  # Function signature must be: (nonce: int) -> str | float | Decimal
+  function: "run"
+
+  # Working directory (optional, default: ".")
+  # The platform will chdir to this directory before importing/running
+  workdir: "."
+
+  # Artifacts directory (optional, default: "artifacts")
+  # Conventional location for model weights, data files, etc.
+  artifacts_dir: "artifacts"
+
+# Environment specification (required)
+environment:
+  # Path to requirements.txt (relative to bundle root)
+  pip_requirements: "requirements.txt"
+
+  # Optional: Additional pip constraints
+  # constraints: "constraints.txt"
+
+  # Optional: Extra index URLs for private packages
+  # extra_index_urls:
+  #   - "https://pypi.example.com/simple"
+
+# Allora-specific configuration (optional)
+# These values can be overridden by platform environment variables
+allora:
+  # Topic ID to submit predictions to
+  topic_id: 69
+
+  # Polling interval in seconds (how often to check for new submission windows)
+  polling_interval: 120
+
+  # Transaction fee tier: "ECO" | "STANDARD" | "PRIORITY"
+  fee_tier: "STANDARD"
+
+  # Network preset: "testnet" | "mainnet" | custom RPC URL
+  network: "testnet"
+
+# Runtime constraints (optional)
+# These help the platform allocate appropriate resources
+runtime:
+  # Maximum execution time per prediction (seconds)
+  max_seconds: 25
+
+  # Maximum memory (MB)
+  memory_mb: 2048
+
+  # CPU cores (for multi-threaded inference)
+  # cpu_cores: 1
