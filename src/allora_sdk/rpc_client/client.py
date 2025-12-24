@@ -10,7 +10,7 @@ provided it is given the appropriate configuration.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from grpclib.client import Channel
 from cosmpy.aerial.client import LedgerClient
@@ -22,6 +22,7 @@ import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint
 import allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
 import allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
 import allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
+import allora_sdk.rpc_client.protos.cosmos.staking.v1beta1 as cosmos_staking_v1beta1
 import allora_sdk.rpc_client.protos.emissions.v9 as emissions_v9
 import allora_sdk.rpc_client.protos.feemarket.feemarket.v1 as feemarket_v1
 import allora_sdk.rpc_client.protos.mint.v5 as mint_v5
@@ -29,6 +30,7 @@ import allora_sdk.rpc_client.rest as rest
 from allora_sdk.rpc_client.client_auth import AuthClient
 from allora_sdk.rpc_client.client_bank import BankClient
 from allora_sdk.rpc_client.client_feemarket import FeemarketClient
+from allora_sdk.rpc_client.client_staking import StakingClient
 from allora_sdk.rpc_client.client_tx import TxClient
 from allora_sdk.rpc_client.client_tendermint import TendermintClient
 
@@ -80,13 +82,17 @@ class AlloraRPCClient:
             self.grpc_client = Channel(host=parsed_url.hostname, port=parsed_url.port, ssl=parsed_url.secure)
 
             # Set up gRPC services
-            auth_query: rest.CosmosAuthV1Beta1QueryLike = cosmos_auth_v1beta1.QueryStub(self.grpc_client)
-            bank_query: rest.CosmosBankV1Beta1QueryLike = cosmos_bank_v1beta1.QueryStub(self.grpc_client)
-            tendermint_query: rest.CosmosBaseTendermintV1Beta1ServiceLike = tendermint_v1beta1.ServiceStub(self.grpc_client)
-            tx_query: rest.CosmosTxV1Beta1ServiceLike = cosmos_tx_v1beta1.ServiceStub(self.grpc_client)
-            emissions_query: rest.EmissionsV9QueryServiceLike = emissions_v9.QueryServiceStub(self.grpc_client)
-            mint_query: rest.MintV5QueryServiceLike = mint_v5.QueryServiceStub(self.grpc_client)
-            feemarket_query: rest.FeemarketFeemarketV1QueryLike = feemarket_v1.QueryStub(self.grpc_client)
+            auth_query = cast(rest.CosmosAuthV1Beta1QueryLike, cosmos_auth_v1beta1.QueryStub(self.grpc_client))
+            bank_query = cast(rest.CosmosBankV1Beta1QueryLike, cosmos_bank_v1beta1.QueryStub(self.grpc_client))
+            tendermint_query = cast(
+                rest.CosmosBaseTendermintV1Beta1ServiceLike,
+                tendermint_v1beta1.ServiceStub(self.grpc_client),
+            )
+            tx_query = cast(rest.CosmosTxV1Beta1ServiceLike, cosmos_tx_v1beta1.ServiceStub(self.grpc_client))
+            emissions_query = cast(rest.EmissionsV9QueryServiceLike, emissions_v9.QueryServiceStub(self.grpc_client))
+            mint_query = cast(rest.MintV5QueryServiceLike, mint_v5.QueryServiceStub(self.grpc_client))
+            feemarket_query = cast(rest.FeemarketFeemarketV1QueryLike, feemarket_v1.QueryStub(self.grpc_client))
+            staking_query = cosmos_staking_v1beta1.QueryStub(self.grpc_client)
         else:
             # Set up REST (Cosmos-LCD) services
             auth_query: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)
@@ -96,6 +102,7 @@ class AlloraRPCClient:
             emissions_query: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
             mint_query: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
             feemarket_query: rest.FeemarketFeemarketV1QueryLike = rest.FeemarketFeemarketV1RestQueryClient(parsed_url.rest_url)
+            staking_query = None
 
         if self.wallet is not None:
             self.tx_manager = TxManager(
@@ -109,6 +116,7 @@ class AlloraRPCClient:
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
         self.bank       = BankClient(query_client=bank_query, tx_manager=self.tx_manager)
+        self.staking    = StakingClient(query_client=staking_query, tx_manager=self.tx_manager)
         self.tendermint = TendermintClient(query_client=tendermint_query, tx_manager=self.tx_manager)
         self.tx         = TxClient(query_client=tx_query, tx_manager=self.tx_manager)
         self.emissions  = EmissionsClient(query_client=emissions_query, tx_manager=self.tx_manager)

@@ -29,6 +29,7 @@ from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
+    EventRewardsSettled,
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
     InputValueBundle,
@@ -38,6 +39,7 @@ from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
 from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
 from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer, default_squared_error_loss
+from allora_sdk.worker.autostake import AutoStakeConfig
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TQueueItem, TSubmissionWindowOpenEventType, UseCase, WorkerNotWhitelistedError, WorkerResult
 from allora_sdk.worker.utils import init_worker_wallet
 
@@ -65,6 +67,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
+        autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ):
         """
@@ -78,6 +81,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
+            autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             debug: Enable debug logging
 
         Returns:
@@ -96,6 +100,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                 fee_tier=fee_tier,
                 run=run,
                 client=client,
+                autostake=autostake,
             ),
             address=str(wallet_initialized.address()),
             client=client,
@@ -179,6 +184,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
+        autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
@@ -194,6 +200,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             topic_id: The Allora network topic ID to submit forecasts to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
+            autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             debug: Enable debug logging
 
         Returns:
@@ -212,6 +219,7 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
                 fee_tier=fee_tier,
                 run=run,
                 client=client,
+                autostake=autostake,
             ),
             address=str(wallet_initialized.address()),
             client=client,
@@ -551,6 +559,19 @@ class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
+
+        # Subscribe to rewards events for autostaking if configured on the use case
+        autostake_cfg = getattr(self.use_case, "autostake", None)
+        handler = getattr(self.use_case, "handle_rewards_settled", None)
+        if autostake_cfg is not None and handler is not None:
+            await self.client.events.subscribe_new_block_events_typed(
+                EventRewardsSettled,
+                [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
+                handler,
+            )
+            logger.info(
+                f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
+            )
 
 
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
