@@ -8,6 +8,7 @@ from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     CanSubmitWorkerPayloadRequest,
     EventWorkerSubmissionWindowOpened,
+    EventRewardsSettled,
     GetLatestNetworkInferencesRequest,
     GetUnfulfilledWorkerNoncesRequest,
     IsWorkerRegisteredInTopicIdRequest,
@@ -15,6 +16,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled
 
 logger = logging.getLogger("allora_sdk")
 
@@ -31,12 +33,17 @@ class Inferer:
         topic_id: int,
         run: TInfererRunFn,
         fee_tier: FeeTier,
+        autostake: AutoStakeConfig | None = None,
     ):
         self.wallet = wallet
         self.client = client
         self.topic_id = topic_id
         self.predict_fn = run
         self.fee_tier = fee_tier
+        self.autostake = autostake
+
+        # Simple in-memory idempotence for rewards events
+        self._last_autostake_key: tuple[int, int] | None = None
 
 
     def name(self) -> str:
@@ -87,6 +94,23 @@ class Inferer:
         )
         nonces = { x.block_height for x in resp.nonces.nonces } if resp.nonces is not None else set[int]()
         return nonces
+
+    async def handle_rewards_settled(self, event: EventRewardsSettled, block_height: int | None = None) -> None:
+        """
+        Handle EventRewardsSettled and auto-stake this worker's reward amount.
+        """
+        new_key = await process_autostake_rewards_settled(
+            role=AutoStakeRole.INFERER,
+            event=event,
+            topic_id=self.topic_id,
+            wallet_addr=str(self.wallet.address()),
+            client=self.client,
+            autostake=self.autostake,
+            default_fee_tier=self.fee_tier,
+            last_autostake_key=self._last_autostake_key,
+        )
+        if new_key is not None:
+            self._last_autostake_key = new_key
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
