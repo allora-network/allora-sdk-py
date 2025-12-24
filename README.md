@@ -92,26 +92,23 @@ More resources:
 
 ```python
 from allora_sdk import AlloraWorker, FeeTier, AlloraWalletConfig, AlloraNetworkConfig
+from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeTargetType
 
 inference_worker = AlloraWorker.inferer(
     #
     # Wallet config
     #
-
     # Initialize with a mnemonic
-    wallet = AlloraWalletConfig(mnemonic="..."),
-
-    # Initialize with a private key (hex-encoded)
-    wallet = AlloraWalletConfig(private_key="..."),
+    wallet=AlloraWalletConfig(mnemonic="..."),
 
     #
     # Networking config
     #
 
     # Helpers for common networks/environments
-    network = AlloraNetworkConfig.testnet(),
-    network = AlloraNetworkConfig.mainnet(),
-    network = AlloraNetworkConfig.local(),
+    # network = AlloraNetworkConfig.testnet(),
+    # network = AlloraNetworkConfig.mainnet(),
+    # network = AlloraNetworkConfig.local(),
 
     # Specify network options directly
     network=AlloraNetworkConfig(
@@ -125,21 +122,33 @@ inference_worker = AlloraWorker.inferer(
     ),
 
     # Topic ID (see https://explorer.allora.network for the full list)
-    topic_id = 1,
+    topic_id=1,
 
     # Specify the inference function directly
-    run = my_model,
+    run=my_model,
 
     # Allora API key -- see https://developer.allora.network for a free key.
     # This is a convenience feature that allows the worker to fetch ALLO for gas fees on testnet.
-    api_key = "UP-...",
+    api_key="UP-...",
 
     # `fee_tier` controls how much you pay to ensure your inferences are included within
     # an epoch.  The options are ECO, STANDARD, or PRIORITY -- default is STANDARD.
-    fee_tier = FeeTier.PRIORITY,
+    fee_tier=FeeTier.PRIORITY,
 
     # `debug` enables debug logging -- very noisy.
-    debug = True,
+    debug=True,
+
+    # Optional: auto-stake this worker's rewards to a reputer (Allora emissions module)
+    autostake=AutoStakeConfig(
+        target_type=AutoStakeTargetType.REPUTER,
+        target_address="allo1...reputer",
+    ),
+
+    # Or: auto-stake to a Cosmos validator (staking MsgDelegate)
+    # autostake = AutoStakeConfig(
+    #     target_type=AutoStakeTargetType.VALIDATOR,
+    #     target_address="allovaloper1...validator",
+    # ),
 )
 ```
 
