@@ -11,7 +11,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
-from allora_sdk.worker.autostake import AutoStakeConfig, extract_reward_amount_uallo
+from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled
 
 logger = logging.getLogger("allora_sdk")
 
@@ -94,114 +94,22 @@ class Forecaster:
         nonces = {x.block_height for x in resp.nonces.nonces} if resp.nonces is not None else set[int]()
         return nonces
 
-    async def handle_rewards_settled(self, event: EventRewardsSettled, block_height: int) -> None:
+    async def handle_rewards_settled(self, event: EventRewardsSettled, block_height: int | None = None) -> None:
         """
         Handle EventRewardsSettled and auto-stake this worker's reward amount.
         """
-        logger.debug(
-            "[AUTO-STAKE] EventRewardsSettled received: actor_type=%s topic_id=%s nonce_block_height=%s payout_block_height_tx=%s height=%s addresses=%s rewards=%s",
-            str(event.actor_type),
-            getattr(event, "topic_id", None),
-            getattr(event, "block_height", None),
-            getattr(event, "block_height_tx", None),
-            block_height,
-            len(getattr(event, "addresses", []) or []),
-            len(getattr(event, "rewards", []) or []),
+        new_key = await process_autostake_rewards_settled(
+            role=AutoStakeRole.FORECASTER,
+            event=event,
+            topic_id=self.topic_id,
+            wallet_addr=str(self.wallet.address()),
+            client=self.client,
+            autostake=self.autostake,
+            default_fee_tier=self.fee_tier,
+            last_autostake_key=self._last_autostake_key,
         )
-
-        if self.autostake is None:
-            return
-
-        actor_type_raw = str(event.actor_type).strip('"')
-        if actor_type_raw not in ("FORECASTER", "ACTOR_TYPE_FORECASTER"):
-            logger.debug(
-                "[AUTO-STAKE] Skipping: actor_type mismatch (%s)",
-                actor_type_raw,
-            )
-            return
-
-        if event.topic_id != self.topic_id:
-            logger.debug("[AUTO-STAKE] Skipping: topic_id mismatch (%s != %s)", event.topic_id, self.topic_id)
-            return
-
-        sender = str(self.wallet.address())
-        reward_uallo = extract_reward_amount_uallo(event, sender)
-        if reward_uallo is None or reward_uallo <= 0:
-            logger.debug(
-                "[AUTO-STAKE] Skipping: no positive reward found for %s (reward_uallo=%s)",
-                sender,
-                reward_uallo,
-            )
-            return
-
-        autostake_key = (int(getattr(event, "block_height", 0) or 0), reward_uallo)
-        if self._last_autostake_key == autostake_key:
-            logger.debug("[AUTO-STAKE] Skipping: duplicate event key=%s", autostake_key)
-            return
-
-        self._last_autostake_key = autostake_key
-
-        fee_tier = self.autostake.fee_tier if self.autostake.fee_tier is not None else self.fee_tier
-
-        logger.info(
-            "[AUTO-STAKE] Forecaster rewards settled: topic=%s nonce=%s payout_height_tx=%s reward_uallo=%s target=%s:%s",
-            self.topic_id,
-            getattr(event, "block_height", None),
-            getattr(event, "block_height_tx", None),
-            reward_uallo,
-            self.autostake.target_type,
-            self.autostake.target_address,
-        )
-
-        try:
-            if self.autostake.target_type == "reputer":
-                logger.info(
-                    "[AUTO-STAKE] Delegating to reputer: reputer=%s amount_uallo=%s fee_tier=%s",
-                    self.autostake.target_address,
-                    reward_uallo,
-                    fee_tier.value,
-                )
-                pending = await self.client.emissions.tx.delegate_stake(
-                    sender=sender,
-                    topic_id=self.topic_id,
-                    reputer=self.autostake.target_address,
-                    amount=str(reward_uallo),
-                    fee_tier=fee_tier,
-                )
-                if isinstance(pending, int):
-                    raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-                resp = await pending.wait()
-                if resp.code != 0:
-                    logger.error(f"[AUTO-STAKE] DelegateStake failed: code={resp.code} log={resp.raw_log}")
-                else:
-                    logger.info(f"[AUTO-STAKE] Delegated {reward_uallo}uallo to reputer (tx={resp.txhash})")
-
-            elif self.autostake.target_type == "validator":
-                logger.info(
-                    "[AUTO-STAKE] Delegating to validator: validator=%s amount_uallo=%s denom=%s fee_tier=%s",
-                    self.autostake.target_address,
-                    reward_uallo,
-                    self.client.network.fee_denom,
-                    fee_tier.value,
-                )
-                pending = await self.client.staking.tx.delegate(
-                    validator_address=self.autostake.target_address,
-                    amount_uallo=reward_uallo,
-                    delegator_address=sender,
-                    fee_tier=fee_tier,
-                )
-                if isinstance(pending, int):
-                    raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-                resp = await pending.wait()
-                if resp.code != 0:
-                    logger.error(f"[AUTO-STAKE] MsgDelegate failed: code={resp.code} log={resp.raw_log}")
-                else:
-                    logger.info(f"[AUTO-STAKE] Delegated {reward_uallo}uallo to validator (tx={resp.txhash})")
-            else:
-                raise ValueError(f"Unknown autostake target_type: {self.autostake.target_type}")
-
-        except Exception as e:
-            logger.error(f"[AUTO-STAKE] Failed to autostake rewards: {e}")
+        if new_key is not None:
+            self._last_autostake_key = new_key
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
         try:

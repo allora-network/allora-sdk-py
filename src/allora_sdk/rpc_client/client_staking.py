@@ -54,7 +54,7 @@ class StakingTxs:
             raise ValueError("TxManager is not initialized for StakingTxs")
 
         denom = self._txs.config.fee_denom
-        logger.info(
+        logger.debug(
             "[AUTO-STAKE] StakingTxs.delegate: delegator=%s validator=%s amount_uallo=%s denom=%s fee_tier=%s simulate=%s gas_limit=%s",
             delegator_address or str(self._txs.wallet.address()),
             validator_address,
