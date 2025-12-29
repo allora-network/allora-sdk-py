@@ -174,8 +174,6 @@ async def process_autostake_rewards_settled(
                 amount=str(reward_uallo),
                 fee_tier=fee_tier,
             )
-            if isinstance(pending, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
             resp = await pending.wait()
             if resp.code != 0:
                 logger.error(f"[AUTO-STAKE] DelegateStake failed: code={resp.code} log={resp.raw_log}")
@@ -196,8 +194,6 @@ async def process_autostake_rewards_settled(
                 delegator_address=wallet_addr,
                 fee_tier=fee_tier,
             )
-            if isinstance(pending, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
             resp = await pending.wait()
             if resp.code != 0:
                 logger.error(f"[AUTO-STAKE] MsgDelegate failed: code={resp.code} log={resp.raw_log}")

@@ -161,28 +161,26 @@ class TxManager:
         self,
         type_url: str,
         msgs: list[Any],
-        gas_limit: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         max_retries: int = 2,
         timeout: Optional[timedelta] = None,
         account_seq: Optional[int] = None,
-    ):
+    ) -> "PendingTx":
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
-        estimated_gas_limit = gas_limit
-        if estimated_gas_limit is None:
-            try:
-                estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
-                logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
-                fee_preview = await self._calculate_optimal_fee(
-                    estimated_gas_limit,
-                    self._fee_multipliers[fee_tier],
-                )
-                logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
-            except Exception as e:
-                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
-                estimated_gas_limit = None
+        estimated_gas_limit: Optional[int] = None
+        try:
+            estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
+            logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
+            fee_preview = await self._calculate_optimal_fee(
+                estimated_gas_limit,
+                self._fee_multipliers[fee_tier],
+            )
+            logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+        except Exception as e:
+            logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+            estimated_gas_limit = None
 
         pending = PendingTx(
             manager=self,

@@ -1,7 +1,6 @@
-import asyncio
 from decimal import Decimal
 import logging
-from typing import Awaitable, Callable, List, Optional, Type, Union
+from typing import Awaitable, Callable, List, Optional
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -88,8 +87,6 @@ class Reputer:
             is_reputer=True,
             fee_tier=self.fee_tier,
         )
-        if isinstance(tx, int):
-            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
         await tx.wait()
         return True
 
@@ -165,17 +162,14 @@ class Reputer:
         loss_bundle.reputer = sender
 
         try:
-            resp = await self.client.emissions.tx.insert_reputer_payload(
+            pending = await self.client.emissions.tx.insert_reputer_payload(
                 topic_id=self.topic_id,
                 reputer_request_nonce=reputer_request_nonce,
                 value_bundle=loss_bundle,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
             )
-            if isinstance(resp, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-
-            tx_resp = await resp.wait()
+            tx_resp = await pending.wait()
             return WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
         except TxError as err:
@@ -368,9 +362,6 @@ class Reputer:
                 amount=delta,
                 fee_tier=self.fee_tier,
             )
-            if isinstance(pending_tx, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-
             tx_resp = await pending_tx.wait()
             if tx_resp.code != 0:
                 logger.error(f"❌ Failed to add stake: code={tx_resp.code} log={tx_resp.raw_log}")
