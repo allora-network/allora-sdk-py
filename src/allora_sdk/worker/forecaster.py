@@ -73,8 +73,6 @@ class Forecaster:
             is_reputer=False,
             fee_tier=FeeTier.PRIORITY,
         )
-        if isinstance(tx, int):
-            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
         await tx.wait()
         return True
 
@@ -140,7 +138,7 @@ class Forecaster:
             # Calculate aggregate for inference_value (required field).
             aggregate = sum(forecasts.values()) / len(forecasts)
 
-            resp = await self.client.emissions.tx.insert_worker_payload(
+            pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
                 inference_value=str(aggregate),
                 nonce=nonce,
@@ -148,9 +146,7 @@ class Forecaster:
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
             )
-            if isinstance(resp, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            resp = await resp.wait()
+            resp = await pending.wait()
 
             return WorkerResult(submission=forecasts, tx_result=resp)
 

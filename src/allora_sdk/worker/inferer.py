@@ -72,8 +72,6 @@ class Inferer:
             is_reputer=False,
             fee_tier=FeeTier.PRIORITY,
         )
-        if isinstance(tx, int):
-            raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
         await tx.wait()
         return True
 
@@ -130,16 +128,14 @@ class Inferer:
             logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
         try:
-            resp = await self.client.emissions.tx.insert_worker_payload(
+            pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
                 inference_value=str(prediction),
                 nonce=nonce,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
             )
-            if isinstance(resp, int):
-                raise ValueError('invariant violation: `resp` is an `int`, wanted `PendingTx`')
-            resp = await resp.wait()
+            resp = await pending.wait()
 
             return WorkerResult(submission=prediction, tx_result=resp)
 
