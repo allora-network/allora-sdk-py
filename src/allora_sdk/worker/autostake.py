@@ -6,11 +6,23 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from enum import Enum
 from typing import Any, Iterable
 
-from allora_sdk.rpc_client.protos.emissions.v9 import EventRewardsSettled
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    EventRewardsSettled,
+    IsReputerRegisteredInTopicIdRequest,
+)
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.tx_manager import FeeTier
 
 logger = logging.getLogger("allora_sdk")
+
+
+class InvalidAutoStakeConfigError(Exception):
+    """Raised when autostake configuration is invalid (e.g., reputer not registered, validator not found)."""
+
+    def __init__(self, message: str, target_type: str, target_address: str):
+        self.target_type = target_type
+        self.target_address = target_address
+        super().__init__(message)
 
 class AutoStakeTargetType(str, Enum):
     REPUTER = "reputer"
@@ -41,6 +53,76 @@ class AutoStakeConfig:
     def __post_init__(self) -> None:
         if isinstance(self.target_type, str):
             object.__setattr__(self, "target_type", AutoStakeTargetType(self.target_type))
+
+
+async def validate_autostake_config(
+    autostake: AutoStakeConfig | None,
+    topic_id: int,
+    client: AlloraRPCClient,
+) -> None:
+    """
+    Validate autostake configuration at worker initialization.
+
+    For reputer targets, verifies the reputer is registered in the topic.
+    For validator targets, verifies the validator exists on-chain.
+
+    Args:
+        autostake: The autostake configuration to validate (None is valid - no-op)
+        topic_id: The topic ID for reputer registration checks
+        client: The RPC client for making queries
+
+    Raises:
+        InvalidAutoStakeConfigError: If the autostake target is invalid
+    """
+    if autostake is None:
+        return
+
+    if autostake.target_type == AutoStakeTargetType.REPUTER:
+        resp = await client.emissions.query.is_reputer_registered_in_topic_id(
+            IsReputerRegisteredInTopicIdRequest(
+                topic_id=topic_id,
+                address=autostake.target_address,
+            )
+        )
+        if not resp.is_registered:
+            raise InvalidAutoStakeConfigError(
+                f"Autostake reputer '{autostake.target_address}' is not registered in topic {topic_id}. "
+                f"Please ensure the reputer address is correct and registered before starting the worker.",
+                target_type=autostake.target_type.value,
+                target_address=autostake.target_address,
+            )
+        logger.debug(
+            f"[AUTO-STAKE] Validated reputer {autostake.target_address} is registered in topic {topic_id}"
+        )
+
+    elif autostake.target_type == AutoStakeTargetType.VALIDATOR:
+        if client.staking.query is None:
+            logger.warning(
+                "[AUTO-STAKE] Cannot validate validator (staking query not available via REST). "
+                "Skipping validation - errors will occur at delegation time if validator is invalid."
+            )
+            return
+
+        try:
+            validator = await client.staking.query.validator(autostake.target_address)
+            if validator is None:
+                raise InvalidAutoStakeConfigError(
+                    f"Autostake validator '{autostake.target_address}' not found on-chain. "
+                    f"Please verify the validator operator address (allovaloper1...) is correct.",
+                    target_type=autostake.target_type.value,
+                    target_address=autostake.target_address,
+                )
+            logger.debug(
+                f"[AUTO-STAKE] Validated validator {autostake.target_address} exists on-chain"
+            )
+        except InvalidAutoStakeConfigError:
+            raise
+        except Exception as e:
+            raise InvalidAutoStakeConfigError(
+                f"Failed to verify autostake validator '{autostake.target_address}': {e}",
+                target_type=autostake.target_type.value,
+                target_address=autostake.target_address,
+            ) from e
 
 
 def extract_reward_amount_uallo(event: EventRewardsSettled, wallet_addr: str) -> int | None:

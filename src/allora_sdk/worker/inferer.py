@@ -16,7 +16,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
-from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled
+from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 
 logger = logging.getLogger("allora_sdk")
 
@@ -55,6 +55,14 @@ class Inferer:
 
 
     async def initialize(self) -> bool:
+        # Validate auto stake config
+        await validate_autostake_config(
+            autostake=self.autostake,
+            topic_id=self.topic_id,
+            client=self.client,
+        )
+
+        # Check if worker is already registered
         resp = await self.client.emissions.query.is_worker_registered_in_topic_id(
             IsWorkerRegisteredInTopicIdRequest(
                 topic_id=self.topic_id,
