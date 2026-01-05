@@ -14,7 +14,7 @@ import traceback
 import requests
 import logging
 import time
-from typing import Optional, AsyncIterator, Protocol
+from typing import Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -45,10 +45,11 @@ from allora_sdk.worker.utils import init_worker_wallet
 
 logger = logging.getLogger("allora_sdk")
 
+SubmissionWindowOpenEventType = TypeVar("SubmissionWindowOpenEventType", bound=TSubmissionWindowOpenEventType)
+WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 
 
-
-class AlloraWorker[SubmissionWindowOpenEventType: TSubmissionWindowOpenEventType, WorkerFnReturnType]:
+class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     """
     Allora network worker with async generator interface.
 
