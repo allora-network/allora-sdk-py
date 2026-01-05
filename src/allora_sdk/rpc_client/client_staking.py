@@ -2,10 +2,45 @@ import logging
 from typing import Any, Optional
 
 from allora_sdk.rpc_client.protos.cosmos.base.v1beta1 import Coin
-from allora_sdk.rpc_client.protos.cosmos.staking.v1beta1 import MsgDelegate
+from allora_sdk.rpc_client.protos.cosmos.staking.v1beta1 import (
+    MsgDelegate,
+    QueryValidatorRequest,
+    Validator,
+)
 from allora_sdk.rpc_client.tx_manager import FeeTier, PendingTx, TxManager
 
 logger = logging.getLogger("allora_sdk")
+
+
+class StakingQueries:
+    """Query methods for the Cosmos staking module."""
+
+    def __init__(self, query_client: Any):
+        self._query_client = query_client
+
+    async def validator(self, validator_address: str) -> Validator | None:
+        """
+        Query a validator by its operator address.
+
+        Args:
+            validator_address: Validator operator address (e.g. allovaloper1...)
+
+        Returns:
+            Validator object if found, None otherwise
+        """
+        if self._query_client is None:
+            raise ValueError("Staking query client is not initialized (gRPC required)")
+
+        try:
+            resp = await self._query_client.validator(
+                QueryValidatorRequest(validator_addr=validator_address)
+            )
+            return resp.validator
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not found" in error_str or "does not exist" in error_str:
+                return None
+            raise
 
 
 class StakingClient:
@@ -16,7 +51,7 @@ class StakingClient:
     """
 
     def __init__(self, query_client: Any = None, tx_manager: TxManager | None = None):
-        self.query = query_client
+        self.query = StakingQueries(query_client) if query_client is not None else None
         self.tx = StakingTxs(txs=tx_manager)
 
 

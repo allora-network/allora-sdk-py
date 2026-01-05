@@ -11,9 +11,17 @@ from .worker import (
     LossFn,
     default_squared_error_loss,
 )
+from .autostake import (
+    AutoStakeConfig,
+    AutoStakeTargetType,
+    InvalidAutoStakeConfigError,
+)
 
 __all__ = [
     "AlloraWorker",
     "LossFn",
     "default_squared_error_loss",
+    "AutoStakeConfig",
+    "AutoStakeTargetType",
+    "InvalidAutoStakeConfigError",
 ]
