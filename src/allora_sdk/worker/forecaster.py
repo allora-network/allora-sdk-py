@@ -1,4 +1,5 @@
 import logging
+from typing import Dict
 from cosmpy.aerial.wallet import LocalWallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v9 import (
@@ -17,8 +18,8 @@ logger = logging.getLogger("allora_sdk")
 
 
 # (epoch/nonce) -> {inferer_address: predicted_value}
-type TForecasterRunFnResult = dict[str, float]
-type TForecasterRunFn = TRunFn[TForecasterRunFnResult]
+TForecasterRunFnResult = Dict[str, float]
+TForecasterRunFn = TRunFn[TForecasterRunFnResult]
 
 
 class Forecaster:

@@ -1,7 +1,6 @@
 import logging
 from typing import Optional
 
-from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import TxManager
 from allora_sdk.rpc_client.rest.mint_v5_rest_client import MintV5QueryServiceLike
 
