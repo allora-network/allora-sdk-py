@@ -168,12 +168,12 @@ class EventFilter:
     
 
 
-T = TypeVar("T")
+TEvent = TypeVar("TEvent", bound="TBetterproto2Message")
 GenericSyncCallbackFn = Callable[[Dict[str, Any], int], None]
 GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
 GenericCallbackFn = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
-TypedSyncCallbackFn = Callable[[T, int], None]
-TypedAsyncCallbackFn = Callable[[T, int], Awaitable[None]]
+TypedSyncCallbackFn = Callable[[TEvent, int], None]
+TypedAsyncCallbackFn = Callable[[TEvent, int], Awaitable[None]]
 TypedCallbackFn = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
 
 
@@ -841,11 +841,11 @@ class AlloraWebsocketSubscriber:
         
         return subscription_id
     
-    async def subscribe_new_block_events_typed[TEvent: TBetterproto2Message](
+    async def subscribe_new_block_events_typed(
         self,
         event_class: type[TEvent],
         event_attribute_conditions: List[EventAttributeCondition],
-        callback: TypedCallbackFn[TEvent],
+        callback: TypedCallbackFn,
         subscription_id: Optional[str] = None,
     ) -> str:
         """
