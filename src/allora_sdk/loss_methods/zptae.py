@@ -20,8 +20,7 @@ Note: This loss function requires the standard deviation (std) to be provided.
       The SDK does NOT call external services to fetch std - you must provide it.
 """
 
-import math
-from typing import Callable, Optional
+from typing import Callable
 
 # Default parameters from the reference implementation
 DEFAULT_ALPHA = 0.25

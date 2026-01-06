@@ -8,11 +8,8 @@ for monitoring Allora blockchain events in real-time.
 import asyncio
 import json
 import logging
-import importlib
-import pkgutil
-import inspect
 import time
-from typing import AsyncIterable, Awaitable, ClassVar, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
+from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
 import traceback
 import betterproto2

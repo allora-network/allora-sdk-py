@@ -6,11 +6,8 @@ Provides automatic WebSocket subscription management, environment-aware signal h
 and graceful resource cleanup for submitting predictions to Allora network topics.
 """
 
-from .worker import (
-    AlloraWorker,
-    LossFn,
-    default_squared_error_loss,
-)
+from .worker import AlloraWorker
+from .reputer import LossFn, default_squared_error_loss
 from .autostake import (
     AutoStakeConfig,
     AutoStakeTargetType,
