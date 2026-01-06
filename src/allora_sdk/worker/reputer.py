@@ -1,6 +1,6 @@
 from decimal import Decimal
 import logging
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, List, Optional, Union
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -27,10 +27,10 @@ from allora_sdk.worker.utils import resolve_maybe_awaitable
 logger = logging.getLogger("allora_sdk")
 
 # (epoch) -> ground_truth
-type GroundTruthFn = Callable[[int], str | float | Decimal] | Callable[[int], Awaitable[str | float | Decimal]]
+GroundTruthFn = Union[Callable[[int], Union[str, float, Decimal]], Callable[[int], Awaitable[Union[str, float, Decimal]]]]
 
 # (ground_truth, predicted_value) -> loss
-type LossFn = Callable[[float, float], float]
+LossFn = Callable[[float, float], float]
 
 def default_squared_error_loss(ground_truth: float, predicted: float) -> float:
     """Default loss function using squared error."""

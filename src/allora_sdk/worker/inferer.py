@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from decimal import Decimal
+from typing import Union
 
 from cosmpy.aerial.wallet import LocalWallet
 
@@ -21,8 +22,8 @@ from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_
 logger = logging.getLogger("allora_sdk")
 
 
-type TInfererRunFnResult = str | float | Decimal
-type TInfererRunFn = TRunFn[TInfererRunFnResult]
+TInfererRunFnResult = Union[str, float, Decimal]
+TInfererRunFn = TRunFn[TInfererRunFnResult]
 
 
 class Inferer:

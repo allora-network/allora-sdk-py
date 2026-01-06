@@ -168,12 +168,13 @@ class EventFilter:
     
 
 
-type GenericSyncCallbackFn  = Callable[[Dict[str, Any], int], None]
-type GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
-type GenericCallbackFn      = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
-type TypedSyncCallbackFn[T]  = Callable[[T, int], None]
-type TypedAsyncCallbackFn[T] = Callable[[T, int], Awaitable[None]]
-type TypedCallbackFn[T]      = Union[TypedSyncCallbackFn[T], TypedAsyncCallbackFn[T]]
+T = TypeVar("T")
+GenericSyncCallbackFn = Callable[[Dict[str, Any], int], None]
+GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
+GenericCallbackFn = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
+TypedSyncCallbackFn = Callable[[T, int], None]
+TypedAsyncCallbackFn = Callable[[T, int], Awaitable[None]]
+TypedCallbackFn = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
 
 
 class AlloraWebsocketSubscriber:
