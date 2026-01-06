@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Generic, Protocol, TypeVar, Union
-from allora_sdk.rpc_client.client_websocket_events import TBetterproto2Message
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
 

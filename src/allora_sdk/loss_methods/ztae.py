@@ -15,7 +15,7 @@ Note: This loss function requires the standard deviation (std) to be provided.
 """
 
 import math
-from typing import Callable, Optional
+from typing import Callable
 
 
 def _tanh(x: float) -> float:

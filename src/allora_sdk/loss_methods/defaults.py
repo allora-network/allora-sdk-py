@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable
 
 from .squared_error import squared_error_loss
 from .absolute_error import absolute_error_loss

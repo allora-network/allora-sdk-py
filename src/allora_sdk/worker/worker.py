@@ -20,7 +20,6 @@ from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoReq
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
-from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
 from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
@@ -38,7 +37,7 @@ from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uall
 from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
 from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
-from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer, default_squared_error_loss
+from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer
 from allora_sdk.worker.autostake import AutoStakeConfig
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TQueueItem, TSubmissionWindowOpenEventType, UseCase, WorkerNotWhitelistedError, WorkerResult
 from allora_sdk.worker.utils import init_worker_wallet
