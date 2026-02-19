@@ -10,10 +10,16 @@ from allora_sdk.api_client import (
 
 DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
+requires_api_key = pytest.mark.skipif(
+    not os.getenv("ALLORA_API_KEY"),
+    reason="ALLORA_API_KEY environment variable not set",
+)
+
 @pytest_asyncio.fixture
 def client():
     return AlloraAPIClient(chain_id=ChainID.TESTNET, api_key=os.getenv("ALLORA_API_KEY"))
 
+@requires_api_key
 @pytest.mark.asyncio
 async def test_get_all_topics(client):
     topics = await client.get_all_topics()
@@ -39,6 +45,7 @@ async def test_get_all_topics(client):
     if topic.description is not None:
         assert isinstance(topic.description, str)
 
+@requires_api_key
 @pytest.mark.asyncio
 async def test_get_inference_by_topic_id(client):
     topics = await client.get_all_topics()
@@ -64,6 +71,7 @@ async def test_get_inference_by_topic_id(client):
         assert len(data.confidence_interval_percentiles) == len(data.confidence_interval_values)
         assert all(isinstance(p, str) for p in data.confidence_interval_percentiles)
 
+@requires_api_key
 @pytest.mark.asyncio
 async def test_get_price_inference_different_assets(client):
     for topic_id in [13, 14]:

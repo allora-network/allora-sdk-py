@@ -20,6 +20,7 @@ Note: This loss function requires the standard deviation (std) to be provided.
       The SDK does NOT call external services to fetch std - you must provide it.
 """
 
+import math
 from typing import Callable
 
 # Default parameters from the reference implementation
@@ -33,7 +34,8 @@ def _power_tanh(x: float, alpha: float = DEFAULT_ALPHA, beta: float = DEFAULT_BE
     """
     Calculate power-tanh function: x / (1 + |x|^beta)^((1 - alpha) / beta)
 
-    This function provides smoother gradients than regular tanh for extreme values.
+    For large |x|, this approaches sign(x) * |x|^alpha rather than saturating
+    at ±1 like regular tanh.
 
     Args:
         x: Input value
@@ -44,20 +46,10 @@ def _power_tanh(x: float, alpha: float = DEFAULT_ALPHA, beta: float = DEFAULT_BE
         Power-tanh transformed value
     """
     try:
-        abs_x = abs(x)
-        if abs_x == 0:
-            return 0.0
-
-        x_beta = abs_x ** beta
-        denominator_base = 1.0 + x_beta
         exponent = (1.0 - alpha) / beta
-        denominator = denominator_base ** exponent
-
-        return x / denominator
-
-    except (OverflowError, ValueError):
-        # Gracefully handle extreme values
-        return 1.0 if x > 0 else -1.0
+        return x / (1.0 + abs(x) ** beta) ** exponent
+    except OverflowError:
+        return math.copysign(abs(x) ** alpha, x)
 
 
 def make_zptae_loss(
