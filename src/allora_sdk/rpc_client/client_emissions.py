@@ -247,10 +247,12 @@ class EmissionsTxs:
         """
         Submit a reputer payload (loss bundle) to the Allora network.
 
+        Note: This method mutates `value_bundle` in-place (sets reputer_request_nonce).
+
         Args:
             topic_id: The topic ID to submit the reputer payload for
             reputer_request_nonce: The reputer request nonce containing block height
-            value_bundle: The computed loss bundle
+            value_bundle: The computed loss bundle (will be mutated)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
             account_seq: Optional account sequence override
 

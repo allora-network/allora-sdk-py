@@ -255,9 +255,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval: Interval in seconds to poll for new submission windows
             debug: Enable debug logging
         """
-        if not use_case:
+        if use_case is None:
             raise ValueError("no use_case provided")
-        if not client:
+        if client is None:
             raise ValueError('no client provided')
 
         self._initialized = False
@@ -332,6 +332,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
 
         MIN_ALLO = 100000000
+        MAX_FAUCET_RETRIES = 5
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
@@ -343,19 +344,24 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
         logger.info(f"    Requesting ALLO from testnet faucet...")
 
-        while True:
+        for faucet_attempt in range(MAX_FAUCET_RETRIES):
             try:
-                faucet_resp = requests.post(self.client.network.faucet_url + "/api/request", data={
-                    "chain": "allora-testnet-1",
-                    "address": self.address,
-                }, headers={
-                    "x-api-key": self.api_key,
-                })
+                faucet_resp = await asyncio.to_thread(
+                    requests.post,
+                    self.client.network.faucet_url + "/api/request",
+                    data={
+                        "chain": "allora-testnet-1",
+                        "address": self.address,
+                    },
+                    headers={
+                        "x-api-key": self.api_key,
+                    },
+                )
                 faucet_resp.raise_for_status()
                 logger.info(f"    Request sent...")
 
                 while True:
-                    time.sleep(5)
+                    await asyncio.sleep(5)
                     resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
                     if resp.balance is None:
                         logger.error(f"    Could not check balance for {self.address}")
@@ -374,7 +380,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             except Exception as err:
                 logger.error(f"    Error requesting funds from wallet: {err}")
 
-            time.sleep(15)
+            await asyncio.sleep(15)
+
+        logger.error(f"    Faucet request failed after {MAX_FAUCET_RETRIES} attempts")
 
 
     def _detect_environment(self) -> str:
@@ -662,7 +670,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
                 # inform whatever is listening about the result
                 if (
-                    ctx.is_cancelled() == False and
+                    not ctx.is_cancelled() and
                     self._queue is not None and
                     result is not None
                 ):
@@ -676,7 +684,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         base_sequence = account_seq.info.sequence
 
         new_nonces = sorted(list(new_nonces))
-        new_nonces = new_nonces[len(new_nonces)-1:] if len(new_nonces) > 10 else new_nonces
+        if len(new_nonces) > 10:
+            skipped = len(new_nonces) - 1
+            logger.warning(f"   {skipped} old unfulfilled nonces skipped, submitting only the latest")
+            new_nonces = new_nonces[-1:]
         tasks = []
         for i, nonce in enumerate(new_nonces):
             if not self._ctx or self._ctx.is_cancelled():

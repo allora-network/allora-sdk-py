@@ -28,10 +28,11 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
     else:
         print("Enter your Allora wallet mnemonic or press <ENTER> to have one generated for you.")
         mnemonic = getpass("Mnemonic: ").strip()
-        if not mnemonic or  mnemonic == "":
+        if not mnemonic:
             mnemonic = generate_mnemonic()
 
-        with open(mnemonic_file, "w") as f:
+        fd = os.open(mnemonic_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             f.write(mnemonic)
         print(f"Mnemonic saved to {mnemonic_file}")
         return LocalWallet.from_mnemonic(mnemonic, "allo")

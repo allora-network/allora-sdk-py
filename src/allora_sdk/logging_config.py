@@ -33,6 +33,7 @@ class ThreeCharLevelFormatter(logging.Formatter):
         self.use_color = use_color and sys.stdout.isatty()
 
     def format(self, record: logging.LogRecord) -> str:
+        record = logging.makeLogRecord(record.__dict__)
         levelname = self.LEVEL_MAPPING.get(record.levelname, record.levelname[:3])
 
         if self.use_color:

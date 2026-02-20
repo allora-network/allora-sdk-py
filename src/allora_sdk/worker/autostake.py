@@ -48,7 +48,7 @@ class AutoStakeConfig:
     target_type: AutoStakeTargetType
     target_address: str
     fee_tier: FeeTier | None = None
-    fee_reserve_uallo: int = 0
+    fee_reserve_uallo: int = 0  # TODO: reserve this amount for gas fees before staking
 
     def __post_init__(self) -> None:
         if isinstance(self.target_type, str):
@@ -287,6 +287,7 @@ async def process_autostake_rewards_settled(
 
     except Exception as e:
         logger.error(f"[AUTO-STAKE] Failed to autostake rewards: {e}")
+        return None
 
     return autostake_key
 

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from decimal import Decimal
 from typing import Union
@@ -150,9 +149,9 @@ class Inferer:
 
         except TxError as err:
             already_submitted = False
-            if err.code == 78 or err.code == 75: # already submitted
+            if err.code in (68, 75, 78):
                 already_submitted = True
-            elif "inference already submitted" in err.message: # this is a different "already submitted" from allora-chain that has no error code, awesome
+            elif "already submitted" in (err.message or "").lower():
                 already_submitted = True
 
             if already_submitted:

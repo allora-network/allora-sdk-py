@@ -95,7 +95,6 @@ def format_allo_from_uallo(uallo_amount: str | int, decimals: int = 18) -> str:
     divisor = Decimal(10) ** decimals
     allo_amount = uallo_decimal / divisor
     
-    # Format with 6 decimal places for readability
     return f"{allo_amount:.18f} ALLO"
 
 

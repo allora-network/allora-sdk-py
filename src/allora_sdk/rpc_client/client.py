@@ -184,9 +184,9 @@ class AlloraRPCClient:
     async def close(self):
         """Close client and cleanup resources."""
         logger.debug("Closing Allora client")
-        if self.events:
+        if hasattr(self, "events") and self.events:
             await self.events.stop()
-        if self.grpc_client:
+        if hasattr(self, "grpc_client") and self.grpc_client:
             self.grpc_client.close()
 
 
