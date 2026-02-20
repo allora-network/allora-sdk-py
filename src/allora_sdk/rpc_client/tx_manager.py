@@ -372,16 +372,18 @@ class TxManager:
 
                 fee_multiplier = 1.0 + attempt * 0.5
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
-                    raise Exception("Transaction failed after multiple attempts due to insufficient fees")
+                    err = InsufficientFeesError("Transaction failed after multiple attempts due to insufficient fees")
+                    pending._final_future.set_exception(err)
+                    return
                 logger.debug("Insufficient fees, retrying with refreshed gas price...")
                 continue
 
             except AccountSequenceMismatchError:
-                # Account sequence will be recalculated on next attempt
-                # TODO: maybe build a nonce manager?
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
-                    raise Exception("Transaction failed after multiple attempts due to repeated account sequence mismatches")
+                    err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
+                    pending._final_future.set_exception(err)
+                    return
                 logger.debug("Account sequence mismatch, retrying...")
                 continue
 
@@ -599,7 +601,10 @@ class TxManager:
             return InsufficientFeesError(f"Insufficient fees during simulation: {error_msg}")
         else:
             code = error.code() if hasattr(error, 'code') else None
-            code_value = code.value[0] if code else 1
+            try:
+                code_value = code.value[0] if isinstance(code.value, tuple) else int(code.value)
+            except (TypeError, IndexError, AttributeError):
+                code_value = 1
 
             return TxError(
                 codespace="simulation",
@@ -646,6 +651,8 @@ class TxManager:
                     self._cached_gas_price = price
                     self._gas_price_cache_time = datetime.now()
                     logger.debug(f"Using dynamic gas price: {price} {self.config.fee_denom}/gas")
+                    # Feemarket returns the minimum acceptable price; apply a 10x buffer
+                    # to avoid "insufficient fees" rejections from validators with higher minimums.
                     return float(price) * 10
             except Exception as e:
                 logger.debug(f"Failed to query dynamic gas price, using static: {e}")

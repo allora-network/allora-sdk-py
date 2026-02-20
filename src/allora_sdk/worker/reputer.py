@@ -19,7 +19,8 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.loss_methods.defaults import get_default_loss_fn, is_supported_loss_method, UnsupportedLossMethodError
+from allora_sdk.loss_methods.defaults import LossFn, get_default_loss_fn, is_supported_loss_method, UnsupportedLossMethodError
+from allora_sdk.loss_methods.squared_error import squared_error_loss
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
@@ -28,13 +29,6 @@ logger = logging.getLogger("allora_sdk")
 
 # (epoch) -> ground_truth
 GroundTruthFn = Union[Callable[[int], Union[str, float, Decimal]], Callable[[int], Awaitable[Union[str, float, Decimal]]]]
-
-# (ground_truth, predicted_value) -> loss
-LossFn = Callable[[float, float], float]
-
-def default_squared_error_loss(ground_truth: float, predicted: float) -> float:
-    """Default loss function using squared error."""
-    return (ground_truth - predicted) ** 2
 
 
 class Reputer:
@@ -174,18 +168,23 @@ class Reputer:
 
         except TxError as err:
             logger.error(f"❌ TX ERROR: {err}")
-            if err.code == 68:
+            already_submitted = False
+            if err.code in (68, 75, 78):
+                already_submitted = True
+            elif "already submitted" in (err.message or "").lower():
+                already_submitted = True
+
+            if already_submitted:
                 return AlreadySubmittedError(
                     codespace=err.codespace,
                     code=err.code,
                     tx_hash=err.tx_hash,
                     message=err.message,
                 )
-            else:
-                return err
+            return err
 
         except Exception as err:
-            logger.error(f"❌ XYZZY: {err.__class__.__name__} {err}")
+            logger.error(f"❌ Unexpected error submitting reputer payload: {err.__class__.__name__} {err}")
             return err
 
     async def _maybe_auto_select_loss_fn(self) -> None:
@@ -207,7 +206,7 @@ class Reputer:
         loss_method = getattr(topic, "loss_method", "") or ""
         if not loss_method:
             logger.info("Topic has no loss_method configured, defaulting to squared error (sqe)")
-            self.loss_fn = default_squared_error_loss
+            self.loss_fn = squared_error_loss
             return
 
         if not is_supported_loss_method(loss_method):
@@ -232,7 +231,8 @@ class Reputer:
                     raise ValueError("no loss fn configured")
                 loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
                 return str(loss)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not compute loss for value '{value_str}': {e}, defaulting to 0")
                 return "0"
 
         # Compute combined and naive losses
@@ -329,7 +329,6 @@ class Reputer:
         """
         min_stake = self.min_stake_uallo
         if min_stake is None or min_stake == 0:
-            logger.warning("⚠️ No minimum stake configured in reputer, skipping adding stake.")
             return
 
         sender = str(self.wallet.address())

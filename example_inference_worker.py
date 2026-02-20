@@ -15,7 +15,7 @@ async def main():
     async for result in worker.run():
         if isinstance(result, Exception):
             continue
-        print(f"Prediction submitted to Allora: {result.prediction}")
+        print(f"Prediction submitted to Allora: {result.submission}")
 
 asyncio.run(main())
 
