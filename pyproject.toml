@@ -27,6 +27,8 @@ dependencies = [
     "aiohttp ~= 3.12",
     "cosmpy >= 0.11.1",
     "websockets >= 15.0.1",
+    "grpcio>=1.71.2",
+    "protobuf>=5.0.0",
     "grpclib >= 0.4.8",
     "betterproto2 ~= 0.7.0",
     "requests *",
