@@ -112,6 +112,7 @@ class AlloraRPCClient:
                 bank_client=bank_query,
                 feemarket_client=feemarket_query,
                 config=self.network,
+                query_timeout_secs=self.network.query_timeout_secs,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)

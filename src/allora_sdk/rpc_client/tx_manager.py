@@ -118,7 +118,7 @@ class TxManager:
         feemarket_client: Optional[FeemarketFeemarketV1QueryLike],
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
-        query_timeout_secs: int = 5,
+        query_timeout_secs: int = 10,
     ):
         self.wallet = wallet
         self.tx_client = tx_client
