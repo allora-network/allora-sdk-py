@@ -358,7 +358,7 @@ class Reputer:
         try:
             pending_tx = await self.client.emissions.tx.add_stake(
                 topic_id=self.topic_id,
-                amount=delta,
+                amount=str(delta),
                 fee_tier=self.fee_tier,
             )
             tx_resp = await pending_tx.wait()

@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional
+from typing import Optional, Protocol
 
 from allora_sdk.rpc_client.protos.cosmos.base.v1beta1 import Coin
 from allora_sdk.rpc_client.protos.cosmos.staking.v1beta1 import (
@@ -12,10 +12,18 @@ from allora_sdk.rpc_client.tx_manager import FeeTier, PendingTx, TxManager
 logger = logging.getLogger("allora_sdk")
 
 
+class StakingQueryResponseLike(Protocol):
+    validator: Validator | None
+
+
+class StakingQueryClientLike(Protocol):
+    async def validator(self, request: QueryValidatorRequest) -> StakingQueryResponseLike: ...
+
+
 class StakingQueries:
     """Query methods for the Cosmos staking module."""
 
-    def __init__(self, query_client: Any):
+    def __init__(self, query_client: StakingQueryClientLike | None):
         self._query_client = query_client
 
     async def validator(self, validator_address: str) -> Validator | None:
@@ -50,8 +58,8 @@ class StakingClient:
     Currently used for validator delegation (MsgDelegate) via TxManager.
     """
 
-    def __init__(self, query_client: Any = None, tx_manager: TxManager | None = None):
-        self.query = StakingQueries(query_client) if query_client is not None else None
+    def __init__(self, query_client: StakingQueryClientLike | None = None, tx_manager: TxManager | None = None):
+        self.query = StakingQueries(query_client)
         self.tx = StakingTxs(txs=tx_manager)
 
 

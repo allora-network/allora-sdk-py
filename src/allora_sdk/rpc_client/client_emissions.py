@@ -203,7 +203,7 @@ class EmissionsTxs:
     async def add_stake(
         self,
         topic_id: int,
-        amount: int,
+        amount: str,
         fee_tier: FeeTier = FeeTier.STANDARD,
     ) -> PendingTx:
         """
@@ -211,7 +211,7 @@ class EmissionsTxs:
 
         Args:
             topic_id: The topic ID to stake on
-            amount: Amount of uallo to stake
+            amount: Amount of uallo to stake (as string)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
 
         Returns:
@@ -225,7 +225,7 @@ class EmissionsTxs:
         msg = AddStakeRequest(
             sender=sender_address,
             topic_id=topic_id,
-            amount=str(amount),
+            amount=amount,
         )
 
         logger.debug(f"Adding stake of {amount} uallo to topic {topic_id}")
