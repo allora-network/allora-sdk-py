@@ -129,6 +129,7 @@ class TxManager:
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
         self.parent_tx_id = 0
+        self._parent_tx_id_lock = asyncio.Lock()
 
         self._default_gas_limits = {
             "/emissions.v9.InsertWorkerPayloadRequest": 250000,
@@ -182,16 +183,19 @@ class TxManager:
             logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
             estimated_gas_limit = None
 
+        async with self._parent_tx_id_lock:
+            next_parent_tx_id = self.parent_tx_id
+            self.parent_tx_id += 1
+
         pending = PendingTx(
             manager=self,
-            parent_tx_id=self.parent_tx_id,
+            parent_tx_id=next_parent_tx_id,
             type_url=type_url,
             msgs=msgs,
             fee_tier=fee_tier,
             max_retries=max_retries,
             timeout=timeout,
         )
-        self.parent_tx_id += 1
 
         # Kick off processing as a background task; caller can await the PendingTx
         asyncio.create_task(
@@ -648,12 +652,13 @@ class TxManager:
                     # e.g., "10000000000000000000" represents 10.0
                     price_raw = Decimal(response.price.amount)
                     price = price_raw / Decimal(10 ** 18)
-                    self._cached_gas_price = price
+                    adjusted_price = price * Decimal(10)
+                    self._cached_gas_price = adjusted_price
                     self._gas_price_cache_time = datetime.now()
-                    logger.debug(f"Using dynamic gas price: {price} {self.config.fee_denom}/gas")
+                    logger.debug(f"Using dynamic gas price: {adjusted_price} {self.config.fee_denom}/gas")
                     # Feemarket returns the minimum acceptable price; apply a 10x buffer
                     # to avoid "insufficient fees" rejections from validators with higher minimums.
-                    return float(price) * 10
+                    return float(adjusted_price)
             except Exception as e:
                 logger.debug(f"Failed to query dynamic gas price, using static: {e}")
 
