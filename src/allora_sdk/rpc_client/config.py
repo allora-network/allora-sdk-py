@@ -56,6 +56,7 @@ class AlloraNetworkConfig:
     use_dynamic_gas_price: bool = True
     gas_price_cache_ttl_secs: int = 30
     congestion_aware_fees: bool = False
+    query_timeout_secs: int = 10
 
     @classmethod
     def testnet(
@@ -108,14 +109,15 @@ class AlloraNetworkConfig:
     @classmethod
     def local(
         cls,
-        chain_id="allora-local",
+        chain_id="localnet",
         websocket_url="ws://localhost:26657/websocket",
         fee_denom="uallo",
-        fee_minimum_gas_price=0.0,
+        fee_minimum_gas_price=1.0,
         use_dynamic_gas_price=False,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
-        port: int = 26657,
+        query_timeout_secs=30,
+        port: int = 9090,
         url: str | None = None,
     ) -> 'AlloraNetworkConfig':
         return cls(
@@ -127,6 +129,7 @@ class AlloraNetworkConfig:
             use_dynamic_gas_price=use_dynamic_gas_price,
             gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
             congestion_aware_fees=congestion_aware_fees,
+            query_timeout_secs=query_timeout_secs,
         )
 
     @classmethod
