@@ -227,13 +227,14 @@ class Reputer:
         async def compute_loss(value_str: str) -> str:
             try:
                 predicted = float(value_str)
-                if self.loss_fn is None:
-                    raise ValueError("no loss fn configured")
-                loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
-                return str(loss)
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Could not compute loss for value '{value_str}': {e}, defaulting to 0")
-                return "0"
+            except (ValueError, TypeError) as err:
+                raise ValueError(f"invalid numeric value for loss computation: '{value_str}'") from err
+
+            if self.loss_fn is None:
+                raise ValueError("no loss fn configured")
+
+            loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
+            return str(loss)
 
         # Compute combined and naive losses
         combined_loss = await compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
