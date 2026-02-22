@@ -13,7 +13,6 @@ from textwrap import dedent, indent
 import traceback
 import requests
 import logging
-import time
 from typing import Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
@@ -39,7 +38,16 @@ from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecast
 from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
 from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer
 from allora_sdk.worker.autostake import AutoStakeConfig
-from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TQueueItem, TSubmissionWindowOpenEventType, UseCase, WorkerNotWhitelistedError, WorkerResult
+from allora_sdk.worker.types import (
+    AlreadySubmittedError,
+    StopQueue,
+    SupportsAutoStake,
+    TQueueItem,
+    TSubmissionWindowOpenEventType,
+    UseCase,
+    WorkerNotWhitelistedError,
+    WorkerResult,
+)
 from allora_sdk.worker.utils import init_worker_wallet
 
 logger = logging.getLogger("allora_sdk")
@@ -67,6 +75,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
+        max_unfulfilled_nonces: int = 10,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ):
@@ -108,6 +117,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            max_unfulfilled_nonces=max_unfulfilled_nonces,
             debug=debug,
         )
 
@@ -123,6 +133,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         min_stake_uallo: Optional[int] = None,
+        max_unfulfilled_nonces: int = 10,
         debug: bool = False,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
@@ -171,6 +182,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            max_unfulfilled_nonces=max_unfulfilled_nonces,
             debug=debug,
         )
 
@@ -184,6 +196,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
+        max_unfulfilled_nonces: int = 10,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
@@ -227,6 +240,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            max_unfulfilled_nonces=max_unfulfilled_nonces,
             debug=debug,
         )
 
@@ -240,6 +254,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
+        max_unfulfilled_nonces: int = 10,
         debug: bool = False,
     ) -> None:
         """
@@ -253,6 +268,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
+            max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             debug: Enable debug logging
         """
         if use_case is None:
@@ -268,6 +284,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.topic_id = topic_id
         self.fee_tier = fee_tier
         self.polling_interval = polling_interval
+        self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
 
         self.submitted_nonces = TimestampOrderedSet()
 
@@ -333,6 +350,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         MIN_ALLO = 100000000
         MAX_FAUCET_RETRIES = 5
+        MAX_BALANCE_POLLS_PER_FAUCET_REQUEST = 12
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
@@ -360,7 +378,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 faucet_resp.raise_for_status()
                 logger.info(f"    Request sent...")
 
-                while True:
+                for _ in range(MAX_BALANCE_POLLS_PER_FAUCET_REQUEST):
                     await asyncio.sleep(5)
                     resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
                     if resp.balance is None:
@@ -371,6 +389,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     logger.info(f"    Balance: {balance_formatted}")
                     if balance >= MIN_ALLO:
                         return
+                logger.warning("    Faucet request succeeded but balance did not update in time, retrying...")
             except requests.HTTPError as err:
                 if err.response.status_code == 429:
                     logger.error(f"    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
@@ -569,13 +588,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
 
         # Subscribe to rewards events for autostaking if configured on the use case
-        autostake_cfg = getattr(self.use_case, "autostake", None)
-        handler = getattr(self.use_case, "handle_rewards_settled", None)
-        if autostake_cfg is not None and handler is not None:
+        if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
             await self.client.events.subscribe_new_block_events_typed(
                 EventRewardsSettled,
                 [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
-                handler,
+                self.use_case.handle_rewards_settled,
             )
             logger.info(
                 f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
@@ -684,22 +701,21 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         base_sequence = account_seq.info.sequence
 
         new_nonces = sorted(list(new_nonces))
-        if len(new_nonces) > 10:
-            skipped = len(new_nonces) - 1
-            logger.warning(f"   {skipped} old unfulfilled nonces skipped, submitting only the latest")
-            new_nonces = new_nonces[-1:]
-        tasks = []
+        if len(new_nonces) > self.max_unfulfilled_nonces:
+            skipped = len(new_nonces) - self.max_unfulfilled_nonces
+            logger.warning(
+                f"   {skipped} old unfulfilled nonces skipped, submitting the latest {self.max_unfulfilled_nonces}"
+            )
+            new_nonces = new_nonces[-self.max_unfulfilled_nonces:]
+
         for i, nonce in enumerate(new_nonces):
             if not self._ctx or self._ctx.is_cancelled():
                 break
 
             next_sequence = base_sequence + i
             logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting... account_seq={next_sequence}")
-            task = asyncio.create_task(submit(nonce, next_sequence))
-            tasks.append(task)
-
-        if len(tasks) > 0:
-            await asyncio.wait(tasks)
+            # Cosmos account sequence values are strictly ordered; submit serially to avoid races.
+            await submit(nonce, next_sequence)
 
 
     async def _cleanup(self, ctx: Context):
