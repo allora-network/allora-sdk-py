@@ -11,7 +11,7 @@
     "DEBUG": true
   },
   "typeCheckingMode": "standard",
-  "pythonVersion": "3.13",
+  "pythonVersion": "3.10",
   "pythonPlatform": "Linux",
   "executionEnvironments": [
     {
