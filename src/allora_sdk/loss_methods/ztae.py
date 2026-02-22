@@ -56,7 +56,7 @@ def make_ztae_loss(
 
     Example:
         >>> ztae = make_ztae_loss(std=0.02, mean=0.0)
-        >>> ztae(0.01, 0.02)  # Returns ~0.245
+        >>> ztae(0.01, 0.02)  # Returns ~0.299
     """
     if std <= 0:
         raise ValueError(f"std must be positive, got {std}")
