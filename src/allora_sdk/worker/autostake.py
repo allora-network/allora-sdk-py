@@ -48,7 +48,7 @@ class AutoStakeConfig:
     target_type: AutoStakeTargetType
     target_address: str
     fee_tier: FeeTier | None = None
-    fee_reserve_uallo: int = 0  # TODO: reserve this amount for gas fees before staking
+    fee_reserve_uallo: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.target_type, str):
@@ -179,6 +179,12 @@ def normalize_actor_type(actor_type: Any) -> str:
     return s
 
 
+def compute_stake_amount_uallo(reward_uallo: int, fee_reserve_uallo: int) -> int:
+    """Compute how much reward can be staked after preserving fee reserve."""
+    reserve = max(0, int(fee_reserve_uallo))
+    return max(0, int(reward_uallo) - reserve)
+
+
 async def process_autostake_rewards_settled(
     *,
     role: AutoStakeRole,
@@ -229,14 +235,26 @@ async def process_autostake_rewards_settled(
         return None
 
     fee_tier = autostake.fee_tier if autostake.fee_tier is not None else default_fee_tier
+    stake_amount_uallo = compute_stake_amount_uallo(
+        reward_uallo=reward_uallo,
+        fee_reserve_uallo=autostake.fee_reserve_uallo,
+    )
+    if stake_amount_uallo <= 0:
+        logger.info(
+            "[AUTO-STAKE] Skipping: reward_uallo=%s is not enough after fee reserve_uallo=%s",
+            reward_uallo,
+            autostake.fee_reserve_uallo,
+        )
+        return None
 
     logger.info(
-        "[AUTO-STAKE] %s rewards settled: topic=%s nonce=%s payout_height_tx=%s reward_uallo=%s target=%s:%s",
+        "[AUTO-STAKE] %s rewards settled: topic=%s nonce=%s payout_height_tx=%s reward_uallo=%s stake_amount_uallo=%s target=%s:%s",
         role.value,
         topic_id,
         getattr(event, "block_height", None),
         getattr(event, "block_height_tx", None),
         reward_uallo,
+        stake_amount_uallo,
         autostake.target_type.value,
         autostake.target_address,
     )
@@ -246,33 +264,33 @@ async def process_autostake_rewards_settled(
             logger.info(
                 "[AUTO-STAKE] Delegating to reputer: reputer=%s amount_uallo=%s fee_tier=%s",
                 autostake.target_address,
-                reward_uallo,
+                stake_amount_uallo,
                 fee_tier.value,
             )
             pending = await client.emissions.tx.delegate_stake(
                 sender=wallet_addr,
                 topic_id=topic_id,
                 reputer=autostake.target_address,
-                amount=str(reward_uallo),
+                amount=str(stake_amount_uallo),
                 fee_tier=fee_tier,
             )
             resp = await pending.wait()
             if resp.code != 0:
                 logger.error(f"[AUTO-STAKE] DelegateStake failed: code={resp.code} log={resp.raw_log}")
             else:
-                logger.info(f"[AUTO-STAKE] Delegated {reward_uallo}uallo to reputer (tx={resp.txhash})")
+                logger.info(f"[AUTO-STAKE] Delegated {stake_amount_uallo}uallo to reputer (tx={resp.txhash})")
 
         elif autostake.target_type == AutoStakeTargetType.VALIDATOR:
             logger.info(
                 "[AUTO-STAKE] Delegating to validator: validator=%s amount_uallo=%s denom=%s fee_tier=%s",
                 autostake.target_address,
-                reward_uallo,
+                stake_amount_uallo,
                 client.network.fee_denom,
                 fee_tier.value,
             )
             pending = await client.staking.tx.delegate(
                 validator_address=autostake.target_address,
-                amount_uallo=reward_uallo,
+                amount_uallo=stake_amount_uallo,
                 delegator_address=wallet_addr,
                 fee_tier=fee_tier,
             )
@@ -280,7 +298,7 @@ async def process_autostake_rewards_settled(
             if resp.code != 0:
                 logger.error(f"[AUTO-STAKE] MsgDelegate failed: code={resp.code} log={resp.raw_log}")
             else:
-                logger.info(f"[AUTO-STAKE] Delegated {reward_uallo}uallo to validator (tx={resp.txhash})")
+                logger.info(f"[AUTO-STAKE] Delegated {stake_amount_uallo}uallo to validator (tx={resp.txhash})")
 
         else:
             raise ValueError(f"Unknown autostake target_type: {autostake.target_type}")
