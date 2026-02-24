@@ -102,6 +102,9 @@ class EmissionsTxs:
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
 
+        if inference_value is None and not forecast_elements:
+            raise ValueError("At least one of inference_value or forecast_elements must be provided.")
+
         worker_address = str(self._txs.wallet.address())
 
         inference = None
