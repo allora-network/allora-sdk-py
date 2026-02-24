@@ -652,11 +652,11 @@ class TxManager:
                     # e.g., "10000000000000000000" represents 10.0
                     price_raw = Decimal(response.price.amount)
                     price = price_raw / Decimal(10 ** 18)
-                    adjusted_price = price * Decimal(10)
+                    adjusted_price = price * Decimal(str(self.config.dynamic_gas_price_default_multiplier))
                     self._cached_gas_price = adjusted_price
                     self._gas_price_cache_time = datetime.now()
                     logger.debug(f"Using dynamic gas price: {adjusted_price} {self.config.fee_denom}/gas")
-                    # Feemarket returns the minimum acceptable price; apply a 10x buffer
+                    # Feemarket returns the minimum acceptable price; apply configured buffer
                     # to avoid "insufficient fees" rejections from validators with higher minimums.
                     return float(adjusted_price)
             except Exception as e:
