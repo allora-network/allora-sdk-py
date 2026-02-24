@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Generic, Protocol, TypeVar, Union
+from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, Union, runtime_checkable
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
 
@@ -38,3 +38,9 @@ class UseCase(Protocol[WindowOpenedEvent, UseCaseReturnType]):
     async def worker_is_whitelisted(self) -> bool: ...
     async def get_unfulfilled_nonces(self) -> set[int]: ...
     async def submit(self, nonce: int, account_seq: int) -> Union[WorkerResult[UseCaseReturnType], TxError, Exception]: ...
+
+
+@runtime_checkable
+class SupportsAutoStake(Protocol):
+    autostake: object | None
+    async def handle_rewards_settled(self, event: Any, block_height: int | None = None) -> None: ...
