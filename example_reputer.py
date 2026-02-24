@@ -1,5 +1,8 @@
 import asyncio
+import logging
 from allora_sdk import AlloraNetworkConfig, AlloraWalletConfig, AlloraWorker
+
+logger = logging.getLogger(__name__)
 
 def get_ground_truth(nonce: int) -> float:
     return 10.5
@@ -15,6 +18,7 @@ async def main():
 
     async for result in worker.run():
         if isinstance(result, Exception):
+            logger.error("Reputer worker error: %s", result)
             continue
         print(f"Reputer payload submitted to Allora: {result.submission}")
 

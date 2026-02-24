@@ -47,8 +47,6 @@ class TBetterproto2Message(Protocol):
     # __name__: ClassVar[str]
     pass
 
-T = TypeVar('T', bound=TBetterproto2Message)
-
 class NewBlockEventsData(BaseModel):
     height: str
     events: List[Any]  # Could be more specific based on actual event structure

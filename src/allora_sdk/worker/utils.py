@@ -10,6 +10,7 @@ from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeI
 
 
 def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
+    wallet_prefix = wallet.prefix if wallet else "allo"
     if wallet:
         if wallet.private_key:
             return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
@@ -24,7 +25,7 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
     if os.path.exists(mnemonic_file):
         with open(mnemonic_file, "r") as f:
             mnemonic = f.read().strip()
-            return LocalWallet.from_mnemonic(mnemonic, "allo")
+            return LocalWallet.from_mnemonic(mnemonic, wallet_prefix)
     else:
         print("Enter your Allora wallet mnemonic or press <ENTER> to have one generated for you.")
         mnemonic = getpass("Mnemonic: ").strip()
@@ -35,7 +36,7 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
         with os.fdopen(fd, "w") as f:
             f.write(mnemonic)
         print(f"Mnemonic saved to {mnemonic_file}")
-        return LocalWallet.from_mnemonic(mnemonic, "allo")
+        return LocalWallet.from_mnemonic(mnemonic, wallet_prefix)
 
 
 R = TypeVar("R")

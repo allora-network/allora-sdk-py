@@ -43,8 +43,7 @@ class {{ service.class_name }}({{ service.protocol_name }}):
 {%- endif %}
         url = self.base_url + f"{{ method.url_path }}"
         headers = {"x-cosmos-block-height": height} if height else None
-        async with self.session as session:
-            response = await session.get(url, params=params, headers=headers)
+        response = await self.session.get(url, params=params, headers=headers)
         response.raise_for_status()
         return {{ method.response_type_name }}().from_json(response.text, ignore_unknown_fields=True)
 
