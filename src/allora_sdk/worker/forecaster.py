@@ -143,12 +143,9 @@ class Forecaster:
                 for addr, pred in sorted(forecasts.items(), key=lambda kv: kv[0])
             ]
 
-            # Calculate aggregate for inference_value (required field).
-            aggregate = sum(forecasts.values()) / len(forecasts)
-
             pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
-                inference_value=str(aggregate),
+                inference_value=None,
                 nonce=nonce,
                 forecast_elements=forecast_elements,
                 fee_tier=self.fee_tier,
