@@ -97,7 +97,7 @@ class Forecaster:
         resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(
             GetUnfulfilledWorkerNoncesRequest(topic_id=self.topic_id)
         )
-        nonces = {x.block_height for x in resp.nonces.nonces} if resp.nonces is not None else set[int]()
+        nonces = {x.block_height for x in resp.nonces.nonces} if resp.nonces is not None else set()
         return nonces
 
     async def handle_rewards_settled(self, event: EventRewardsSettled, block_height: int | None = None) -> None:
