@@ -55,6 +55,11 @@ logger = logging.getLogger("allora_sdk")
 SubmissionWindowOpenEventType = TypeVar("SubmissionWindowOpenEventType", bound=TSubmissionWindowOpenEventType)
 WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 
+# Default per-cycle cap for inferer/forecaster unfulfilled nonce processing.
+DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
+# Default per-cycle cap for reputer unfulfilled nonce processing.
+DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES = 10
+
 
 class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     """
@@ -75,7 +80,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
-        max_unfulfilled_nonces: int = 10,
+        max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ):
@@ -133,7 +138,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         min_stake_uallo: Optional[int] = None,
-        max_unfulfilled_nonces: int = 10,
+        max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         debug: bool = False,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
@@ -196,7 +201,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
-        max_unfulfilled_nonces: int = 10,
+        max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
@@ -254,7 +259,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
-        max_unfulfilled_nonces: int = 10,
+        max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         debug: bool = False,
     ) -> None:
         """
