@@ -74,7 +74,7 @@ class EmissionsTxs:
     async def insert_worker_payload(
         self,
         topic_id: int,
-        inference_value: str,
+        inference_value: Optional[str],
         nonce: int,
         forecast_elements: Optional[List[Dict[str, str]]] = None,
         extra_data: Optional[bytes] = None,
@@ -87,7 +87,7 @@ class EmissionsTxs:
 
         Args:
             topic_id: The topic ID to submit inference for
-            inference_value: The inference value as a string
+            inference_value: Optional inference value as a string. Set to None for forecast-only payloads.
             nonce: Block height/nonce for the inference
             forecast_elements: Optional list of forecast elements
                               [{"inferer": "address", "value": "prediction"}]
@@ -102,16 +102,21 @@ class EmissionsTxs:
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
 
+        if inference_value is None and not forecast_elements:
+            raise ValueError("At least one of inference_value or forecast_elements must be provided.")
+
         worker_address = str(self._txs.wallet.address())
 
-        inference = InputInference(
-            topic_id=topic_id,
-            block_height=nonce,
-            inferer=worker_address,
-            value=inference_value,
-            extra_data=extra_data or b"",
-            proof=proof or ""
-        )
+        inference = None
+        if inference_value is not None:
+            inference = InputInference(
+                topic_id=topic_id,
+                block_height=nonce,
+                inferer=worker_address,
+                value=inference_value,
+                extra_data=extra_data or b"",
+                proof=proof or "",
+            )
 
         forecast = None
         if forecast_elements:
