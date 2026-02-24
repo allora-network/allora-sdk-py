@@ -33,6 +33,9 @@ def make_poisson_loss(epsilon: float = DEFAULT_POISSON_EPSILON) -> Callable[[flo
         0.802848
     """
 
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be positive, got {epsilon}")
+
     def _poisson_loss(ground_truth: float, predicted: float) -> float:
         # Validate inputs are non-negative
         if ground_truth < 0:

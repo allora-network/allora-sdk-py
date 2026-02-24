@@ -96,6 +96,8 @@ def make_zptae_loss(
     """
     if std <= 0:
         raise ValueError(f"std must be positive, got {std}")
+    if beta <= 0:
+        raise ValueError(f"beta must be positive, got {beta}")
 
     def _zptae_loss(ground_truth: float, predicted: float) -> float:
         # Calculate z-scores
