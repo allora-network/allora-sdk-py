@@ -295,7 +295,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
 
         self.submitted_nonces = TimestampOrderedSet()
-
+        self._submit_lock = asyncio.Lock()
 
         setup_sdk_logging(debug=debug)
 
@@ -626,6 +626,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _maybe_submit(self, ctx: Context, nonce: Optional[int] = None):
         await self._ensure_initialized()
 
+        if ctx.is_cancelled():
+            return
+
+        async with self._submit_lock:
+            await self._maybe_submit_impl(ctx, nonce)
+
+    async def _maybe_submit_impl(self, ctx: Context, nonce: Optional[int] = None):
+        """Core submission logic; must be called while holding _submit_lock."""
         if ctx.is_cancelled():
             return
 
