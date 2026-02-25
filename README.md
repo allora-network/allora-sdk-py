@@ -93,6 +93,7 @@ More resources:
 ```python
 from allora_sdk import AlloraWorker, FeeTier, AlloraWalletConfig, AlloraNetworkConfig
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeTargetType
+from allora_sdk.worker import SanityCheckConfig
 
 inference_worker = AlloraWorker.inferer(
     #
@@ -149,6 +150,10 @@ inference_worker = AlloraWorker.inferer(
     #     target_type=AutoStakeTargetType.VALIDATOR,
     #     target_address="allovaloper1...validator",
     # ),
+
+    # Sanity check compares your prediction to network consensus (z-score); throttled to reduce RPC
+    # sanity_check=SanityCheckConfig(enabled=True, throttle_interval_seconds=60),
+    # Disable entirely: sanity_check=SanityCheckConfig(enabled=False),
 )
 ```
 
