@@ -3,10 +3,9 @@ Test that TxManager correctly calculates fees using feemarket gas prices.
 """
 import pytest
 from unittest.mock import Mock
+from types import SimpleNamespace
 from allora_sdk.rpc_client.tx_manager import TxManager
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
-from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceResponse
-from allora_sdk.rpc_client.protos.cosmos.base.v1beta1 import DecCoin
 
 
 @pytest.mark.asyncio
@@ -21,10 +20,10 @@ async def test_fee_calculation_with_dynamic_prices():
 
     # Mock feemarket client returning price in cosmos.Dec format (18 decimals)
     feemarket_client = Mock()
-    mock_response = GasPriceResponse(
-        price=DecCoin(
+    mock_response = SimpleNamespace(
+        price=SimpleNamespace(
             denom="uallo",
-            amount="10000000000000000000"  # 10.0 in cosmos.Dec format
+            amount="10000000000000000000",  # 10.0 in cosmos.Dec format
         )
     )
     feemarket_client.gas_price = Mock(return_value=mock_response)

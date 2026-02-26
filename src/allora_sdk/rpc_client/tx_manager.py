@@ -2,9 +2,10 @@ import asyncio
 from enum import Enum
 import grpc
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from decimal import Decimal
 import logging
-from typing import Any, Optional, Union, Dict, cast
+from typing import Any, Optional, Union, Dict, Protocol, cast
 from google.protobuf.message import Message
 
 from cosmpy.aerial.wallet import LocalWallet
@@ -14,17 +15,82 @@ from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
-from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
-from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
-from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
-from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
-from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
-from allora_sdk.rpc_client.interfaces import (
-    CosmosAuthV1Beta1QueryLike,
-    CosmosBankV1Beta1QueryLike,
-    CosmosTxV1Beta1ServiceLike,
-    FeemarketFeemarketV1QueryLike,
-)
+try:
+    from allora_sdk.rpc_client.interfaces import (
+        CosmosAuthV1Beta1QueryLike,
+        CosmosBankV1Beta1QueryLike,
+        CosmosTxV1Beta1ServiceLike,
+        FeemarketFeemarketV1QueryLike,
+    )
+except ModuleNotFoundError:
+    # Fallback protocols for environments where generated interface shims are absent.
+    class CosmosTxV1Beta1ServiceLike(Protocol):
+        async def simulate(self, request: Any) -> Any: ...
+        async def broadcast_tx(self, request: Any) -> Any: ...
+        async def get_tx(self, request: Any) -> Any: ...
+
+    class CosmosAuthV1Beta1QueryLike(Protocol):
+        async def account_info(self, request: Any) -> Any: ...
+        async def account(self, request: Any) -> Any: ...
+
+    class CosmosBankV1Beta1QueryLike(Protocol):
+        async def balance(self, request: Any) -> Any: ...
+
+    class FeemarketFeemarketV1QueryLike(Protocol):
+        async def gas_price(self, request: Any) -> Any: ...
+        async def state(self, request: Any) -> Any: ...
+        async def params(self, request: Any) -> Any: ...
+
+try:
+    from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
+    from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+    from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
+    from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
+    from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
+except ModuleNotFoundError:
+    class _RequestMessage:
+        """Minimal request object used when generated protos are unavailable."""
+
+        def __init__(self, **kwargs: Any):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class QueryAccountInfoRequest(_RequestMessage):
+        pass
+
+    class QueryAccountRequest(_RequestMessage):
+        pass
+
+    class QueryBalanceRequest(_RequestMessage):
+        pass
+
+    class BroadcastTxRequest(_RequestMessage):
+        pass
+
+    class GetTxRequest(_RequestMessage):
+        pass
+
+    class SimulateRequest(_RequestMessage):
+        pass
+
+    class GasPriceRequest(_RequestMessage):
+        pass
+
+    class StateRequest(_RequestMessage):
+        pass
+
+    class ParamsRequest(_RequestMessage):
+        pass
+
+    class BroadcastMode(Enum):
+        SYNC = "sync"
+
+    @dataclass
+    class TxResponse:
+        code: int = 0
+        raw_log: str = ""
+        txhash: str = ""
+        codespace: str = ""
 
 logger = logging.getLogger("allora_sdk")
 

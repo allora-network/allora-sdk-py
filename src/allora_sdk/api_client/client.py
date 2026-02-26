@@ -1,7 +1,7 @@
 import pprint
 import aiohttp
 from enum import Enum
-from typing import List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
+from typing import Dict, List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
 from pydantic import BaseModel, Field
 
 
@@ -81,6 +81,16 @@ class AlloraAPIClient:
         self.base_api_url = base_api_url
         self.fetcher = fetcher
 
+    def _build_headers(self) -> Dict[str, str]:
+        """Build request headers and include API key only when configured."""
+        headers: Dict[str, str] = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+        return headers
+
     async def get_all_topics(self) -> List[Topic]:
         """
         Fetches all available topics from the Allora API.
@@ -149,11 +159,7 @@ class AlloraAPIClient:
         :raises: requests.RequestException if the API request fails
         """
         url = self.get_request_url(endpoint)
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-        }
+        headers = self._build_headers()
         response_data = await self.fetcher.fetch(url, headers)
 
         pprint.pprint(response_data)
