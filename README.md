@@ -147,6 +147,8 @@ inference_worker = AlloraWorker.inferer(
 
 Low-level blockchain client for advanced users. Supports queries, transactions, and WebSocket subscriptions.
 
+For full module-level reference documentation (architecture, configuration, queries, transactions, events, and queue usage), see [`src/allora_sdk/rpc_client/README.md`](src/allora_sdk/rpc_client/README.md).
+
 ### Basic Usage
 
 Initialization is very flexible and straightforward.  The client can be initialized with:
