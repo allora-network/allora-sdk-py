@@ -151,9 +151,9 @@ inference_worker = AlloraWorker.inferer(
     #     target_address="allovaloper1...validator",
     # ),
 
-    # Sanity check compares your prediction to network consensus (z-score); throttled to reduce RPC
-    # sanity_check=SanityCheckConfig(enabled=True, throttle_interval_seconds=60),
-    # Disable entirely: sanity_check=SanityCheckConfig(enabled=False),
+    # Optional sanity check (default: enabled, 60s throttle)
+    # sanity_check=SanityCheckConfig(enabled=False),  # disable
+    # sanity_check=SanityCheckConfig(throttle_interval_seconds=30.0),
 )
 ```
 

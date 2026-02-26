@@ -39,6 +39,10 @@ class SanityCheckConfig:
     enabled: bool = True
     throttle_interval_seconds: float = 60.0
 
+    def __post_init__(self) -> None:
+        if self.throttle_interval_seconds < 0:
+            raise ValueError("throttle_interval_seconds must be >= 0")
+
 
 TInfererRunFnResult = Union[str, float, Decimal]
 TInfererRunFn = TRunFn[TInfererRunFnResult]
@@ -242,6 +246,7 @@ class Inferer:
             )
 
             if use_cache:
+                assert cache is not None
                 inferer_values = cache[1]
             else:
                 response = await self.client.emissions.query.get_latest_network_inferences(
@@ -249,6 +254,7 @@ class Inferer:
                 )
 
                 if not response.network_inferences or not response.network_inferences.inferer_values:
+                    self._sanity_cache = (now, [])
                     return
 
                 inferer_values = []
@@ -258,8 +264,8 @@ class Inferer:
                     except (ValueError, TypeError):
                         continue
 
-                if len(inferer_values) >= 3:
-                    self._sanity_cache = (now, inferer_values)
+                # Cache all fetched values (including 0-2 values) so throttling still works.
+                self._sanity_cache = (now, inferer_values)
 
             if len(inferer_values) >= 3:
                 self._sanity_check_with_values(prediction, inferer_values)

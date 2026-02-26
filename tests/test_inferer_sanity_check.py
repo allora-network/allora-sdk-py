@@ -1,11 +1,5 @@
 """
 Tests for inferer sanity-check throttle behavior and configuration.
-
-Verifies that:
-- Sanity checks can be disabled via config
-- RPC calls are throttled when within interval
-- Fresh RPC is made when throttle expires
-- Default config preserves safety intent
 """
 
 from __future__ import annotations
@@ -60,18 +54,22 @@ def _make_inferer(
 
 
 class TestSanityCheckConfig:
-    def test_default_enabled(self):
+    def test_default_enabled(self) -> None:
         cfg = SanityCheckConfig()
         assert cfg.enabled is True
         assert cfg.throttle_interval_seconds == 60.0
 
-    def test_explicit_disabled(self):
+    def test_explicit_disabled(self) -> None:
         cfg = SanityCheckConfig(enabled=False)
         assert cfg.enabled is False
 
-    def test_custom_interval(self):
+    def test_custom_interval(self) -> None:
         cfg = SanityCheckConfig(throttle_interval_seconds=30.5)
         assert cfg.throttle_interval_seconds == 30.5
+
+    def test_negative_interval_rejected(self) -> None:
+        with pytest.raises(ValueError, match="throttle_interval_seconds must be >= 0"):
+            SanityCheckConfig(throttle_interval_seconds=-1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +173,57 @@ class TestSanityCheckThrottle:
             await inferer.submit(nonce=2, account_seq=1)
 
         assert client.emissions.query.get_latest_network_inferences.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_applies_when_fewer_than_three_values(self) -> None:
+        """Topics with only 1-2 inferers still benefit from throttle cache."""
+        wallet = MagicMock()
+        client = _make_mock_client()
+        client.emissions.query.get_latest_network_inferences = AsyncMock(
+            return_value=_make_inferer_values_response(100.0, 101.0)
+        )
+        pending = MagicMock()
+        pending.wait = AsyncMock(return_value=MagicMock())
+        client.emissions.tx.insert_worker_payload = AsyncMock(return_value=pending)
+
+        inferer = _make_inferer(
+            wallet,
+            client,
+            sanity_check=SanityCheckConfig(enabled=True, throttle_interval_seconds=10.0),
+        )
+
+        with patch("allora_sdk.worker.inferer.time") as mock_time:
+            mock_time.monotonic.return_value = 2000.0
+            await inferer.submit(nonce=1, account_seq=0)
+
+            mock_time.monotonic.return_value = 2005.0
+            await inferer.submit(nonce=2, account_seq=1)
+
+        assert client.emissions.query.get_latest_network_inferences.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cache_applies_when_response_has_no_inferences(self) -> None:
+        """Empty/None inference responses are cached to avoid repeated RPC spam."""
+        wallet = MagicMock()
+        client = _make_mock_client()
+        response = MagicMock()
+        response.network_inferences = None
+        client.emissions.query.get_latest_network_inferences = AsyncMock(return_value=response)
+        pending = MagicMock()
+        pending.wait = AsyncMock(return_value=MagicMock())
+        client.emissions.tx.insert_worker_payload = AsyncMock(return_value=pending)
+
+        inferer = _make_inferer(
+            wallet,
+            client,
+            sanity_check=SanityCheckConfig(enabled=True, throttle_interval_seconds=10.0),
+        )
+
+        with patch("allora_sdk.worker.inferer.time") as mock_time:
+            mock_time.monotonic.return_value = 3000.0
+            await inferer.submit(nonce=1, account_seq=0)
+
+            mock_time.monotonic.return_value = 3005.0
+            await inferer.submit(nonce=2, account_seq=1)
+
+        assert client.emissions.query.get_latest_network_inferences.call_count == 1
