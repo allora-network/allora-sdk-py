@@ -295,7 +295,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
 
         self.submitted_nonces = TimestampOrderedSet()
-
+        self._submit_lock = asyncio.Lock()
 
         setup_sdk_logging(debug=debug)
 
@@ -629,6 +629,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         if ctx.is_cancelled():
             return
 
+        async with self._submit_lock:
+            await self._maybe_submit_impl(ctx, nonce)
+
+    async def _maybe_submit_impl(self, ctx: Context, nonce: Optional[int] = None):
+        """Core submission logic; must be called while holding _submit_lock."""
+        if ctx.is_cancelled():
+            return
+
         can_submit = await self.use_case.worker_is_whitelisted()
         if not can_submit:
             logger.error(f"❌ The wallet {self.address} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
@@ -702,12 +710,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     await self._queue.put(result)
 
 
-        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
-        if not account_seq or not account_seq.info:
-            logger.error(f"❌ Could not check account sequence for {self.address}")
-            return
-        base_sequence = account_seq.info.sequence
-
         new_nonces = sorted(list(new_nonces))
         if len(new_nonces) > self.max_unfulfilled_nonces:
             skipped = len(new_nonces) - self.max_unfulfilled_nonces
@@ -715,6 +717,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"   {skipped} old unfulfilled nonces skipped, submitting the latest {self.max_unfulfilled_nonces}"
             )
             new_nonces = new_nonces[-self.max_unfulfilled_nonces:]
+
+        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
+        if not account_seq or not account_seq.info:
+            logger.error(f"❌ Could not check account sequence for {self.address}")
+            return
+        base_sequence = account_seq.info.sequence
 
         for i, nonce in enumerate(new_nonces):
             if not self._ctx or self._ctx.is_cancelled():
