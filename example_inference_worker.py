@@ -18,7 +18,7 @@ async def main():
 
     async for result in worker.run():
         if isinstance(result, Exception):
-            logger.error("Inference worker error: %s", result)
+            logger.error("Inference worker error", exc_info=result)
             continue
         print(f"Prediction submitted to Allora: {result.submission}")
 
