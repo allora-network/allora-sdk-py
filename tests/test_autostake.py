@@ -166,6 +166,18 @@ class TestMakeAutostakeKey:
         )
         assert key[4] == 0
 
+    def test_invalid_falsy_block_height_tx_does_not_coalesce_with_none(self):
+        with pytest.raises(ValueError):
+            make_autostake_key(
+                role=AutoStakeRole.INFERER,
+                topic_id=1,
+                target_type=AutoStakeTargetType.REPUTER,
+                target_address="allo1addr",
+                block_height=100,
+                block_height_tx="",  # type: ignore[arg-type]
+                reward_uallo=200,
+            )
+
     def test_different_role_produces_different_key(self):
         base = dict(
             topic_id=1,

@@ -208,7 +208,7 @@ def make_autostake_key(
     - WebSocket replay of the same event
     - Different topics / roles / targets with same nonce and reward amount
     """
-    block_height_tx_val = int(block_height_tx or 0)
+    block_height_tx_val = 0 if block_height_tx is None else int(block_height_tx)
     return (
         role.value,
         topic_id,
