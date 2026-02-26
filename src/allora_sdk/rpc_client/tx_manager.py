@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from decimal import Decimal
 import logging
-from typing import Any, Optional, Union, Dict, Protocol, cast
+from typing import Any, Dict, Generator, Optional, Protocol, Union, cast
 from google.protobuf.message import Message
 
 from cosmpy.aerial.wallet import LocalWallet
@@ -133,12 +133,24 @@ class PendingTx:
         return self.wait().__await__()
 
 
+class TxSubmissionHandle(Protocol):
+    """Common awaitable contract for transaction submission handles."""
+
+    async def wait(self) -> TxResponse:
+        """Wait for final transaction result."""
+
+    def __await__(self) -> Generator[Any, None, TxResponse]:
+        """Allow awaiting the handle directly."""
+
+
 @dataclass(slots=True)
 class _QueuedSubmission:
     type_url: str
     msgs: list[Any]
     gas_limit: Optional[int]
     fee_tier: "FeeTier"
+    retry_attempt: int = 0
+    fee_multiplier_override: Optional[float] = None
 
 class FeeTier(Enum):
     ECO      = "eco"
@@ -263,7 +275,7 @@ class TxManager:
         use_queue: bool = False,
         queue_priority: int = 0,
         queue_deadline_at: Optional[datetime] = None,
-    ):
+    ) -> TxSubmissionHandle:
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
@@ -494,25 +506,40 @@ class TxManager:
 
     async def _submit_via_queue(self, payload: _QueuedSubmission, sequence: Optional[int]) -> TxResponse:
         await self._pre_flight_checks()
+        attempt = payload.retry_attempt
+        gas_multiplier = 1.0 + (attempt * 0.3)
+        fee_multiplier = payload.fee_multiplier_override
+        if fee_multiplier is None:
+            fee_multiplier = self._fee_multipliers[payload.fee_tier]
 
-        fee_multiplier = self._fee_multipliers[payload.fee_tier]
-        tx_hash, _, _ = await self._build_and_broadcast(
-            payload.type_url,
-            payload.msgs,
-            payload.gas_limit,
-            fee_multiplier,
-            gas_multiplier=1.0,
-            sequence=sequence,
-        )
-        resp = await self.wait_for_tx(
-            tx_hash,
-            timeout=timedelta(seconds=30),
-            poll_period=timedelta(seconds=2),
-        )
-        assert resp.tx_response is not None
-        self._log_tx_response(resp.tx_response)
-        self._raise_for_status(resp.tx_response)
-        return resp.tx_response
+        try:
+            tx_hash, _, _ = await self._build_and_broadcast(
+                payload.type_url,
+                payload.msgs,
+                payload.gas_limit,
+                fee_multiplier,
+                gas_multiplier=gas_multiplier,
+                sequence=sequence,
+            )
+            resp = await self.wait_for_tx(
+                tx_hash,
+                timeout=timedelta(seconds=30),
+                poll_period=timedelta(seconds=2),
+            )
+            assert resp.tx_response is not None
+            self._log_tx_response(resp.tx_response)
+            self._raise_for_status(resp.tx_response)
+            return resp.tx_response
+        except InsufficientFeesError:
+            # Invalidate gas-price cache and raise retry fee, mirroring legacy retry behavior.
+            self._cached_gas_price = None
+            self._gas_price_cache_time = None
+            payload.fee_multiplier_override = 1.0 + (attempt * 0.5)
+            payload.retry_attempt = attempt + 1
+            raise
+        except Exception:
+            payload.retry_attempt = attempt + 1
+            raise
 
 
     async def _build_and_broadcast(

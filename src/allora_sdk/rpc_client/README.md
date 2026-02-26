@@ -220,6 +220,9 @@ The preferred path is module wrappers such as `client.bank.tx.send(...)` and `cl
 - `use_queue=True` enables scheduling through `TransactionQueue`
 - `queue_priority` controls relative urgency among queued items
 - `queue_deadline_at` allows deadline-aware dispatch/fail-fast behavior
+- queue retries preserve legacy retry tuning:
+  - gas multiplier increases per retry attempt
+  - insufficient-fee retries invalidate gas-price cache and raise fee multiplier
 
 `PendingTx` tracks attempt metadata:
 
@@ -331,6 +334,7 @@ The queue can be used without replacing existing direct submission paths.
 - Worker/reputer emissions paths expose the same queue controls:
   - `insert_worker_payload(..., use_queue=True, queue_priority=..., queue_deadline_at=...)`
   - `delegate_stake(..., use_queue=True, queue_priority=..., queue_deadline_at=...)`
+- Queue-enabled methods return an awaitable transaction handle (compatible with `await handle` and `await handle.wait()` patterns).
 
 ### Minimal Adapter Example
 
