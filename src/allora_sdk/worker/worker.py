@@ -710,12 +710,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     await self._queue.put(result)
 
 
-        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
-        if not account_seq or not account_seq.info:
-            logger.error(f"❌ Could not check account sequence for {self.address}")
-            return
-        base_sequence = account_seq.info.sequence
-
         new_nonces = sorted(list(new_nonces))
         if len(new_nonces) > self.max_unfulfilled_nonces:
             skipped = len(new_nonces) - self.max_unfulfilled_nonces
@@ -723,6 +717,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"   {skipped} old unfulfilled nonces skipped, submitting the latest {self.max_unfulfilled_nonces}"
             )
             new_nonces = new_nonces[-self.max_unfulfilled_nonces:]
+
+        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
+        if not account_seq or not account_seq.info:
+            logger.error(f"❌ Could not check account sequence for {self.address}")
+            return
+        base_sequence = account_seq.info.sequence
 
         for i, nonce in enumerate(new_nonces):
             if not self._ctx or self._ctx.is_cancelled():

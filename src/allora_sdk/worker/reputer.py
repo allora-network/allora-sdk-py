@@ -179,12 +179,6 @@ class Reputer:
             tx_resp = await pending.wait()
             result = WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
-            # Optional stake top-up after successful payload; runs with fresh context
-            # so it does not consume sequence before core submission.
-            await self._maybe_stake()
-
-            return result
-
         except TxError as err:
             logger.error(f"❌ TX ERROR: {err}")
             already_submitted = False
@@ -205,6 +199,15 @@ class Reputer:
         except Exception as err:
             logger.error(f"❌ Unexpected error submitting reputer payload: {err.__class__.__name__} {err}")
             return err
+
+        # Optional stake top-up after successful payload; runs with fresh context
+        # so it does not consume sequence before core submission.
+        try:
+            await self._maybe_stake()
+        except Exception as err:
+            logger.error(f"Failed during optional post-submit staking: {err}")
+
+        return result
 
     async def _maybe_auto_select_loss_fn(self) -> None:
         """
