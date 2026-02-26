@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Awaitable, Callable, TypeAlias
 
 from .squared_error import squared_error_loss
 from .absolute_error import absolute_error_loss
@@ -9,7 +9,9 @@ from .poisson import poisson_loss
 from .ztae import ztae_loss
 from .zptae import zptae_loss
 
-LossFn = Callable[[float, float], float]
+SyncLossFn: TypeAlias = Callable[[float, float], float]
+AsyncLossFn: TypeAlias = Callable[[float, float], Awaitable[float]]
+LossFn: TypeAlias = SyncLossFn | AsyncLossFn
 
 class UnsupportedLossMethodError(Exception):
     """Raised when a loss_method is not supported by the SDK's default implementations."""

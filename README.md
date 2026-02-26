@@ -187,6 +187,10 @@ reputer_custom = AlloraWorker.reputer(
 )
 ```
 
+`loss_fn` can be synchronous or asynchronous. Supported signatures are
+`(ground_truth: float, predicted: float) -> float` and
+`(ground_truth: float, predicted: float) -> Awaitable[float]`.
+
 **Supported Default Loss Methods:**
 
 When `loss_fn` is not provided, the SDK auto-selects from these implementations based on the topic's `loss_method`:
