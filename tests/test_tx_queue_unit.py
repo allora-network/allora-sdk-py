@@ -156,6 +156,52 @@ async def test_ordering_deadline_then_priority_then_fifo() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fifo_ordering_with_identical_created_at_uses_enqueue_sequence() -> None:
+    adapter = FakeAdapter()
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0)
+    queue = TransactionQueue[str, str](adapter, now_fn=lambda: fixed_now)
+    await queue.start()
+
+    first = await queue.enqueue(request_id="r1", account_id="acc1", payload="p1", priority=10)
+    second = await queue.enqueue(request_id="r2", account_id="acc2", payload="p2", priority=10)
+    third = await queue.enqueue(request_id="r3", account_id="acc3", payload="p3", priority=10)
+
+    await asyncio.gather(first, second, third)
+
+    payload_order = [payload for payload, _ in adapter.submit_calls]
+    assert payload_order == ["p1", "p2", "p3"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_sort_key_includes_sequence_number_for_deterministic_ties() -> None:
+    adapter = FakeAdapter()
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0)
+    queue = TransactionQueue[str, str](adapter, now_fn=lambda: fixed_now)
+    handle = tx_queue_module.PendingQueueTx[str]()
+    item = tx_queue_module.QueueItem[str, str](
+        request_id="r1",
+        account_id="acc1",
+        payload="p1",
+        priority=10,
+        deadline_at=None,
+        max_retries=0,
+        timeout=None,
+        metadata={},
+        created_at=fixed_now,
+        handle=handle,
+    )
+
+    sort_key_0 = queue._compute_sort_key(item, 0)
+    sort_key_1 = queue._compute_sort_key(item, 1)
+
+    assert sort_key_0[:-1] == sort_key_1[:-1]
+    assert sort_key_0[-1] == 0
+    assert sort_key_1[-1] == 1
+    assert sort_key_0 < sort_key_1
+
+
+@pytest.mark.asyncio
 async def test_same_account_is_strictly_sequential() -> None:
     adapter = FakeAdapter()
     adapter.submit_delays["p1"] = 0.05

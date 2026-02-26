@@ -22,11 +22,17 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name == "AlloraRPCClient":
-        return import_module(".client", __name__).AlloraRPCClient
+        value = import_module(".client", __name__).AlloraRPCClient
+        globals()[name] = value
+        return value
     if name in {"AlloraNetworkConfig", "AlloraWalletConfig"}:
         module = import_module(".config", __name__)
-        return getattr(module, name)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
     if name in {"TxManager", "FeeTier"}:
         module = import_module(".tx_manager", __name__)
-        return getattr(module, name)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

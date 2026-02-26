@@ -33,15 +33,25 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name == "AlloraWorker":
-        return import_module(".worker", __name__).AlloraWorker
+        value = import_module(".worker", __name__).AlloraWorker
+        globals()[name] = value
+        return value
     if name in {"AlloraRPCClient", "AlloraNetworkConfig", "AlloraWalletConfig", "TxManager", "FeeTier"}:
         module = import_module(".rpc_client", __name__)
-        return getattr(module, name)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
     if name == "AlloraAPIClient":
-        return import_module(".api_client", __name__).AlloraAPIClient
+        value = import_module(".api_client", __name__).AlloraAPIClient
+        globals()[name] = value
+        return value
     if name == "setup_sdk_logging":
-        return import_module(".logging_config", __name__).setup_sdk_logging
+        value = import_module(".logging_config", __name__).setup_sdk_logging
+        globals()[name] = value
+        return value
     if name in {"LocalWallet", "PrivateKey"}:
         module = import_module("cosmpy.aerial.wallet")
-        return getattr(module, name)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

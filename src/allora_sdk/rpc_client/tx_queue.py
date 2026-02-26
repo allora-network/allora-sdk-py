@@ -236,10 +236,11 @@ class TransactionQueue(Generic[TPayload, TResult]):
         async with self._queue_lock:
             if self._is_stopped:
                 raise TxQueueStoppedError("Queue stopped")
+            sequence_no = self._sequence_counter
             entry = _QueueEntry(
-                sort_key=self._compute_sort_key(item),
+                sort_key=self._compute_sort_key(item, sequence_no),
                 item=item,
-                sequence_no=self._sequence_counter,
+                sequence_no=sequence_no,
             )
             self._sequence_counter += 1
             heapq.heappush(self._global_queue, entry)
@@ -254,10 +255,10 @@ class TransactionQueue(Generic[TPayload, TResult]):
         boosts = int(age.total_seconds() // max(1, int(self.starvation_threshold.total_seconds())))
         return min(self.max_priority, item.priority + min(self.max_age_boost, boosts))
 
-    def _compute_sort_key(self, item: QueueItem[TPayload, TResult]) -> tuple[Any, ...]:
+    def _compute_sort_key(self, item: QueueItem[TPayload, TResult], sequence_no: int) -> tuple[Any, ...]:
         deadline_key = (0, item.deadline_at) if item.deadline_at is not None else (1, datetime.max)
         effective_priority = self._compute_effective_priority(item)
-        return (deadline_key[0], deadline_key[1], -effective_priority, item.created_at)
+        return (deadline_key[0], deadline_key[1], -effective_priority, item.created_at, sequence_no)
 
     async def _scheduler_loop(self) -> None:
         while True:
@@ -306,7 +307,7 @@ class TransactionQueue(Generic[TPayload, TResult]):
 
     def _refresh_global_heap(self) -> None:
         for entry in self._global_queue:
-            entry.sort_key = self._compute_sort_key(entry.item)
+            entry.sort_key = self._compute_sort_key(entry.item, entry.sequence_no)
         heapq.heapify(self._global_queue)
 
     def _ensure_account_worker(self, account_id: str) -> None:
