@@ -16,6 +16,11 @@ from allora_sdk.rpc_client.tx_manager import FeeTier
 logger = logging.getLogger("allora_sdk")
 
 
+# Composite idempotence key: (role, topic_id, target_type, target_address, block_height_tx, block_height, reward_uallo)
+# Used to deduplicate EventRewardsSettled handling across WebSocket replays and avoid double delegation.
+AutoStakeKey = tuple[str, int, str, str, int, int, int]
+
+
 class InvalidAutoStakeConfigError(Exception):
     """Raised when autostake configuration is invalid (e.g., reputer not registered, validator not found)."""
 
@@ -185,6 +190,49 @@ def compute_stake_amount_uallo(reward_uallo: int, fee_reserve_uallo: int) -> int
     return max(0, int(reward_uallo) - reserve)
 
 
+def make_autostake_key(
+    *,
+    role: AutoStakeRole,
+    topic_id: int,
+    target_type: AutoStakeTargetType,
+    target_address: str,
+    block_height: int,
+    block_height_tx: int | None,
+    reward_uallo: int,
+) -> AutoStakeKey:
+    """
+    Build a composite idempotence key for autostake deduplication.
+
+    Includes role, topic_id, target_type, target_address, block_height_tx (or 0 if absent),
+    block_height, and reward_uallo to avoid collisions across:
+    - WebSocket replay of the same event
+    - Different topics / roles / targets with same nonce and reward amount
+    """
+    block_height_tx_val = 0 if block_height_tx is None else int(block_height_tx)
+    return (
+        role.value,
+        topic_id,
+        target_type.value,
+        target_address,
+        block_height_tx_val,
+        block_height,
+        reward_uallo,
+    )
+
+
+def _keys_match(last_key: AutoStakeKey | tuple[int, int] | None, new_key: AutoStakeKey) -> bool:
+    """
+    Compare last and new idempotence keys for deduplication.
+
+    Supports legacy 2-tuple (block_height, reward_uallo) for backward compatibility.
+    """
+    if last_key is None:
+        return False
+    if len(last_key) == 2:
+        return (last_key[0], last_key[1]) == (new_key[5], new_key[6])
+    return last_key == new_key
+
+
 async def process_autostake_rewards_settled(
     *,
     role: AutoStakeRole,
@@ -194,13 +242,13 @@ async def process_autostake_rewards_settled(
     client: AlloraRPCClient,
     autostake: AutoStakeConfig | None,
     default_fee_tier: FeeTier,
-    last_autostake_key: tuple[int, int] | None,
-) -> tuple[int, int] | None:
+    last_autostake_key: AutoStakeKey | tuple[int, int] | None,
+) -> AutoStakeKey | None:
     """
     Shared autostake handler for Inferer/Forecaster workers.
 
     Returns:
-        The new idempotence key (nonce_block_height, reward_uallo) if we decided to process this event
+        The new composite idempotence key if we decided to process this event
         (even if the tx fails), otherwise None.
     """
 
@@ -229,8 +277,18 @@ async def process_autostake_rewards_settled(
         )
         return None
 
-    autostake_key = (int(getattr(event, "block_height", 0) or 0), reward_uallo)
-    if last_autostake_key == autostake_key:
+    block_height = int(getattr(event, "block_height", 0) or 0)
+    block_height_tx = getattr(event, "block_height_tx", None)
+    autostake_key = make_autostake_key(
+        role=role,
+        topic_id=topic_id,
+        target_type=autostake.target_type,
+        target_address=autostake.target_address,
+        block_height=block_height,
+        block_height_tx=block_height_tx,
+        reward_uallo=reward_uallo,
+    )
+    if _keys_match(last_autostake_key, autostake_key):
         logger.debug("[AUTO-STAKE] Skipping: duplicate event key=%s", autostake_key)
         return None
 
