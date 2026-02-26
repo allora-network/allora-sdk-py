@@ -76,6 +76,16 @@ def _normalize_loss_method(loss_method: str) -> str:
     return normalized
 
 
+# Loss methods that require explicit custom loss_fn (cannot be auto-selected)
+_LOSS_METHODS_REQUIRING_EXPLICIT_CONFIG: frozenset[str] = frozenset({"ztae", "zptae"})
+
+
+def requires_explicit_loss_fn(loss_method: str) -> bool:
+    """Return True if the loss method requires an explicit custom loss_fn."""
+    normalized = _normalize_loss_method(loss_method)
+    return normalized in _LOSS_METHODS_REQUIRING_EXPLICIT_CONFIG
+
+
 def is_supported_loss_method(loss_method: str) -> bool:
     normalized = _normalize_loss_method(loss_method)
     return normalized in _LOSS_FUNCTIONS
