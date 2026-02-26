@@ -1,5 +1,6 @@
 from decimal import Decimal
 import logging
+import math
 from typing import Awaitable, Callable, List, Optional, Union
 from cosmpy.aerial.wallet import LocalWallet
 
@@ -19,7 +20,13 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.loss_methods.defaults import LossFn, get_default_loss_fn, is_supported_loss_method, UnsupportedLossMethodError
+from allora_sdk.loss_methods.defaults import (
+    LossFn,
+    get_default_loss_fn,
+    is_supported_loss_method,
+    requires_explicit_loss_fn,
+    UnsupportedLossMethodError,
+)
 from allora_sdk.loss_methods.squared_error import squared_error_loss
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
@@ -122,6 +129,10 @@ class Reputer:
 
             ground_truth_raw = await resolve_maybe_awaitable(self.ground_truth_fn, nonce)
             ground_truth = float(ground_truth_raw)
+            if not math.isfinite(ground_truth):
+                raise ValueError(
+                    f"ground_truth must be finite (got non-finite value: {ground_truth})"
+                )
         except Exception as err:
             logger.error(f"❌ Ground truth function failed: {err}")
             return err
@@ -215,6 +226,14 @@ class Reputer:
                 supported=["sqe", "abse", "huber", "logcosh", "bce", "poisson", "ztae", "zptae"],
             )
 
+        if requires_explicit_loss_fn(loss_method):
+            raise ValueError(
+                f"Topic uses loss_method='{loss_method}' which requires explicit configuration. "
+                "Provide a custom loss_fn using make_ztae_loss() or make_zptae_loss() with "
+                "the appropriate standard deviation for your data: "
+                "e.g. loss_fn=make_ztae_loss(std=0.02) or loss_fn=make_zptae_loss(std=0.02)."
+            )
+
         self.loss_fn = get_default_loss_fn(loss_method)
         logger.info(f"Auto-selected loss function for topic loss_method='{loss_method}'")
 
@@ -224,11 +243,21 @@ class Reputer:
 
         Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
         """
+        if not math.isfinite(ground_truth):
+            raise ValueError(
+                f"ground_truth must be finite (got non-finite value: {ground_truth})"
+            )
+
         async def compute_loss(value_str: str) -> str:
             try:
                 predicted = float(value_str)
             except (ValueError, TypeError) as err:
                 raise ValueError(f"invalid numeric value for loss computation: '{value_str}'") from err
+
+            if not math.isfinite(predicted):
+                raise ValueError(
+                    f"predicted must be finite (got non-finite value: {predicted})"
+                )
 
             if self.loss_fn is None:
                 raise ValueError("no loss fn configured")
