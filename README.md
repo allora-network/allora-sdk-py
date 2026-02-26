@@ -93,6 +93,7 @@ More resources:
 ```python
 from allora_sdk import AlloraWorker, FeeTier, AlloraWalletConfig, AlloraNetworkConfig
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeTargetType
+from allora_sdk.worker import SanityCheckConfig
 
 inference_worker = AlloraWorker.inferer(
     #
@@ -149,6 +150,10 @@ inference_worker = AlloraWorker.inferer(
     #     target_type=AutoStakeTargetType.VALIDATOR,
     #     target_address="allovaloper1...validator",
     # ),
+
+    # Optional sanity check (default: enabled, 60s throttle)
+    # sanity_check=SanityCheckConfig(enabled=False),  # disable
+    # sanity_check=SanityCheckConfig(throttle_interval_seconds=30.0),
 )
 ```
 

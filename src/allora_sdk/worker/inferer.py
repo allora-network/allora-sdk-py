@@ -1,4 +1,6 @@
 import logging
+import time
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Union
 
@@ -21,6 +23,27 @@ from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_
 logger = logging.getLogger("allora_sdk")
 
 
+@dataclass(frozen=True)
+class SanityCheckConfig:
+    """
+    Configuration for the inferer sanity check that compares predictions against network consensus.
+
+    Uses a throttle to avoid expensive RPC on every submit: cached network inferences are reused
+    until the throttle interval elapses.
+
+    Attributes:
+        enabled: If False, sanity checks are skipped entirely.
+        throttle_interval_seconds: Minimum seconds between RPC calls; cached data is reused within this interval.
+    """
+
+    enabled: bool = True
+    throttle_interval_seconds: float = 60.0
+
+    def __post_init__(self) -> None:
+        if self.throttle_interval_seconds < 0:
+            raise ValueError("throttle_interval_seconds must be >= 0")
+
+
 TInfererRunFnResult = Union[str, float, Decimal]
 TInfererRunFn = TRunFn[TInfererRunFnResult]
 
@@ -34,6 +57,7 @@ class Inferer:
         run: TInfererRunFn,
         fee_tier: FeeTier,
         autostake: AutoStakeConfig | None = None,
+        sanity_check: SanityCheckConfig | None = None,
     ):
         self.wallet = wallet
         self.client = client
@@ -41,9 +65,13 @@ class Inferer:
         self.predict_fn = run
         self.fee_tier = fee_tier
         self.autostake = autostake
+        self.sanity_check = sanity_check or SanityCheckConfig()
 
         # Simple in-memory idempotence for rewards events
         self._last_autostake_key: tuple[int, int] | None = None
+
+        # Throttle cache: (fetch_timestamp, inferer_values)
+        self._sanity_cache: tuple[float, list[float]] | None = None
 
 
     def name(self) -> str:
@@ -129,11 +157,12 @@ class Inferer:
             logger.debug(f"Prediction function failed: {err}")
             return err
 
-        # Sanity check prediction against network consensus
-        try:
-            await self._sanity_check_submission(float(prediction))
-        except (ValueError, TypeError):
-            logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
+        # Sanity check prediction against network consensus (throttled; see SanityCheckConfig)
+        if self.sanity_check.enabled:
+            try:
+                await self._sanity_check_submission(float(prediction))
+            except (ValueError, TypeError):
+                logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
         try:
             pending = await self.client.emissions.tx.insert_worker_payload(
@@ -168,9 +197,38 @@ class Inferer:
             return err
 
 
+    def _sanity_check_with_values(self, prediction: float, inferer_values: list[float]) -> None:
+        """Apply z-score analysis using pre-extracted inferer values."""
+        if len(inferer_values) < 3:
+            return
+
+        mean = sum(inferer_values) / len(inferer_values)
+        variance = sum((x - mean) ** 2 for x in inferer_values) / len(inferer_values)
+        std_dev = variance ** 0.5
+
+        if std_dev == 0:
+            return
+
+        z_score = abs((prediction - mean) / std_dev)
+
+        if z_score > 3.0:
+            logger.warning(
+                f"⚠️⚠️⚠️  SANITY CHECK WARNING: Your prediction ({prediction:.6f}) is {z_score:.1f} "
+                f"standard deviations from the network consensus (mean: {mean:.6f}, std: {std_dev:.6f}). "
+                f"Please verify you're predicting the correct target variable and using the right units."
+            )
+        elif z_score > 2.0:
+            logger.info(
+                f"ℹ️  NOTICE: Your prediction ({prediction:.6f}) is {z_score:.1f} standard deviations "
+                f"from consensus (mean: {mean:.6f}). This may indicate a contrarian view or potential issue."
+            )
+
     async def _sanity_check_submission(self, prediction: float) -> None:
         """
         Sanity check user's prediction against network consensus using z-score analysis.
+
+        Uses a throttle: network inferences are cached and reused until
+        throttle_interval_seconds elapses, reducing RPC overhead on rapid submissions.
 
         Warns the user if their prediction is suspiciously far from the consensus,
         which could indicate they're predicting the wrong target variable or using
@@ -180,51 +238,37 @@ class Inferer:
             prediction: User's prediction value to check
         """
         try:
-            # Query latest network inferences to get consensus
-            response = await self.client.emissions.query.get_latest_network_inferences(
-                GetLatestNetworkInferencesRequest(topic_id=self.topic_id)
+            now = time.monotonic()
+            cache = self._sanity_cache
+            use_cache = (
+                cache is not None
+                and (now - cache[0]) < self.sanity_check.throttle_interval_seconds
             )
 
-            if not response.network_inferences or not response.network_inferences.inferer_values:
-                # Not enough data to perform sanity check
-                return
-
-            # Extract individual inferer values
-            inferer_values = []
-            for inferer in response.network_inferences.inferer_values:
-                try:
-                    inferer_values.append(float(inferer.value))
-                except (ValueError, TypeError):
-                    continue
-
-            if len(inferer_values) < 3:
-                # Need at least 3 values for meaningful statistics
-                return
-
-            # Calculate mean and standard deviation
-            mean = sum(inferer_values) / len(inferer_values)
-            variance = sum((x - mean) ** 2 for x in inferer_values) / len(inferer_values)
-            std_dev = variance ** 0.5
-
-            if std_dev == 0:
-                # All predictions are identical, can't calculate z-score
-                return
-
-            # Calculate z-score
-            z_score = abs((prediction - mean) / std_dev)
-
-            # Warn if prediction is more than 3 standard deviations away
-            if z_score > 3.0:
-                logger.warning(
-                    f"⚠️⚠️⚠️  SANITY CHECK WARNING: Your prediction ({prediction:.6f}) is {z_score:.1f} "
-                    f"standard deviations from the network consensus (mean: {mean:.6f}, std: {std_dev:.6f}). "
-                    f"Please verify you're predicting the correct target variable and using the right units."
+            if use_cache:
+                assert cache is not None
+                inferer_values = cache[1]
+            else:
+                response = await self.client.emissions.query.get_latest_network_inferences(
+                    GetLatestNetworkInferencesRequest(topic_id=self.topic_id)
                 )
-            elif z_score > 2.0:
-                logger.info(
-                    f"ℹ️  NOTICE: Your prediction ({prediction:.6f}) is {z_score:.1f} standard deviations "
-                    f"from consensus (mean: {mean:.6f}). This may indicate a contrarian view or potential issue."
-                )
+
+                if not response.network_inferences or not response.network_inferences.inferer_values:
+                    self._sanity_cache = (now, [])
+                    return
+
+                inferer_values = []
+                for inferer in response.network_inferences.inferer_values:
+                    try:
+                        inferer_values.append(float(inferer.value))
+                    except (ValueError, TypeError):
+                        continue
+
+                # Cache all fetched values (including 0-2 values) so throttling still works.
+                self._sanity_cache = (now, inferer_values)
+
+            if len(inferer_values) >= 3:
+                self._sanity_check_with_values(prediction, inferer_values)
 
         except Exception as e:
             # Don't let sanity check failures block submissions
