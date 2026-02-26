@@ -1,5 +1,9 @@
 import asyncio
+import logging
 from allora_sdk import AlloraNetworkConfig, AlloraWalletConfig, AlloraWorker
+
+logger = logging.getLogger(__name__)
+
 
 def run_model(nonce: int):
     return 10
@@ -14,6 +18,7 @@ async def main():
 
     async for result in worker.run():
         if isinstance(result, Exception):
+            logger.error("Inference worker error: %s", result)
             continue
         print(f"Prediction submitted to Allora: {result.submission}")
 
