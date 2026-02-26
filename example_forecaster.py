@@ -1,5 +1,9 @@
 import asyncio
+import logging
 from allora_sdk import AlloraNetworkConfig, AlloraWalletConfig, AlloraWorker
+
+logger = logging.getLogger(__name__)
+
 
 def run_model(nonce: int) -> dict[str, float]:
     return {
@@ -16,6 +20,7 @@ async def main():
 
     async for result in worker.run():
         if isinstance(result, Exception):
+            logger.error("Forecaster worker error: %s", result)
             continue
         print(f"Forecast submitted to Allora: {result.submission}")
 

@@ -670,7 +670,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     logger.error(f"⚠️ Transaction timed out: topic_id={self.topic_id} nonce={nonce}")
 
                 elif isinstance(result, Exception):
-                    logger.error(f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}")
+                    logger.error(
+                        f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}",
+                        exc_info=(type(result), result, result.__traceback__),
+                    )
                     self.submitted_nonces.add(nonce)
 
                 elif result:

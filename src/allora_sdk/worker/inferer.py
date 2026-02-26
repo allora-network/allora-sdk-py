@@ -154,7 +154,7 @@ class Inferer:
 
             prediction = await resolve_maybe_awaitable(self.predict_fn, nonce)
         except Exception as err:
-            logger.debug(f"Prediction function failed: {err}")
+            logger.error("Prediction function failed", exc_info=True)
             return err
 
         # Sanity check prediction against network consensus (throttled; see SanityCheckConfig)
