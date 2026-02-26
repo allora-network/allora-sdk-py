@@ -115,10 +115,12 @@ class Reputer:
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
-        """Submit a reputer payload for the given nonce."""
+        """Submit a reputer payload for the given nonce.
 
-        # Stake top-up if needed
-        await self._maybe_stake()
+        Sequence-critical: payload is submitted first. Optional stake top-up runs
+        only after successful payload submission, with fresh context, so it does
+        not consume sequence before the core submission.
+        """
 
         sender = str(self.wallet.address())
 
@@ -175,7 +177,7 @@ class Reputer:
                 account_seq=account_seq,
             )
             tx_resp = await pending.wait()
-            return WorkerResult(submission=loss_bundle, tx_result=tx_resp)
+            result = WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
         except TxError as err:
             logger.error(f"❌ TX ERROR: {err}")
@@ -197,6 +199,15 @@ class Reputer:
         except Exception as err:
             logger.error(f"❌ Unexpected error submitting reputer payload: {err.__class__.__name__} {err}")
             return err
+
+        # Optional stake top-up after successful payload; runs with fresh context
+        # so it does not consume sequence before core submission.
+        try:
+            await self._maybe_stake()
+        except Exception as err:
+            logger.error(f"Failed during optional post-submit staking: {err}")
+
+        return result
 
     async def _maybe_auto_select_loss_fn(self) -> None:
         """
