@@ -35,7 +35,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
-from allora_sdk.worker.inferer import Inferer, TInfererRunFn, TInfererRunFnResult
+from allora_sdk.worker.inferer import Inferer, SanityCheckConfig, TInfererRunFn, TInfererRunFnResult
 from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer
 from allora_sdk.worker.autostake import AutoStakeConfig
 from allora_sdk.worker.types import (
@@ -82,6 +82,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         polling_interval: int = 120,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         autostake: AutoStakeConfig | None = None,
+        sanity_check: SanityCheckConfig | None = None,
         debug: bool = False,
     ):
         """
@@ -96,6 +97,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
+            sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
             debug: Enable debug logging
 
         Returns:
@@ -115,6 +117,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 run=run,
                 client=client,
                 autostake=autostake,
+                sanity_check=sanity_check,
             ),
             address=str(wallet_initialized.address()),
             client=client,

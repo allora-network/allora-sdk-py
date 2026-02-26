@@ -14,6 +14,7 @@ from .autostake import (
     AutoStakeTargetType,
     InvalidAutoStakeConfigError,
 )
+from .inferer import SanityCheckConfig
 
 # Backward compatibility alias
 default_squared_error_loss = squared_error_loss
@@ -25,4 +26,5 @@ __all__ = [
     "AutoStakeConfig",
     "AutoStakeTargetType",
     "InvalidAutoStakeConfigError",
+    "SanityCheckConfig",
 ]
