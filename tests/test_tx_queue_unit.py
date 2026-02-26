@@ -92,6 +92,7 @@ class FakeAdapter:
 
 @pytest.mark.asyncio
 async def test_enqueue_requires_start() -> None:
+    """Verify enqueue fails if queue has not been started."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter)
     with pytest.raises(TxQueueNotStartedError):
@@ -100,6 +101,7 @@ async def test_enqueue_requires_start() -> None:
 
 @pytest.mark.asyncio
 async def test_queue_stops_and_rejects_new_work() -> None:
+    """Verify enqueue fails after queue has been stopped."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter)
     await queue.start()
@@ -110,6 +112,7 @@ async def test_queue_stops_and_rejects_new_work() -> None:
 
 @pytest.mark.asyncio
 async def test_negative_max_retries_is_rejected() -> None:
+    """Verify max_retries validation rejects negative values."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter)
     await queue.start()
@@ -120,6 +123,7 @@ async def test_negative_max_retries_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_priority_is_clamped() -> None:
+    """Verify priorities are clamped to configured min/max bounds."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter, min_priority=0, max_priority=100)
     await queue.start()
@@ -137,6 +141,7 @@ async def test_priority_is_clamped() -> None:
 
 @pytest.mark.asyncio
 async def test_ordering_deadline_then_priority_then_fifo() -> None:
+    """Verify scheduler orders by deadline, then priority, then FIFO."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter)
     await queue.start()
@@ -157,6 +162,7 @@ async def test_ordering_deadline_then_priority_then_fifo() -> None:
 
 @pytest.mark.asyncio
 async def test_fifo_ordering_with_identical_created_at_uses_enqueue_sequence() -> None:
+    """Verify enqueue sequence breaks ties when timestamps are identical."""
     adapter = FakeAdapter()
     fixed_now = datetime(2026, 1, 1, 0, 0, 0)
     queue = TransactionQueue[str, str](adapter, now_fn=lambda: fixed_now)
@@ -175,6 +181,7 @@ async def test_fifo_ordering_with_identical_created_at_uses_enqueue_sequence() -
 
 @pytest.mark.asyncio
 async def test_sort_key_includes_sequence_number_for_deterministic_ties() -> None:
+    """Verify sort key appends sequence number for deterministic ordering."""
     adapter = FakeAdapter()
     fixed_now = datetime(2026, 1, 1, 0, 0, 0)
     queue = TransactionQueue[str, str](adapter, now_fn=lambda: fixed_now)
@@ -203,6 +210,7 @@ async def test_sort_key_includes_sequence_number_for_deterministic_ties() -> Non
 
 @pytest.mark.asyncio
 async def test_same_account_is_strictly_sequential() -> None:
+    """Verify same-account transactions never execute concurrently."""
     adapter = FakeAdapter()
     adapter.submit_delays["p1"] = 0.05
     adapter.submit_delays["p2"] = 0.01
@@ -224,6 +232,7 @@ async def test_same_account_is_strictly_sequential() -> None:
 
 @pytest.mark.asyncio
 async def test_different_accounts_can_progress_concurrently() -> None:
+    """Verify different accounts can make progress in parallel."""
     adapter = FakeAdapter()
     adapter.submit_delays["p1"] = 0.05
     adapter.submit_delays["p2"] = 0.05
@@ -242,6 +251,7 @@ async def test_different_accounts_can_progress_concurrently() -> None:
 
 @pytest.mark.asyncio
 async def test_sequence_mismatch_invalidates_and_refetches_sequence() -> None:
+    """Verify sequence mismatch triggers invalidation and refetch before retry."""
     adapter = FakeAdapter()
     adapter.fetch_sequence_values["a1"] = 7
     adapter.behavior["payload"] = [SequenceMismatchError(), "ok-after-retry"]
@@ -261,6 +271,7 @@ async def test_sequence_mismatch_invalidates_and_refetches_sequence() -> None:
 
 @pytest.mark.asyncio
 async def test_retryable_error_retries_then_succeeds() -> None:
+    """Verify retryable errors are retried and can eventually succeed."""
     adapter = FakeAdapter()
     adapter.behavior["payload"] = [RetryableError(), "ok-final"]
 
@@ -279,6 +290,7 @@ async def test_retryable_error_retries_then_succeeds() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_exhausted_raises_typed_error() -> None:
+    """Verify retry exhaustion raises TxRetryExhaustedError."""
     adapter = FakeAdapter()
     adapter.behavior["payload"] = [RetryableError(), RetryableError(), RetryableError()]
     queue = TransactionQueue[str, str](adapter, retry_backoff_base=0.001, retry_backoff_max=0.001, random_fn=lambda: 0.0)
@@ -291,6 +303,7 @@ async def test_retry_exhausted_raises_typed_error() -> None:
 
 @pytest.mark.asyncio
 async def test_fatal_error_does_not_retry() -> None:
+    """Verify fatal errors fail fast without retry attempts."""
     adapter = FakeAdapter()
     adapter.behavior["payload"] = [FatalError("boom")]
     queue = TransactionQueue[str, str](adapter)
@@ -304,6 +317,7 @@ async def test_fatal_error_does_not_retry() -> None:
 
 @pytest.mark.asyncio
 async def test_expired_classification_maps_to_deadline_error() -> None:
+    """Verify expired classification maps to deadline-exceeded error type."""
     adapter = FakeAdapter()
     adapter.behavior["payload"] = [ExpiredError("expired")]
     queue = TransactionQueue[str, str](adapter)
@@ -316,6 +330,7 @@ async def test_expired_classification_maps_to_deadline_error() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_retries_with_wait_for() -> None:
+    """Verify timeout handling uses wait_for and retries appropriately."""
     adapter = FakeAdapter()
     adapter.submit_delays["slow"] = 0.03
     queue = TransactionQueue[str, str](adapter, retry_backoff_base=0.001, retry_backoff_max=0.001, random_fn=lambda: 0.0)
@@ -335,6 +350,7 @@ async def test_timeout_retries_with_wait_for() -> None:
 
 @pytest.mark.asyncio
 async def test_deadline_exceeded_before_processing() -> None:
+    """Verify items past deadline fail before submission starts."""
     adapter = FakeAdapter()
     queue = TransactionQueue[str, str](adapter)
     await queue.start()
@@ -351,6 +367,7 @@ async def test_deadline_exceeded_before_processing() -> None:
 
 @pytest.mark.asyncio
 async def test_stop_cancel_pending_marks_queued_items() -> None:
+    """Verify stop(cancel_pending=True) fails inflight and queued items."""
     adapter = FakeAdapter()
     adapter.submit_delays["slow"] = 0.1
     queue = TransactionQueue[str, str](adapter)
@@ -369,6 +386,7 @@ async def test_stop_cancel_pending_marks_queued_items() -> None:
 
 @pytest.mark.asyncio
 async def test_stop_without_cancel_pending_drains_inflight_and_queued() -> None:
+    """Verify stop(cancel_pending=False) drains outstanding work to completion."""
     adapter = FakeAdapter()
     adapter.submit_delays["slow"] = 0.02
     queue = TransactionQueue[str, str](adapter)

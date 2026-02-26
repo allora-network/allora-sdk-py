@@ -3,6 +3,7 @@ import allora_sdk.rpc_client as rpc_client
 
 
 def test_top_level_lazy_exports_are_cached_in_module_globals() -> None:
+    """Verify top-level lazy-loaded exports are cached after first lookup."""
     name = "setup_sdk_logging"
     allora_sdk.__dict__.pop(name, None)
 
@@ -14,6 +15,7 @@ def test_top_level_lazy_exports_are_cached_in_module_globals() -> None:
 
 
 def test_rpc_client_lazy_exports_are_cached_in_module_globals() -> None:
+    """Verify rpc_client lazy-loaded exports are cached after first lookup."""
     name = "AlloraNetworkConfig"
     rpc_client.__dict__.pop(name, None)
 

@@ -15,6 +15,7 @@ from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.tx_queue import ErrorClassification, TransactionQueue, TxQueueAdapter
 try:
     from allora_sdk.rpc_client.interfaces import (
         CosmosAuthV1Beta1QueryLike,
@@ -131,6 +132,14 @@ class PendingTx:
     def __await__(self):
         return self.wait().__await__()
 
+
+@dataclass(slots=True)
+class _QueuedSubmission:
+    type_url: str
+    msgs: list[Any]
+    gas_limit: Optional[int]
+    fee_tier: "FeeTier"
+
 class FeeTier(Enum):
     ECO      = "eco"
     STANDARD = "standard"
@@ -167,6 +176,29 @@ class TxNotFoundError(Exception):
 
 class TxTimeoutError(Exception):
     pass
+
+
+class _TxManagerQueueAdapter(TxQueueAdapter[_QueuedSubmission, TxResponse]):
+    """Adapter that maps TxManager operations onto TransactionQueue."""
+
+    def __init__(self, manager: "TxManager") -> None:
+        self._manager = manager
+
+    async def fetch_sequence(self, account_id: str) -> int:
+        return await self._manager._fetch_account_sequence(account_id)
+
+    async def submit(self, payload: _QueuedSubmission, sequence: Optional[int]) -> TxResponse:
+        return await self._manager._submit_via_queue(payload, sequence)
+
+    def classify_error(self, err: Exception) -> ErrorClassification:
+        if isinstance(err, AccountSequenceMismatchError):
+            return ErrorClassification.SEQUENCE_MISMATCH
+        if isinstance(err, (OutOfGasError, InsufficientFeesError, TxTimeoutError)):
+            return ErrorClassification.RETRYABLE
+        return ErrorClassification.FATAL
+
+    def is_timeout(self, err: Exception) -> bool:
+        return isinstance(err, (TxTimeoutError, asyncio.TimeoutError))
 
 
 class TxManager:
@@ -217,6 +249,8 @@ class TxManager:
         self._cached_gas_price: Optional[Decimal] = None
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
+        self._tx_queue: Optional[TransactionQueue[_QueuedSubmission, TxResponse]] = None
+        self._tx_queue_lock = asyncio.Lock()
 
     async def submit_transaction(
         self,
@@ -226,9 +260,32 @@ class TxManager:
         fee_tier: FeeTier = FeeTier.STANDARD,
         max_retries: int = 2,
         timeout: Optional[timedelta] = None,
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
     ):
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+
+        if use_queue:
+            tx_queue = await self._ensure_tx_queue_started()
+            queued_submission = _QueuedSubmission(
+                type_url=type_url,
+                msgs=msgs,
+                gas_limit=gas_limit,
+                fee_tier=fee_tier,
+            )
+            queue_handle = await tx_queue.enqueue(
+                request_id=f"tx-{self.parent_tx_id}",
+                account_id=str(self.wallet.address()),
+                payload=queued_submission,
+                priority=queue_priority,
+                deadline_at=queue_deadline_at,
+                max_retries=max_retries,
+                timeout=timeout,
+            )
+            self.parent_tx_id += 1
+            return queue_handle
 
         pending = PendingTx(
             manager=self,
@@ -245,6 +302,13 @@ class TxManager:
         asyncio.create_task(self._attempt_submissions(pending, gas_limit))
 
         return pending
+
+    async def close(self, *, cancel_pending_queue: bool = False) -> None:
+        """Stop queue-backed processing if initialized."""
+        if self._tx_queue is None:
+            return
+        await self._tx_queue.stop(cancel_pending=cancel_pending_queue)
+        self._tx_queue = None
     
     async def simulate_transaction(
         self,
@@ -410,6 +474,46 @@ class TxManager:
         # Exhausted attempts without setting result
         pending._final_future.set_exception(TxTimeoutError("Transaction failed after maximum retries"))
 
+    async def _fetch_account_sequence(self, account_id: str) -> int:
+        resp = await self.auth_client.account_info(QueryAccountInfoRequest(address=account_id))
+        if resp.info is None:
+            raise Exception("account_info query response is none")
+        return int(resp.info.sequence)
+
+    async def _ensure_tx_queue_started(self) -> TransactionQueue[_QueuedSubmission, TxResponse]:
+        if self._tx_queue is not None:
+            return self._tx_queue
+
+        async with self._tx_queue_lock:
+            if self._tx_queue is None:
+                self._tx_queue = TransactionQueue(
+                    adapter=_TxManagerQueueAdapter(self),
+                )
+                await self._tx_queue.start()
+            return self._tx_queue
+
+    async def _submit_via_queue(self, payload: _QueuedSubmission, sequence: Optional[int]) -> TxResponse:
+        await self._pre_flight_checks()
+
+        fee_multiplier = self._fee_multipliers[payload.fee_tier]
+        tx_hash, _, _ = await self._build_and_broadcast(
+            payload.type_url,
+            payload.msgs,
+            payload.gas_limit,
+            fee_multiplier,
+            gas_multiplier=1.0,
+            sequence=sequence,
+        )
+        resp = await self.wait_for_tx(
+            tx_hash,
+            timeout=timedelta(seconds=30),
+            poll_period=timedelta(seconds=2),
+        )
+        assert resp.tx_response is not None
+        self._log_tx_response(resp.tx_response)
+        self._raise_for_status(resp.tx_response)
+        return resp.tx_response
+
 
     async def _build_and_broadcast(
         self,
@@ -418,6 +522,7 @@ class TxManager:
         gas_limit: Optional[int],
         fee_multiplier: float,
         gas_multiplier: float,
+        sequence: Optional[int] = None,
     ) -> tuple[str, int, Coin]:
         any_messages = [ self._create_any_message(msg, type_url) for msg in msgs ]
 
@@ -435,10 +540,11 @@ class TxManager:
         if resp.info is None:
             raise Exception('account_info query response is none')
         info = resp.info
+        sequence_number = info.sequence if sequence is None else sequence
         logger.debug(f"Account info: seq={info.sequence}, num={info.account_number}")
 
         tx.seal(
-            signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence) ],
+            signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=sequence_number) ],
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
         )
 

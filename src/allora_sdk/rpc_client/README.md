@@ -215,6 +215,12 @@ The preferred path is module wrappers such as `client.bank.tx.send(...)` and `cl
 - `simulate_transaction(...)` -> returns gas estimate
 - `wait_for_tx(...)` -> polls for inclusion
 
+`submit_transaction(...)` also supports an opt-in queue-backed mode:
+
+- `use_queue=True` enables scheduling through `TransactionQueue`
+- `queue_priority` controls relative urgency among queued items
+- `queue_deadline_at` allows deadline-aware dispatch/fail-fast behavior
+
 `PendingTx` tracks attempt metadata:
 
 - `last_tx_hash`
@@ -239,6 +245,16 @@ pending = await client.bank.tx.send(
     fee_tier=FeeTier.STANDARD,
 )
 result = await pending
+
+# Optional queue-backed submission at lower level
+queued = await client.tx_manager.submit_transaction(
+    type_url="/emissions.v9.InsertWorkerPayloadRequest",
+    msgs=[...],
+    fee_tier=FeeTier.PRIORITY,
+    use_queue=True,
+    queue_priority=80,
+)
+queued_result = await queued
 ```
 
 ## Event Subscription Usage
@@ -305,6 +321,16 @@ Supporting types:
 3. `handle = await queue.enqueue(...)`
 4. `result = await handle`
 5. `await queue.stop(cancel_pending=...)`
+
+### Queue Through `TxManager`
+
+The queue can be used without replacing existing direct submission paths.
+
+- Existing `submit_transaction(...)` behavior remains unchanged by default.
+- Set `use_queue=True` only for flows that benefit from queueing.
+- Worker/reputer emissions paths expose the same queue controls:
+  - `insert_worker_payload(..., use_queue=True, queue_priority=..., queue_deadline_at=...)`
+  - `delegate_stake(..., use_queue=True, queue_priority=..., queue_deadline_at=...)`
 
 ### Minimal Adapter Example
 

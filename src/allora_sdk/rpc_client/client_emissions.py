@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Union
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce
 from allora_sdk.rpc_client.protos.emissions.v9 import (
@@ -41,6 +42,9 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
     ) -> Union[PendingTx, int]:
         """
         Register as a worker or reputer for a topic.
@@ -76,7 +80,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.RegisterRequest",
                 msgs=[ msg ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
     async def insert_worker_payload(
@@ -90,6 +97,9 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
     ) -> Union[PendingTx, int]:
         """
         Submit a worker payload (inference/forecast) to the Allora network.
@@ -182,7 +192,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.InsertWorkerPayloadRequest",
                 msgs=[ payload_request ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
 
@@ -195,6 +208,9 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
     ) -> Union[PendingTx, int]:
 
         msg = DelegateStakeRequest(
@@ -214,7 +230,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.DelegateStakeRequest",
                 msgs=[ msg ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
     async def create_topic(
