@@ -14,7 +14,8 @@ class FunctionRegistry:
 
     def register(self, name: str, callback: Callable[..., Any]) -> None:
         """Register a callback under a stable symbolic name."""
-        if not name.strip():
+        name = name.strip()
+        if not name:
             raise ValueError("registry name cannot be empty")
         self._callbacks[name] = callback
 

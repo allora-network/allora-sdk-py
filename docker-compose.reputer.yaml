@@ -14,8 +14,8 @@ services:
   ground-truth-api:
     image: your-ground-truth-provider:latest   # replace with your image
     container_name: ground_truth_provider
-    ports:
-      - "8001:8001"
+    expose:
+      - "8001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s
@@ -27,8 +27,8 @@ services:
   loss-function-api:
     image: alloranetwork/allora-standard-loss-functions:latest
     container_name: loss_function_service
-    ports:
-      - "8002:8002"
+    expose:
+      - "8002"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s

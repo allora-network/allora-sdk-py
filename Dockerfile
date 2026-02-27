@@ -1,10 +1,18 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-COPY . /app
-RUN pip install --no-cache-dir . \
-    && adduser --disabled-password --no-create-home worker
+COPY pyproject.toml uv.lock* README.md ./
+COPY src/ src/
+
+RUN pip install --no-cache-dir .
+
+FROM python:3.12-slim
+
+RUN adduser --disabled-password --no-create-home --gecos "" worker
+
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin/allora-worker /usr/local/bin/allora-worker
 
 USER worker
 

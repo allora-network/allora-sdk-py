@@ -9,3 +9,11 @@ skills-lock.json
 .cursor
 tests
 proto-deps
+.env*
+secrets/
+dist/
+build/
+*.egg-info
+.mypy_cache
+.pytest_cache
+.ruff_cache

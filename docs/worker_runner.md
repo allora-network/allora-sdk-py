@@ -142,12 +142,15 @@ Your `run_ref` Python callable should call the model service internally:
 
 ```python
 # app/inference/eth_model.py
-import os, httpx
+import os
+import aiohttp
 
 async def predict() -> str:
     url = os.environ.get("MODEL_API_URL", "http://model-api:8000")
-    resp = httpx.get(f"{url}/predict")
-    return resp.json()["value"]
+    async with aiohttp.ClientSession() as session:
+        resp = await session.get(f"{url}/predict")
+        data = await resp.json()
+    return data["value"]
 ```
 
 ### Reputer with ground truth + loss function sidecars
@@ -172,12 +175,15 @@ Your `ground_truth_ref` callable should call the ground truth service:
 
 ```python
 # app/gt/eth_ground_truth.py
-import os, httpx
+import os
+import aiohttp
 
 async def get_value() -> float:
     url = os.environ.get("GROUND_TRUTH_API_URL", "http://ground-truth-api:8001")
-    resp = httpx.get(f"{url}/truth")
-    return float(resp.json()["value"])
+    async with aiohttp.ClientSession() as session:
+        resp = await session.get(f"{url}/truth")
+        data = await resp.json()
+    return float(data["value"])
 ```
 
 #### External loss function sidecar (allora-standard-loss-functions)

@@ -57,6 +57,7 @@ class WorkerManager:
         self.sequence_allocator = SharedAccountSequenceAllocator()
         self._managed_workers: list[ManagedWorker] = []
         self._stopped = False
+        self._http_session: aiohttp.ClientSession | None = None
 
     def build_workers(self) -> list[ManagedWorker]:
         """Construct worker instances for all configured role/topic entries."""
@@ -174,15 +175,22 @@ class WorkerManager:
         try:
             await asyncio.gather(*tasks)
         finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await self.stop()
 
     async def stop(self) -> None:
-        """Stop all managed workers."""
+        """Stop all managed workers and release shared resources."""
         if self._stopped:
             return
         self._stopped = True
         for managed in self._managed_workers:
             managed.worker.stop()
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
 
     async def _run_worker_stream(self, managed: ManagedWorker) -> None:
         try:
@@ -267,9 +275,17 @@ class WorkerManager:
 
         return get_default_loss_fn(method)
 
+    def _get_http_session(self) -> aiohttp.ClientSession:
+        """Return a shared HTTP session, creating one if needed."""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
     def _build_external_loss_fn(
         self, cfg: ExternalServiceLossConfig, topic_id: int
     ) -> Callable[[float, float], Any]:
+        manager = self
+
         async def external_loss(ground_truth: float, predicted: float) -> float:
             context = {
                 "topic_id": topic_id,
@@ -287,42 +303,46 @@ class WorkerManager:
                 payload = context
 
             timeout = aiohttp.ClientTimeout(total=cfg.timeout_seconds)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                if cfg.method == "GET":
-                    response = await session.get(
-                        cfg.endpoint, params=_stringify_shallow_dict(payload)
-                    )
-                else:
-                    response = await session.post(cfg.endpoint, json=payload)
-
-                body_text = await response.text()
-                if response.status >= 400:
-                    raise ValueError(
-                        f"loss service call failed status={response.status} endpoint={cfg.endpoint} body={body_text}"
-                    )
-
-                try:
-                    body_json = json.loads(body_text)
-                except (json.JSONDecodeError, ValueError):
-                    try:
-                        return float(body_text.strip())
-                    except ValueError as err:
-                        raise ValueError(
-                            f"loss service returned non-numeric body: {body_text[:200]}"
-                        ) from err
-
-                if isinstance(body_json, (int, float)):
-                    return float(body_json)
-
-                if isinstance(body_json, dict):
-                    if "loss" in body_json:
-                        return float(body_json["loss"])
-                    if "value" in body_json:
-                        return float(body_json["value"])
-
-                raise ValueError(
-                    "loss service response must be numeric or include 'loss'/'value' key"
+            session = manager._get_http_session()
+            if cfg.method == "GET":
+                response = await session.get(
+                    cfg.endpoint,
+                    params=_stringify_shallow_dict(payload),
+                    timeout=timeout,
                 )
+            else:
+                response = await session.post(
+                    cfg.endpoint, json=payload, timeout=timeout
+                )
+
+            body_text = await response.text()
+            if response.status >= 400:
+                raise ValueError(
+                    f"loss service call failed status={response.status} endpoint={cfg.endpoint} body={body_text}"
+                )
+
+            try:
+                body_json = json.loads(body_text)
+            except (json.JSONDecodeError, ValueError):
+                try:
+                    return float(body_text.strip())
+                except ValueError as err:
+                    raise ValueError(
+                        f"loss service returned non-numeric body: {body_text[:200]}"
+                    ) from err
+
+            if isinstance(body_json, (int, float)):
+                return float(body_json)
+
+            if isinstance(body_json, dict):
+                if "loss" in body_json:
+                    return float(body_json["loss"])
+                if "value" in body_json:
+                    return float(body_json["value"])
+
+            raise ValueError(
+                "loss service response must be numeric or include 'loss'/'value' key"
+            )
 
         return external_loss
 
