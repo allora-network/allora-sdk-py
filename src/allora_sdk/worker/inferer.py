@@ -49,6 +49,23 @@ TInfererRunFn = TRunFn[TInfererRunFnResult]
 
 
 class Inferer:
+    """
+    Inferer use-case: runs a user-supplied prediction function for each open
+    nonce and submits the result on-chain.
+
+    Optionally performs a sanity check (z-score comparison against the network
+    consensus) and auto-stakes rewards to a reputer or validator.
+
+    Args:
+        wallet: Signing wallet for transactions.
+        client: RPC client for chain queries and transaction submission.
+        topic_id: Allora topic to submit inferences on.
+        run: Callback that returns the predicted value for a given nonce.
+        fee_tier: Transaction fee tier (ECO / STANDARD / PRIORITY).
+        autostake: Optional auto-stake configuration for rewards.
+        sanity_check: Optional sanity-check configuration (enabled by default).
+    """
+
     def __init__(
         self,
         wallet: LocalWallet,
