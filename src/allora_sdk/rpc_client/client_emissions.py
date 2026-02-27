@@ -20,7 +20,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
@@ -100,7 +100,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         if inference_value is None and not forecast_elements:
             raise ValueError("At least one of inference_value or forecast_elements must be provided.")
@@ -223,7 +223,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         sender_address = str(self._txs.wallet.address())
 
@@ -265,7 +265,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         reputer_address = str(self._txs.wallet.address())
 
@@ -340,7 +340,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         creator_address = str(self._txs.wallet.address())
 
@@ -389,7 +389,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         sender_address = str(self._txs.wallet.address())
 
@@ -425,7 +425,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         sender_address = str(self._txs.wallet.address())
 
@@ -461,7 +461,7 @@ class EmissionsTxs:
             PendingTx object that can be awaited for the result
         """
         if not self._txs:
-            raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         sender_address = str(self._txs.wallet.address())
 
