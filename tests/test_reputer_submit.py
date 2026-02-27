@@ -11,7 +11,7 @@ from allora_sdk.worker.types import AlreadySubmittedError
 
 def _make_wallet() -> Mock:
     wallet = Mock()
-    wallet.address.return_value = Mock(__str__=lambda: "allo1reputer")
+    wallet.address.return_value = "allo1reputer"
     return wallet
 
 
