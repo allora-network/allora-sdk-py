@@ -1,7 +1,7 @@
 from decimal import Decimal
 import logging
 import math
-from typing import Awaitable, Callable, List, Optional, Union
+from typing import List, Optional, Union
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -29,13 +29,13 @@ from allora_sdk.loss_methods.defaults import (
 )
 from allora_sdk.loss_methods.squared_error import squared_error_loss
 from allora_sdk.utils.format import uallo_to_allo
-from allora_sdk.worker.types import AlreadySubmittedError, UseCase, WorkerResult
+from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
 
 logger = logging.getLogger("allora_sdk")
 
-# (epoch) -> ground_truth
-GroundTruthFn = Union[Callable[[int], Union[str, float, Decimal]], Callable[[int], Awaitable[Union[str, float, Decimal]]]]
+GroundTruthFnResult = Union[str, float, Decimal]
+GroundTruthFn = TRunFn[GroundTruthFnResult]
 
 
 class Reputer:
