@@ -15,6 +15,9 @@ from .autostake import (
     InvalidAutoStakeConfigError,
 )
 from .inferer import SanityCheckConfig
+from .runner_config import WorkerRunnerConfig
+from .function_registry import FunctionRegistry
+from .worker_manager import WorkerManager
 
 # Backward compatibility alias
 default_squared_error_loss = squared_error_loss
@@ -27,4 +30,7 @@ __all__ = [
     "AutoStakeTargetType",
     "InvalidAutoStakeConfigError",
     "SanityCheckConfig",
+    "WorkerRunnerConfig",
+    "FunctionRegistry",
+    "WorkerManager",
 ]

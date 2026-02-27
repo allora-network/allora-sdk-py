@@ -1,0 +1,11 @@
+.git
+.venv
+.tox
+__pycache__
+*.pyc
+.agents
+skills
+skills-lock.json
+.cursor
+tests
+proto-deps

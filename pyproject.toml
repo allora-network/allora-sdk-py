@@ -42,6 +42,7 @@ dependencies = [
     "dill",
     "matplotlib",
     "requests-async>=0.2.4",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,7 @@ codegen = [
 [project.scripts]
 allora-export-txs = "allora_sdk.tools.export_txs_to_csv:main"
 allora-topic-lifecycle-visualizer = "allora_sdk.tools.topic_lifecycle_visualizer:main"
+allora-worker = "allora_sdk.worker.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/allora-network/allora-sdk-py"

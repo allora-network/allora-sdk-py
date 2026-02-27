@@ -15,6 +15,8 @@ logger = logging.getLogger("allora_sdk")
 def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
     wallet_prefix = wallet.prefix if wallet else "allo"
     if wallet:
+        if wallet.wallet:
+            return wallet.wallet
         if wallet.private_key:
             return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
         if wallet.mnemonic:

@@ -1,0 +1,17 @@
+# Basic single-container deployment.
+# Runs all roles configured in worker_config.yaml with one shared wallet.
+#
+# Usage:
+#   docker compose -f docker-compose.worker.yaml up -d
+#   docker compose -f docker-compose.worker.yaml logs -f allora-worker
+services:
+  allora-worker:
+    build: .
+    image: allora-sdk-worker:latest
+    command: ["run", "--config", "/app/worker_config.yaml"]
+    volumes:
+      - ./worker_config.example.yaml:/app/worker_config.yaml:ro
+      - ./secrets/allora_mnemonic:/run/secrets/allora_mnemonic:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
