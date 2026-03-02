@@ -1,4 +1,5 @@
 import inspect
+import logging
 import os
 from getpass import getpass
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar, Union, cast
@@ -7,6 +8,8 @@ from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetNodeInfoRequest
+
+logger = logging.getLogger("allora_sdk")
 
 
 def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
@@ -27,7 +30,7 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
             mnemonic = f.read().strip()
             return LocalWallet.from_mnemonic(mnemonic, wallet_prefix)
     else:
-        print("Enter your Allora wallet mnemonic or press <ENTER> to have one generated for you.")
+        logger.warning("No mnemonic or private key provided. Enter your Allora wallet mnemonic or press <ENTER> to have one generated for you.")
         mnemonic = getpass("Mnemonic: ").strip()
         if not mnemonic:
             mnemonic = generate_mnemonic()
@@ -35,7 +38,7 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
         fd = os.open(mnemonic_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(mnemonic)
-        print(f"Mnemonic saved to {mnemonic_file}")
+        logger.warning("Mnemonic saved to %s (file permissions: 0600)", mnemonic_file)
         return LocalWallet.from_mnemonic(mnemonic, wallet_prefix)
 
 
