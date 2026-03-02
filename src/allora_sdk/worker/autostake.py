@@ -380,7 +380,7 @@ async def process_autostake_rewards_settled(
 
     except Exception as e:
         logger.error(f"[AUTO-STAKE] Failed to autostake rewards: {e}")
-        return None
+        return autostake_key
 
     return autostake_key
 

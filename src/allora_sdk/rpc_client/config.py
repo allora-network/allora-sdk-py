@@ -54,7 +54,7 @@ class AlloraNetworkConfig:
     fee_minimum_gas_price: float = 10.0
     faucet_url: Optional[str] = None
     use_dynamic_gas_price: bool = True
-    dynamic_gas_price_default_multiplier: float = 10.0
+    dynamic_gas_price_default_multiplier: float = 3.0
     gas_price_cache_ttl_secs: int = 30
     congestion_aware_fees: bool = False
     query_timeout_secs: int = 10
@@ -69,7 +69,7 @@ class AlloraNetworkConfig:
         fee_denom="uallo",
         fee_minimum_gas_price=10.0,
         use_dynamic_gas_price=True,
-        dynamic_gas_price_default_multiplier=10.0,
+        dynamic_gas_price_default_multiplier=3.0,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
     ) -> 'AlloraNetworkConfig':
@@ -95,7 +95,7 @@ class AlloraNetworkConfig:
         fee_denom="uallo",
         fee_minimum_gas_price=250_000_000.0,
         use_dynamic_gas_price=True,
-        dynamic_gas_price_default_multiplier=10.0,
+        dynamic_gas_price_default_multiplier=3.0,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
     ) -> 'AlloraNetworkConfig':
@@ -119,7 +119,7 @@ class AlloraNetworkConfig:
         fee_denom="uallo",
         fee_minimum_gas_price=1.0,
         use_dynamic_gas_price=False,
-        dynamic_gas_price_default_multiplier=10.0,
+        dynamic_gas_price_default_multiplier=3.0,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
         query_timeout_secs=30,

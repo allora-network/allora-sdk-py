@@ -7,7 +7,7 @@ and graceful resource cleanup for submitting predictions to Allora network topic
 """
 
 from .worker import AlloraWorker
-from .reputer import LossFn
+from allora_sdk.loss_methods.defaults import LossFn
 from allora_sdk.loss_methods.squared_error import squared_error_loss
 from .autostake import (
     AutoStakeConfig,
