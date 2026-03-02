@@ -183,7 +183,6 @@ class Reputer:
         reputer_request_nonce = ReputerRequestNonce(
             reputer_nonce=Nonce(block_height=nonce),
         )
-        loss_bundle.reputer_request_nonce = reputer_request_nonce
         loss_bundle.reputer = sender
 
         try:

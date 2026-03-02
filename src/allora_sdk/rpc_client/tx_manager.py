@@ -74,6 +74,7 @@ class FeeTier(Enum):
 class TxError(Exception):
     """Base exception for transaction errors."""
     def __init__(self, codespace: str, code: int, message: str, tx_hash: Optional[str] = None):
+        super().__init__(message)
         self.codespace = codespace
         self.code = code
         self.message = message
