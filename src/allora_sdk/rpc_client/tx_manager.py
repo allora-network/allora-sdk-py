@@ -101,6 +101,10 @@ class AccountSequenceMismatchError(Exception):
     """Raised when account sequence is out of sync."""
     pass
 
+class WalletNotConfiguredError(Exception):
+    """Raised when a transaction method is called without a configured wallet."""
+    pass
+
 class TxNotFoundError(Exception):
     pass
 

@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from enum import Enum
 from typing import Any, Iterable
 
+from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     EventRewardsSettled,
     IsReputerRegisteredInTopicIdRequest,
@@ -304,6 +305,22 @@ async def process_autostake_rewards_settled(
             autostake.fee_reserve_uallo,
         )
         return None
+
+    # Check wallet balance before attempting delegation
+    try:
+        bal_resp = await client.bank.query.balance(
+            QueryBalanceRequest(address=wallet_addr, denom=client.network.fee_denom)
+        )
+        available = int(bal_resp.balance.amount) if bal_resp.balance else 0
+        if available < stake_amount_uallo:
+            logger.warning(
+                "[AUTO-STAKE] Insufficient balance: have %d uallo, need %d uallo. Skipping.",
+                available,
+                stake_amount_uallo,
+            )
+            return None
+    except Exception as e:
+        logger.warning("[AUTO-STAKE] Could not verify balance (%s), proceeding anyway.", e)
 
     logger.info(
         "[AUTO-STAKE] %s rewards settled: topic=%s nonce=%s payout_height_tx=%s reward_uallo=%s stake_amount_uallo=%s target=%s:%s",
