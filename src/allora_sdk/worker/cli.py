@@ -51,7 +51,15 @@ def _validate_config(path: Path) -> None:
         manager = WorkerManager(config=config)
         for line in manager.startup_summary():
             print(line)
-    except Exception as err:
+    except (
+        FileNotFoundError,
+        ValueError,
+        RuntimeError,
+        KeyError,
+        ImportError,
+        AttributeError,
+        TypeError,
+    ) as err:
         print(f"config validation failed: {err}", file=sys.stderr)
         sys.exit(1)
 
@@ -65,7 +73,15 @@ async def _run_config(path: Path) -> None:
         print("starting worker manager with configuration:")
         for line in manager.startup_summary():
             print(line)
-    except Exception as err:
+    except (
+        FileNotFoundError,
+        ValueError,
+        RuntimeError,
+        KeyError,
+        ImportError,
+        AttributeError,
+        TypeError,
+    ) as err:
         print(f"config load failed: {err}", file=sys.stderr)
         sys.exit(1)
 

@@ -31,6 +31,7 @@ class FunctionRegistry:
         return self.resolve_registry_name(ref)
 
     def resolve_registry_name(self, name: str) -> Callable[..., Any]:
+        name = name.strip()
         callback = self._callbacks.get(name)
         if callback is None:
             raise KeyError(f"no callback registered for '{name}'")
