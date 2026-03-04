@@ -726,8 +726,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         new_nonces_str = f"{new_nonces}" if len(new_nonces) > 0 else "-"
         logger.info(f"   Topic {self.topic_id}: unfulfilled nonces: {nonces_str}")
         logger.info(f"   Our unfulfilled nonces: {new_nonces_str}")
+        sequence_mismatch = False
 
         async def submit(nonce: int, account_seq: int):
+            nonlocal sequence_mismatch
             result = None
             try:
                 result = await self.use_case.submit(nonce, account_seq)
@@ -742,6 +744,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         f"❌ Error submitting for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}"
                     )
                     if self._is_sequence_mismatch_error(result):
+                        sequence_mismatch = True
                         await self._reset_sequence_allocator()
                     self.submitted_nonces.add(nonce)
 
@@ -754,6 +757,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     logger.warning(
                         f"⚠️ Account sequence mismatch for nonce {nonce}, resetting sequence cache"
                     )
+                    sequence_mismatch = True
                     await self._reset_sequence_allocator()
 
                 elif isinstance(result, Exception):
@@ -787,6 +791,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
                 await self._log_balance()
                 await self._maybe_faucet_request()
+
+            except AccountSequenceMismatchError as err:
+                logger.warning(
+                    f"⚠️ Account sequence mismatch for nonce {nonce}, resetting sequence cache"
+                )
+                sequence_mismatch = True
+                await self._reset_sequence_allocator()
+                logger.error(f"❌ Error submitting for nonce {nonce}: {err}")
 
             except Exception as e:
                 logger.error(f"❌ Error submitting for nonce {nonce}: {e}")
@@ -828,7 +840,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             base_sequence = account_seq.info.sequence
 
         for i, nonce in enumerate(new_nonces):
-            if not self._ctx or self._ctx.is_cancelled():
+            if not self._ctx or self._ctx.is_cancelled() or sequence_mismatch:
                 break
 
             next_sequence = base_sequence + i

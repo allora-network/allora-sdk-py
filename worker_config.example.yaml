@@ -10,37 +10,72 @@ network:
   fee_minimum_gas_price: 10
 
 workers:
-  # Inferer: calls a Python function to produce inferences.
+  # ── Inferer (Python entrypoint) ────────────────────────────────────────
   - role: inferer
     topic_id: 22
     fee_tier: standard
     polling_interval: 120
-    run_ref: app.inference.eth_model:predict
+    inference_source:
+      type: entrypoint
+      ref: app.inference.eth_model:predict
 
-  # Forecaster: calls a Python function to produce forecasts.
+  # ── Inferer (HTTP API) ─────────────────────────────────────────────────
+  # Calls a sidecar model container and extracts the "value" key.
+  - role: inferer
+    topic_id: 23
+    fee_tier: standard
+    polling_interval: 120
+    inference_source:
+      type: api
+      url: http://model-api:8000/inference?block={nonce}
+      method: GET
+      response_field: value
+
+  # ── Forecaster (Python entrypoint) ─────────────────────────────────────
   - role: forecaster
     topic_id: 22
     fee_tier: standard
     polling_interval: 30
-    run_ref: app.forecasts.eth_forecaster:run
+    forecast_source:
+      type: entrypoint
+      ref: app.forecasts.eth_forecaster:run
 
-  # Reputer (internal loss): SDK auto-selects the loss method from on-chain config.
+  # ── Forecaster (HTTP API, POST) ────────────────────────────────────────
+  - role: forecaster
+    topic_id: 23
+    fee_tier: standard
+    polling_interval: 30
+    forecast_source:
+      type: api
+      url: http://forecast-api:8000/forecast
+      method: POST
+      response_field: forecasts
+      timeout_seconds: 15
+      payload_template:
+        block_height: "{nonce}"
+
+  # ── Reputer (entrypoint + internal auto loss) ──────────────────────────
   - role: reputer
     topic_id: 22
     fee_tier: standard
     polling_interval: 30
-    ground_truth_ref: app.gt.eth_ground_truth:get_value
+    ground_truth_source:
+      type: entrypoint
+      ref: app.gt.eth_ground_truth:get_value
     min_stake_uallo: 100000000
     loss_function:
       mode: internal_auto
 
-  # Reputer (external loss): delegates loss computation to a sidecar HTTP service
-  # (e.g. allora-standard-loss-functions or a custom container).
+  # ── Reputer (API ground truth + external loss service) ─────────────────
   - role: reputer
     topic_id: 23
     fee_tier: priority
     polling_interval: 30
-    ground_truth_ref: app.gt.eth_ground_truth:get_value
+    ground_truth_source:
+      type: api
+      url: http://truth-api:8001/ground-truth?block={nonce}
+      method: GET
+      response_field: value
     min_stake_uallo: 100000000
     loss_function:
       mode: external_service

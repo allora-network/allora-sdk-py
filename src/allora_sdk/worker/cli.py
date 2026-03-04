@@ -11,6 +11,16 @@ from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.runner_config import WorkerRunnerConfig
 from allora_sdk.worker.worker_manager import WorkerManager
 
+_CONFIG_ERRORS = (
+    FileNotFoundError,
+    ValueError,
+    RuntimeError,
+    KeyError,
+    ImportError,
+    AttributeError,
+    TypeError,
+)
+
 
 def main() -> None:
     """Execute the worker runner CLI."""
@@ -51,16 +61,11 @@ def _validate_config(path: Path) -> None:
         manager = WorkerManager(config=config)
         for line in manager.startup_summary():
             print(line)
-    except (
-        FileNotFoundError,
-        ValueError,
-        RuntimeError,
-        KeyError,
-        ImportError,
-        AttributeError,
-        TypeError,
-    ) as err:
-        print(f"config validation failed: {err}", file=sys.stderr)
+    except _CONFIG_ERRORS as err:
+        print(
+            f"config validation failed: {type(err).__name__}: {err}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print("config validation succeeded")
@@ -73,16 +78,11 @@ async def _run_config(path: Path) -> None:
         print("starting worker manager with configuration:")
         for line in manager.startup_summary():
             print(line)
-    except (
-        FileNotFoundError,
-        ValueError,
-        RuntimeError,
-        KeyError,
-        ImportError,
-        AttributeError,
-        TypeError,
-    ) as err:
-        print(f"config load failed: {err}", file=sys.stderr)
+    except _CONFIG_ERRORS as err:
+        print(
+            f"config load failed: {type(err).__name__}: {err}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     await manager.run()

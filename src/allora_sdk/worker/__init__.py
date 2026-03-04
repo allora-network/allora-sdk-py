@@ -15,6 +15,13 @@ from .autostake import (
     InvalidAutoStakeConfigError,
 )
 from .inferer import SanityCheckConfig
+from .api_source import (
+    APISourceConfig,
+    make_api_forecaster_fn,
+    make_api_ground_truth_fn,
+    make_api_inferer_fn,
+    make_api_run_fn,
+)
 from .runner_config import WorkerRunnerConfig
 from .function_registry import FunctionRegistry
 from .worker_manager import WorkerManager
@@ -30,6 +37,11 @@ __all__ = [
     "AutoStakeTargetType",
     "InvalidAutoStakeConfigError",
     "SanityCheckConfig",
+    "APISourceConfig",
+    "make_api_inferer_fn",
+    "make_api_forecaster_fn",
+    "make_api_ground_truth_fn",
+    "make_api_run_fn",
     "WorkerRunnerConfig",
     "FunctionRegistry",
     "WorkerManager",

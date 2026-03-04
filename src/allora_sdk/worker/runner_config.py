@@ -115,6 +115,46 @@ LossFunctionConfig = Annotated[
 ]
 
 
+# ── Data source configs (shared by all roles) ───────────────────────────
+
+
+class EntrypointSourceConfig(BaseModel):
+    """Source data from a Python callable via import path."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["entrypoint"] = "entrypoint"
+    ref: str = Field(min_length=1)
+
+
+class APIEndpointSourceConfig(BaseModel):
+    """Source data from an HTTP API endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["api"] = "api"
+    url: str = Field(min_length=1)
+    method: Literal["GET", "POST"] = "GET"
+    response_field: str = "value"
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = 10.0
+    payload_template: dict[str, str] | None = None
+
+
+InferenceSource = Annotated[
+    EntrypointSourceConfig | APIEndpointSourceConfig,
+    Field(discriminator="type"),
+]
+
+ForecastSource = Annotated[
+    EntrypointSourceConfig | APIEndpointSourceConfig,
+    Field(discriminator="type"),
+]
+
+GroundTruthSource = Annotated[
+    EntrypointSourceConfig | APIEndpointSourceConfig,
+    Field(discriminator="type"),
+]
+
+
 class BaseWorkerEntry(BaseModel):
     """Common worker entry fields."""
 
@@ -131,21 +171,21 @@ class InfererWorkerEntry(BaseWorkerEntry):
     """Inferer worker entry."""
 
     role: Literal["inferer"] = "inferer"
-    run_ref: str = Field(min_length=1)
+    inference_source: InferenceSource
 
 
 class ForecasterWorkerEntry(BaseWorkerEntry):
     """Forecaster worker entry."""
 
     role: Literal["forecaster"] = "forecaster"
-    run_ref: str = Field(min_length=1)
+    forecast_source: ForecastSource
 
 
 class ReputerWorkerEntry(BaseWorkerEntry):
     """Reputer worker entry."""
 
     role: Literal["reputer"] = "reputer"
-    ground_truth_ref: str = Field(min_length=1)
+    ground_truth_source: GroundTruthSource
     min_stake_uallo: int | None = Field(default=None, ge=0)
     loss_function: LossFunctionConfig = Field(default_factory=InternalAutoLossConfig)
 

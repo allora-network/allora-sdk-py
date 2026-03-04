@@ -36,16 +36,22 @@ Each worker entry requires:
 
 Role-specific fields:
 
-- **inferer**: `run_ref` — Python callable that returns an inference value
-- **forecaster**: `run_ref` — Python callable that returns forecasts
-- **reputer**: `ground_truth_ref`, optional `min_stake_uallo`, optional `loss_function`
+- **inferer**: `inference_source` — where to get inference data
+- **forecaster**: `forecast_source` — where to get forecast data
+- **reputer**: `ground_truth_source`, optional `min_stake_uallo`, optional `loss_function`
 
-### Callable references (`run_ref`, `ground_truth_ref`)
+### Data sources (`inference_source`, `forecast_source`, `ground_truth_source`)
 
-The runner resolves Python callables by import path:
+Each role has a source block that specifies where data comes from. Two types are supported:
+
+#### `type: entrypoint` — Python callable
+
+Resolves a Python callable by import path:
 
 ```yaml
-run_ref: "my_package.models.eth:predict"   # imports my_package.models.eth, calls predict()
+inference_source:
+  type: entrypoint
+  ref: "my_package.models.eth:predict"   # imports my_package.models.eth, calls predict()
 ```
 
 You can also register named callables programmatically when using the Python API:
@@ -58,6 +64,42 @@ registry.register("my_predictor", predict_fn)
 
 config = WorkerRunnerConfig.from_file("worker_config.yaml")
 manager = WorkerManager(config=config, registry=registry)
+```
+
+#### `type: api` — HTTP endpoint
+
+Calls an HTTP API and extracts the result from the JSON response:
+
+```yaml
+inference_source:
+  type: api
+  url: http://model-api:8000/inference?block={nonce}
+  method: GET
+  response_field: value
+  timeout_seconds: 10
+```
+
+**API source configuration:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `url` | *(required)* | Endpoint URL. `{nonce}` is replaced with the block height. |
+| `method` | `GET` | HTTP method (`GET` or `POST`) |
+| `response_field` | `value` | JSON key to extract from the response |
+| `headers` | `{}` | Extra HTTP headers |
+| `timeout_seconds` | `10` | Per-request timeout |
+| `payload_template` | — | POST body template. Values may contain `{nonce}`. |
+
+For POST requests with a custom body:
+
+```yaml
+forecast_source:
+  type: api
+  url: http://forecast-api:8000/forecast
+  method: POST
+  response_field: forecasts
+  payload_template:
+    block_height: "{nonce}"
 ```
 
 ## Reputer loss modes
@@ -138,20 +180,19 @@ The compose file starts two containers:
 - **model-api** — your inference model service on port 8000
 - **allora-worker** — the SDK worker that calls the model
 
-Your `run_ref` Python callable should call the model service internally:
+Configure the worker to call the model service directly via the `type: api` source:
 
-```python
-# app/inference/eth_model.py
-import os
-import aiohttp
-
-async def predict() -> str:
-    url = os.environ.get("MODEL_API_URL", "http://model-api:8000")
-    async with aiohttp.ClientSession() as session:
-        resp = await session.get(f"{url}/predict")
-        data = await resp.json()
-    return data["value"]
+```yaml
+workers:
+  - role: inferer
+    topic_id: 22
+    inference_source:
+      type: api
+      url: http://model-api:8000/inference?block={nonce}
+      response_field: value
 ```
+
+No Python wrapper code is needed — the SDK handles the HTTP call.
 
 ### Reputer with ground truth + loss function sidecars
 
@@ -171,19 +212,17 @@ The compose file starts three containers:
 
 #### Ground truth sidecar
 
-Your `ground_truth_ref` callable should call the ground truth service:
+Configure the worker to call the ground truth service via `type: api`:
 
-```python
-# app/gt/eth_ground_truth.py
-import os
-import aiohttp
-
-async def get_value() -> float:
-    url = os.environ.get("GROUND_TRUTH_API_URL", "http://ground-truth-api:8001")
-    async with aiohttp.ClientSession() as session:
-        resp = await session.get(f"{url}/truth")
-        data = await resp.json()
-    return float(data["value"])
+```yaml
+workers:
+  - role: reputer
+    topic_id: 22
+    ground_truth_source:
+      type: api
+      url: http://ground-truth-api:8001/truth?block={nonce}
+      response_field: value
+    min_stake_uallo: 100000000
 ```
 
 #### External loss function sidecar (allora-standard-loss-functions)
@@ -240,9 +279,10 @@ To include your own Python modules (models, ground truth callables), either:
 | offchain-node concept | SDK equivalent |
 |----------------------|----------------|
 | Multiple service containers + node container | Single `allora-worker` container (+ optional sidecars) |
-| `inferenceEntrypointName` | `run_ref` on an `inferer` worker entry |
-| `forecastEntrypointName` | `run_ref` on a `forecaster` worker entry |
-| `groundTruthEntrypointName` | `ground_truth_ref` on a `reputer` worker entry |
+| `inferenceEntrypointName` | `inference_source` on an `inferer` worker entry |
+| `forecastEntrypointName` | `forecast_source` on a `forecaster` worker entry |
+| `groundTruthEntrypointName` | `ground_truth_source` on a `reputer` worker entry |
+| HTTP model service call (manual) | `inference_source: { type: api, url: ... }` (built-in) |
 | External loss function service | `loss_function.mode: external_service` |
 | `env_file` with wallet credentials | `wallet.mnemonic_file` pointing to a mounted secret |
 | One role per container | Multiple roles in one `workers[]` list |

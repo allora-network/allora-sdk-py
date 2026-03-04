@@ -18,8 +18,16 @@ from allora_sdk.loss_methods import (
     make_zptae_loss,
     make_ztae_loss,
 )
+from allora_sdk.worker.api_source import (
+    APISourceConfig,
+    make_api_forecaster_fn,
+    make_api_ground_truth_fn,
+    make_api_inferer_fn,
+)
 from allora_sdk.worker.function_registry import FunctionRegistry
 from allora_sdk.worker.runner_config import (
+    APIEndpointSourceConfig,
+    EntrypointSourceConfig,
     ExternalServiceLossConfig,
     ForecasterWorkerEntry,
     InfererWorkerEntry,
@@ -69,7 +77,9 @@ class WorkerManager:
 
         for entry in self.config.workers:
             if isinstance(entry, InfererWorkerEntry):
-                run_fn = self.registry.resolve(entry.run_ref)
+                run_fn = self._resolve_source(
+                    entry.inference_source, make_api_inferer_fn
+                )
                 worker = AlloraWorker.inferer(
                     run=run_fn,
                     wallet=wallet_config,
@@ -90,7 +100,9 @@ class WorkerManager:
                 continue
 
             if isinstance(entry, ForecasterWorkerEntry):
-                run_fn = self.registry.resolve(entry.run_ref)
+                run_fn = self._resolve_source(
+                    entry.forecast_source, make_api_forecaster_fn
+                )
                 worker = AlloraWorker.forecaster(
                     run=run_fn,
                     wallet=wallet_config,
@@ -111,7 +123,9 @@ class WorkerManager:
                 continue
 
             if isinstance(entry, ReputerWorkerEntry):
-                ground_truth_fn = self.registry.resolve(entry.ground_truth_ref)
+                ground_truth_fn = self._resolve_source(
+                    entry.ground_truth_source, make_api_ground_truth_fn
+                )
                 loss_fn = self._resolve_loss_fn(entry)
                 worker = AlloraWorker.reputer(
                     ground_truth_fn=ground_truth_fn,
@@ -218,6 +232,26 @@ class WorkerManager:
                 err,
             )
             raise
+
+    def _resolve_source(
+        self,
+        source: EntrypointSourceConfig | APIEndpointSourceConfig,
+        api_factory: Callable[..., Any],
+    ) -> Any:
+        """Resolve a *_source config into a callable."""
+        if isinstance(source, EntrypointSourceConfig):
+            return self.registry.resolve(source.ref)
+        return api_factory(
+            APISourceConfig(
+                url=source.url,
+                method=source.method,
+                response_field=source.response_field,
+                headers=source.headers,
+                timeout_seconds=source.timeout_seconds,
+                payload_template=source.payload_template,
+            ),
+            response_field=source.response_field,
+        )
 
     def _resolve_loss_fn(
         self, entry: ReputerWorkerEntry
