@@ -60,7 +60,7 @@ class RunnerNetworkConfig(BaseModel):
     fee_minimum_gas_price: float = 10.0
     faucet_url: str | None = None
     use_dynamic_gas_price: bool = True
-    dynamic_gas_price_default_multiplier: float = 10.0
+    dynamic_gas_price_default_multiplier: float = 3.0
     gas_price_cache_ttl_secs: int = 30
     congestion_aware_fees: bool = False
     query_timeout_secs: int = 10
