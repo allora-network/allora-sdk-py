@@ -250,7 +250,7 @@ class WorkerManager:
                 timeout_seconds=source.timeout_seconds,
                 payload_template=source.payload_template,
             ),
-            response_field=source.response_field,
+            session_factory=self._get_http_session,
         )
 
     def _resolve_loss_fn(

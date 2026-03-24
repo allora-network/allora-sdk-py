@@ -38,36 +38,51 @@ class APISourceConfig:
 
     url: str
     method: str = "GET"
-    response_field: str = "value"
+    response_field: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: float = 10.0
     payload_template: dict[str, str] | None = None
 
 
-async def _fetch_api_response(config: APISourceConfig, nonce: int) -> Any:
+async def _fetch_api_response(
+    config: APISourceConfig,
+    nonce: int,
+    session: aiohttp.ClientSession | None = None,
+) -> Any:
     """Perform the HTTP call and return parsed JSON."""
     url = config.url.format(nonce=nonce)
     timeout = aiohttp.ClientTimeout(total=config.timeout_seconds)
+    owns_session = session is None
+    session = session or aiohttp.ClientSession()
 
-    async with aiohttp.ClientSession(headers=config.headers) as session:
+    try:
         if config.method.upper() == "POST":
             payload = (
                 {k: v.format(nonce=nonce) for k, v in config.payload_template.items()}
                 if config.payload_template
                 else {"nonce": nonce}
             )
-            async with session.post(url, json=payload, timeout=timeout) as resp:
+            async with session.post(
+                url,
+                json=payload,
+                headers=config.headers,
+                timeout=timeout,
+            ) as resp:
                 resp.raise_for_status()
                 return await resp.json()
-        else:
-            async with session.get(url, timeout=timeout) as resp:
-                resp.raise_for_status()
-                return await resp.json()
+
+        async with session.get(url, headers=config.headers, timeout=timeout) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+    finally:
+        if owns_session:
+            await session.close()
 
 
 def make_api_run_fn(
     config: APISourceConfig,
     parse_response: ResponseAdapter[T],
+    session_factory: Callable[[], aiohttp.ClientSession] | None = None,
 ) -> Callable[[int], Awaitable[T]]:
     """Generic factory: HTTP fetch + response adapter -> run callable.
 
@@ -84,10 +99,24 @@ def make_api_run_fn(
     """
 
     async def run(nonce: int) -> T:
-        data = await _fetch_api_response(config, nonce)
+        session = session_factory() if session_factory is not None else None
+        data = await _fetch_api_response(config, nonce, session=session)
         return parse_response(data)
 
     return run
+
+
+def _resolve_response_field(
+    config: APISourceConfig,
+    response_field: str | None,
+    default_response_field: str,
+) -> str:
+    """Resolve the explicit, config-driven, or role-specific response field."""
+    if response_field is not None:
+        return response_field
+    if config.response_field is not None:
+        return config.response_field
+    return default_response_field
 
 
 def _parse_scalar(data: Any, response_field: str) -> str:
@@ -124,7 +153,8 @@ def _parse_forecasts(data: Any, response_field: str) -> dict[str, float]:
 
 def make_api_inferer_fn(
     config: APISourceConfig,
-    response_field: str = "value",
+    response_field: str | None = None,
+    session_factory: Callable[[], aiohttp.ClientSession] | None = None,
 ) -> Callable[[int], Awaitable[str]]:
     """Create an inferer run function that fetches predictions from an HTTP API.
 
@@ -135,12 +165,18 @@ def make_api_inferer_fn(
     Returns:
         Async callable compatible with ``AlloraWorker.inferer(run=...)``.
     """
-    return make_api_run_fn(config, lambda data: _parse_scalar(data, response_field))
+    response_field = _resolve_response_field(config, response_field, "value")
+    return make_api_run_fn(
+        config,
+        lambda data: _parse_scalar(data, response_field),
+        session_factory=session_factory,
+    )
 
 
 def make_api_forecaster_fn(
     config: APISourceConfig,
-    response_field: str = "forecasts",
+    response_field: str | None = None,
+    session_factory: Callable[[], aiohttp.ClientSession] | None = None,
 ) -> Callable[[int], Awaitable[dict[str, float]]]:
     """Create a forecaster run function that fetches forecasts from an HTTP API.
 
@@ -155,12 +191,18 @@ def make_api_forecaster_fn(
     Returns:
         Async callable compatible with ``AlloraWorker.forecaster(run=...)``.
     """
-    return make_api_run_fn(config, lambda data: _parse_forecasts(data, response_field))
+    response_field = _resolve_response_field(config, response_field, "forecasts")
+    return make_api_run_fn(
+        config,
+        lambda data: _parse_forecasts(data, response_field),
+        session_factory=session_factory,
+    )
 
 
 def make_api_ground_truth_fn(
     config: APISourceConfig,
-    response_field: str = "value",
+    response_field: str | None = None,
+    session_factory: Callable[[], aiohttp.ClientSession] | None = None,
 ) -> Callable[[int], Awaitable[str]]:
     """Create a ground truth function that fetches values from an HTTP API.
 
@@ -171,4 +213,9 @@ def make_api_ground_truth_fn(
     Returns:
         Async callable compatible with ``AlloraWorker.reputer(ground_truth_fn=...)``.
     """
-    return make_api_run_fn(config, lambda data: _parse_scalar(data, response_field))
+    response_field = _resolve_response_field(config, response_field, "value")
+    return make_api_run_fn(
+        config,
+        lambda data: _parse_scalar(data, response_field),
+        session_factory=session_factory,
+    )

@@ -369,7 +369,7 @@ workers:
 |-------|---------|-------------|
 | `url` | *(required)* | API endpoint URL. `{nonce}` is replaced with the block height. |
 | `method` | `GET` | HTTP method (`GET` or `POST`) |
-| `response_field` | `value` | JSON key to extract from the response |
+| `response_field` | role-specific | JSON key to extract from the response. Defaults to `value` for inferer and reputer sources, and `forecasts` for forecaster sources. |
 | `headers` | `{}` | Extra HTTP headers |
 | `timeout_seconds` | `10` | Per-request timeout |
 | `payload_template` | — | POST body template. Values may contain `{nonce}`. |
@@ -403,90 +403,56 @@ Press Ctrl-C once for graceful shutdown, twice to force exit.
 
 ## Production: Docker
 
-### All-in-one container
+Ready-to-run Docker examples are in the [`examples/`](../examples/) folder. Each example is self-contained — `cd` into it and run `docker compose up`.
 
-When your model logic is pure Python (no separate model server), run everything in one container.
+| Example | What it does |
+|---------|-------------|
+| [`examples/inferer-local/`](../examples/inferer-local/) | Inferer with a local Python function |
+| [`examples/inferer-api/`](../examples/inferer-api/) | Inferer with a sidecar model HTTP service |
+| [`examples/forecaster-local/`](../examples/forecaster-local/) | Forecaster with a local Python function |
+| [`examples/reputer-local/`](../examples/reputer-local/) | Reputer with a local ground truth function |
+| [`examples/reputer-api/`](../examples/reputer-api/) | Reputer with sidecar ground truth + external loss |
+| [`examples/multi-worker/`](../examples/multi-worker/) | All three roles in one config |
 
-**1. Store your mnemonic securely:**
+### Running any example
 
 ```bash
+# 1. Go to the example
+cd examples/inferer-local/
+
+# 2. Create your wallet secret (once)
 mkdir -p secrets
 echo "your twelve word mnemonic phrase here" > secrets/allora_mnemonic
 chmod 600 secrets/allora_mnemonic
-```
 
-**2. Build and run:**
+# 3. Build the SDK image (once, from repo root)
+docker build -t allora-sdk-worker:latest ../..
 
-```bash
-docker build -t allora-sdk-worker:latest .
-docker compose -f docker-compose.worker.yaml up -d
-docker compose -f docker-compose.worker.yaml logs -f allora-worker
-```
-
-To include your own Python code in the container, either mount it as a volume or extend the Dockerfile:
-
-```yaml
-# docker-compose override: mount your code
-volumes:
-  - ./app:/app/app:ro
+# 4. Run
+docker compose up -d
+docker compose logs -f allora-worker
 ```
 
 ### Inferer with a model sidecar
 
-When your inference model runs as a separate HTTP service (FastAPI, TF Serving, custom container, etc.), use the two-container setup:
-
-```bash
-docker compose -f docker-compose.inferer.yaml up -d
-```
-
-This starts:
-
-| Container | What it does | Port |
-|-----------|-------------|------|
-| **model-api** | Your inference model server | 8000 |
-| **allora-worker** | The SDK worker that calls your model and submits to the chain | -- |
-
-Configure the worker to call the model service directly via the `type: api` source:
+When your inference model runs as a separate HTTP service (FastAPI, TF Serving, custom container, etc.), use [`examples/inferer-api/`](../examples/inferer-api/). The worker calls your model over HTTP — no Python wrapper code needed:
 
 ```yaml
-workers:
-  - role: inferer
-    topic_id: 22
-    inference_source:
-      type: api
-      url: http://model-api:8000/inference?block={nonce}
-      response_field: value
+inference_source:
+  type: api
+  url: http://model-api:8000/inference?block={nonce}
+  response_field: value
 ```
-
-No Python wrapper code is needed — the SDK handles the HTTP call.
 
 ### Reputer with ground truth and loss sidecars
 
-For reputers that need external ground truth and/or loss computation services:
-
-```bash
-docker compose -f docker-compose.reputer.yaml up -d
-```
-
-This starts:
-
-| Container | What it does | Port |
-|-----------|-------------|------|
-| **ground-truth-api** | Provides real-world values (prices, outcomes, etc.) | 8001 |
-| **loss-function-api** | Computes loss (e.g. `allora-standard-loss-functions`) | 8002 |
-| **allora-worker** | The SDK worker that calls both services | -- |
-
-Configure the worker to call the ground truth service directly via the `type: api` source:
+For reputers that need external ground truth and/or loss computation services, use [`examples/reputer-api/`](../examples/reputer-api/). The worker calls the ground truth API directly:
 
 ```yaml
-workers:
-  - role: reputer
-    topic_id: 22
-    ground_truth_source:
-      type: api
-      url: http://ground-truth-api:8001/truth?block={nonce}
-      response_field: value
-    min_stake_uallo: 100000000
+ground_truth_source:
+  type: api
+  url: http://ground-truth-api:8001/truth?block={nonce}
+  response_field: value
 ```
 
 The loss function sidecar is configured separately in the same YAML entry:

@@ -17,7 +17,7 @@ allora-worker run --config ./worker_config.yaml --debug
 
 ## Config schema
 
-See `worker_config.example.yaml` for a complete reference. Top-level sections:
+See the [`examples/`](../examples/) folder for complete, ready-to-run configs. Top-level sections:
 
 - `wallet` – one wallet shared by all workers
 - `network` – chain and endpoint settings
@@ -85,7 +85,7 @@ inference_source:
 |-------|---------|-------------|
 | `url` | *(required)* | Endpoint URL. `{nonce}` is replaced with the block height. |
 | `method` | `GET` | HTTP method (`GET` or `POST`) |
-| `response_field` | `value` | JSON key to extract from the response |
+| `response_field` | role-specific | JSON key to extract from the response. Defaults to `value` for inferer and reputer sources, and `forecasts` for forecaster sources. |
 | `headers` | `{}` | Extra HTTP headers |
 | `timeout_seconds` | `10` | Per-request timeout |
 | `payload_template` | — | POST body template. Values may contain `{nonce}`. |
@@ -149,81 +149,35 @@ The service must return either:
 
 ## Docker deployment
 
-### Prerequisites
+Ready-to-run Docker examples are in the [`examples/`](../examples/) folder. Each one is self-contained with its own `docker-compose.yaml` and `worker_config.yaml`.
 
-Create a secrets directory with your wallet mnemonic:
+### Quick start
 
 ```bash
+# Pick an example (e.g. inferer with local Python function)
+cd examples/inferer-local/
+
+# Create your wallet secret
 mkdir -p secrets
 echo "your twelve word mnemonic phrase goes here" > secrets/allora_mnemonic
 chmod 600 secrets/allora_mnemonic
+
+# Build and run
+docker build -t allora-sdk-worker:latest ../..
+docker compose up -d
+docker compose logs -f allora-worker
 ```
 
-### Basic deployment (all roles in one container)
+### Available examples
 
-```bash
-docker compose -f docker-compose.worker.yaml up -d
-docker compose -f docker-compose.worker.yaml logs -f allora-worker
-```
-
-This runs every role defined in `worker_config.yaml`. Use this when your inference/forecast/ground-truth functions are pure Python callables bundled in the image.
-
-### Inferer with model sidecar
-
-Use `docker-compose.inferer.yaml` when your inference model runs as a separate service (e.g. a TensorFlow Serving container, a FastAPI model server, etc.):
-
-```bash
-docker compose -f docker-compose.inferer.yaml up -d
-```
-
-The compose file starts two containers:
-- **model-api** — your inference model service on port 8000
-- **allora-worker** — the SDK worker that calls the model
-
-Configure the worker to call the model service directly via the `type: api` source:
-
-```yaml
-workers:
-  - role: inferer
-    topic_id: 22
-    inference_source:
-      type: api
-      url: http://model-api:8000/inference?block={nonce}
-      response_field: value
-```
-
-No Python wrapper code is needed — the SDK handles the HTTP call.
-
-### Reputer with ground truth + loss function sidecars
-
-Use `docker-compose.reputer.yaml` when you need sidecar services for ground truth and/or loss computation — this mirrors the `allora-offchain-node` pattern:
-
-```bash
-docker compose -f docker-compose.reputer.yaml up -d
-```
-
-The compose file starts three containers:
-
-| Service | Purpose | Port |
-|---------|---------|------|
-| **ground-truth-api** | Provides real-world values (prices, outcomes, etc.) | 8001 |
-| **loss-function-api** | Computes loss (e.g. `allora-standard-loss-functions`) | 8002 |
-| **allora-worker** | SDK worker that calls both services | — |
-
-#### Ground truth sidecar
-
-Configure the worker to call the ground truth service via `type: api`:
-
-```yaml
-workers:
-  - role: reputer
-    topic_id: 22
-    ground_truth_source:
-      type: api
-      url: http://ground-truth-api:8001/truth?block={nonce}
-      response_field: value
-    min_stake_uallo: 100000000
-```
+| Example | Description |
+|---------|-------------|
+| [`examples/inferer-local/`](../examples/inferer-local/) | Single container, local Python inference function |
+| [`examples/inferer-api/`](../examples/inferer-api/) | Worker + model sidecar (HTTP API) |
+| [`examples/forecaster-local/`](../examples/forecaster-local/) | Single container, local Python forecast function |
+| [`examples/reputer-local/`](../examples/reputer-local/) | Single container, local ground truth function + internal loss |
+| [`examples/reputer-api/`](../examples/reputer-api/) | Worker + ground truth sidecar + external loss sidecar |
+| [`examples/multi-worker/`](../examples/multi-worker/) | All three roles in one config, mixing local + API sources |
 
 #### External loss function sidecar (allora-standard-loss-functions)
 

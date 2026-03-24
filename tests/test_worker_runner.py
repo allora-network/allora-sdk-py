@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from allora_sdk.worker.function_registry import FunctionRegistry
 from allora_sdk.worker.runner_config import WorkerRunnerConfig
@@ -233,7 +234,7 @@ def test_api_source_config_rejects_empty_url():
             },
         }
     ]
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         WorkerRunnerConfig.model_validate(payload)
 
 
@@ -266,3 +267,43 @@ async def test_worker_manager_builds_with_api_source():
         inferer_ctor.assert_called_once()
         run_fn = inferer_ctor.call_args.kwargs["run"]
         assert callable(run_fn)
+
+
+@pytest.mark.asyncio
+async def test_worker_manager_forecaster_api_source_uses_role_default_response_field():
+    payload = _sample_config_dict()
+    payload["workers"] = [
+        {
+            "role": "forecaster",
+            "topic_id": 10,
+            "forecast_source": {
+                "type": "api",
+                "url": "http://forecast-api:8000/forecast?block={nonce}",
+            },
+        }
+    ]
+    config = WorkerRunnerConfig.model_validate(payload)
+
+    fake_worker = MagicMock()
+    fake_worker.stop = MagicMock()
+
+    with (
+        patch(
+            "allora_sdk.worker.worker_manager.AlloraWorker.forecaster",
+            return_value=fake_worker,
+        ) as forecaster_ctor,
+        patch(
+            "allora_sdk.worker.api_source._fetch_api_response",
+            new_callable=AsyncMock,
+            return_value={"forecasts": {"allo1abc": 1.25}},
+        ),
+    ):
+        manager = WorkerManager(config=config)
+        managed = manager.build_workers()
+
+        assert len(managed) == 1
+        forecaster_ctor.assert_called_once()
+        run_fn = forecaster_ctor.call_args.kwargs["run"]
+        result = await run_fn(42)
+
+    assert result == {"allo1abc": 1.25}

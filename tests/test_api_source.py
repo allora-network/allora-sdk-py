@@ -22,7 +22,7 @@ class TestAPISourceConfig:
     def test_defaults(self):
         cfg = APISourceConfig(url="http://example.com/api")
         assert cfg.method == "GET"
-        assert cfg.response_field == "value"
+        assert cfg.response_field is None
         assert cfg.headers == {}
         assert cfg.timeout_seconds == 10.0
         assert cfg.payload_template is None
@@ -172,6 +172,25 @@ class TestFetchAPIResponse:
         assert result == {"value": "10"}
         assert captured_kwargs["json"] == {"nonce": 5}
 
+    async def test_reuses_shared_session_when_provided(self):
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json = AsyncMock(return_value={"value": "42"})
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        session = AsyncMock()
+        session.get = lambda *a, **kw: mock_resp
+
+        cfg = APISourceConfig(
+            url="http://model:8000/predict?block={nonce}",
+            headers={"Authorization": "Bearer token123"},
+        )
+        result = await _fetch_api_response(cfg, nonce=42, session=session)
+
+        assert result == {"value": "42"}
+        session.close.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 class TestMakeApiRunFn:
@@ -182,7 +201,21 @@ class TestMakeApiRunFn:
         fn = make_api_run_fn(cfg, lambda data: data["custom_key"] * 2)
         result = await fn(1)
         assert result == 84
-        mock_fetch.assert_awaited_once_with(cfg, 1)
+        mock_fetch.assert_awaited_once_with(cfg, 1, session=None)
+
+    @patch("allora_sdk.worker.api_source._fetch_api_response", new_callable=AsyncMock)
+    async def test_uses_session_factory(self, mock_fetch):
+        mock_fetch.return_value = {"custom_key": 42}
+        cfg = APISourceConfig(url="http://example.com")
+        session = AsyncMock()
+        fn = make_api_run_fn(
+            cfg,
+            lambda data: data["custom_key"] * 2,
+            session_factory=lambda: session,
+        )
+        result = await fn(1)
+        assert result == 84
+        mock_fetch.assert_awaited_once_with(cfg, 1, session=session)
 
 
 @pytest.mark.asyncio
@@ -200,6 +233,17 @@ class TestMakeApiInfererFn:
         mock_fetch.return_value = {"prediction": "99.1"}
         cfg = APISourceConfig(url="http://model:8000/inference")
         fn = make_api_inferer_fn(cfg, response_field="prediction")
+        result = await fn(100)
+        assert result == "99.1"
+
+    @patch("allora_sdk.worker.api_source._fetch_api_response", new_callable=AsyncMock)
+    async def test_config_field_used_by_default(self, mock_fetch):
+        mock_fetch.return_value = {"prediction": "99.1"}
+        cfg = APISourceConfig(
+            url="http://model:8000/inference",
+            response_field="prediction",
+        )
+        fn = make_api_inferer_fn(cfg)
         result = await fn(100)
         assert result == "99.1"
 
@@ -229,6 +273,17 @@ class TestMakeApiForecasterFn:
         mock_fetch.return_value = {"predictions": {"allo1x": 1.0}}
         cfg = APISourceConfig(url="http://model:8000/forecast")
         fn = make_api_forecaster_fn(cfg, response_field="predictions")
+        result = await fn(100)
+        assert result == {"allo1x": 1.0}
+
+    @patch("allora_sdk.worker.api_source._fetch_api_response", new_callable=AsyncMock)
+    async def test_config_field_used_by_default(self, mock_fetch):
+        mock_fetch.return_value = {"predictions": {"allo1x": 1.0}}
+        cfg = APISourceConfig(
+            url="http://model:8000/forecast",
+            response_field="predictions",
+        )
+        fn = make_api_forecaster_fn(cfg)
         result = await fn(100)
         assert result == {"allo1x": 1.0}
 

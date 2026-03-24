@@ -1,0 +1,36 @@
+wallet:
+  mnemonic_file: /run/secrets/allora_mnemonic
+
+network:
+  chain_id: allora-testnet-1
+  url: grpc+https://allora-grpc.testnet.allora.network:443
+  websocket_url: wss://allora-rpc.testnet.allora.network/websocket
+  fee_denom: uallo
+  fee_minimum_gas_price: 10
+
+workers:
+  # Inferer on topic 22 — calls a sidecar model API
+  - role: inferer
+    topic_id: 22
+    inference_source:
+      type: api
+      url: http://model-api:8000/inference?block={nonce}
+      response_field: value
+
+  # Forecaster on topic 22 — local Python function
+  - role: forecaster
+    topic_id: 22
+    forecast_source:
+      type: entrypoint
+      ref: app.model:run_forecast
+
+  # Reputer on topic 22 — API ground truth + internal loss
+  - role: reputer
+    topic_id: 22
+    ground_truth_source:
+      type: api
+      url: http://ground-truth-api:8001/truth?block={nonce}
+      response_field: value
+    min_stake_uallo: 100000000
+    loss_function:
+      mode: internal_auto

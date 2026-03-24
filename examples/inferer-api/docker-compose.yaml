@@ -1,19 +1,21 @@
-# Inferer deployment with a custom inference model as a sidecar container.
+# Inferer — worker + model sidecar container.
 #
-# The model container exposes an HTTP API that the worker calls
-# to produce inferences. Reference it via run_ref in the config:
+# The model container exposes an HTTP API. The worker calls it to get
+# inferences — no Python wrapper code needed.
 #
-#   workers:
-#     - role: inferer
-#       topic_id: 1
-#       run_ref: "my_model:predict"   # or a function that calls model-api:8000
+# Replace "your-inference-model:latest" with your actual model image.
 #
-# Usage:
-#   docker compose -f docker-compose.inferer.yaml up -d
+# Before running, create your wallet secret:
+#   mkdir -p secrets
+#   echo "your twelve word mnemonic phrase here" > secrets/allora_mnemonic
+#   chmod 600 secrets/allora_mnemonic
+#
+# Then:
+#   docker compose up -d
+#   docker compose logs -f allora-worker
 services:
   model-api:
-    image: your-inference-model:latest   # replace with your model image
-    container_name: inference_model
+    image: your-inference-model:latest
     expose:
       - "8000"
     healthcheck:
@@ -23,7 +25,7 @@ services:
       retries: 5
 
   allora-worker:
-    build: .
+    build: ../..
     image: allora-sdk-worker:latest
     command: ["run", "--config", "/app/worker_config.yaml"]
     volumes:
@@ -31,7 +33,6 @@ services:
       - ./secrets/allora_mnemonic:/run/secrets/allora_mnemonic:ro
     environment:
       - PYTHONUNBUFFERED=1
-      - MODEL_API_URL=http://model-api:8000
     depends_on:
       model-api:
         condition: service_healthy

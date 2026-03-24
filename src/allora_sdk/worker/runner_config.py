@@ -133,7 +133,7 @@ class APIEndpointSourceConfig(BaseModel):
     type: Literal["api"] = "api"
     url: str = Field(min_length=1)
     method: Literal["GET", "POST"] = "GET"
-    response_field: str = "value"
+    response_field: str | None = Field(default=None, min_length=1)
     headers: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: float = 10.0
     payload_template: dict[str, str] | None = None
