@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from allora_sdk.rpc_client.tx_manager import AccountSequenceMismatchError
 from allora_sdk.utils import Context
 from allora_sdk.worker.reputer import Reputer
 from allora_sdk.worker.worker import AlloraWorker
@@ -142,6 +143,61 @@ class TestWorkerSubmitLock:
 
         mock_client.auth.query.account_info.assert_awaited_once()
         assert mock_use_case.submit.await_args_list == [call(101, 10), call(202, 11)]
+
+    @pytest.mark.asyncio
+    async def test_maybe_submit_stops_after_sequence_mismatch(self):
+        """Stop nonce loop after sequence mismatch to avoid stale sequence submissions."""
+        mock_use_case = MagicMock()
+        mock_use_case.name.return_value = "inferer"
+        mock_use_case.worker_is_whitelisted = AsyncMock(return_value=True)
+        mock_use_case.get_unfulfilled_nonces = AsyncMock(return_value={101, 202, 303})
+        mock_use_case.submit = AsyncMock(
+            side_effect=[
+                AccountSequenceMismatchError("account sequence mismatch"),
+                Exception("should not submit second nonce"),
+            ]
+        )
+
+        mock_client = MagicMock()
+        mock_client.raise_for_chain_id_mismatch = AsyncMock(return_value="allora-testnet-1")
+        mock_client.emissions = MagicMock()
+        mock_client.emissions.query = MagicMock()
+        mock_client.emissions.query.get_topic = AsyncMock(
+            return_value=MagicMock(topic=MagicMock(metadata="test"))
+        )
+        mock_client.bank = MagicMock()
+        mock_client.bank.query = MagicMock()
+        mock_client.bank.query.balance = AsyncMock(
+            return_value=MagicMock(balance=MagicMock(amount="1000000000"))
+        )
+        mock_client.auth = MagicMock()
+        mock_client.auth.query = MagicMock()
+        mock_client.auth.query.account_info = AsyncMock(
+            return_value=MagicMock(info=MagicMock(sequence=10))
+        )
+        mock_client.network = MagicMock(faucet_url=None)
+        mock_client.events = MagicMock()
+        mock_client.events.subscribe_new_block_events_typed = AsyncMock(return_value="sub-id")
+        mock_client.events.unsubscribe = AsyncMock()
+
+        worker = AlloraWorker(
+            use_case=mock_use_case,
+            client=mock_client,
+            address="allo1test",
+            topic_id=69,
+            polling_interval=999,
+        )
+        worker._initialized = True
+        worker._chain_id = "allora-testnet-1"
+        worker._ctx = Context()
+        worker._queue = asyncio.Queue()
+        reset_sequence = AsyncMock()
+        worker._account_sequence_reset = reset_sequence
+
+        await worker._maybe_submit_impl(worker._ctx)
+
+        assert mock_use_case.submit.await_count == 1
+        reset_sequence.assert_awaited_once_with("allo1test")
 
 
 # ---------------------------------------------------------------------------

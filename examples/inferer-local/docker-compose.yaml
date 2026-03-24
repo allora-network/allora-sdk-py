@@ -1,0 +1,22 @@
+# Inferer — single container with a local Python function.
+#
+# Before running, create your wallet secret:
+#   mkdir -p secrets
+#   echo "your twelve word mnemonic phrase here" > secrets/allora_mnemonic
+#   chmod 600 secrets/allora_mnemonic
+#
+# Then:
+#   docker compose up -d
+#   docker compose logs -f allora-worker
+services:
+  allora-worker:
+    build: ../..
+    image: allora-sdk-worker:latest
+    command: ["run", "--config", "/app/worker_config.yaml"]
+    volumes:
+      - ./worker_config.yaml:/app/worker_config.yaml:ro
+      - ./app:/app/app:ro
+      - ./secrets/allora_mnemonic:/run/secrets/allora_mnemonic:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

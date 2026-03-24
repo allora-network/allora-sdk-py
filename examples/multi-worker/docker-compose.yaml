@@ -1,0 +1,53 @@
+# Multi-worker — all three roles (inferer, forecaster, reputer) in one config.
+#
+# Demonstrates mixing source types: the inferer calls a sidecar model API,
+# the forecaster runs a local Python function, and the reputer calls a
+# sidecar ground truth API with internal loss computation.
+#
+# Replace placeholder images with your actual containers.
+#
+# Before running, create your wallet secret:
+#   mkdir -p secrets
+#   echo "your twelve word mnemonic phrase here" > secrets/allora_mnemonic
+#   chmod 600 secrets/allora_mnemonic
+#
+# Then:
+#   docker compose up -d
+#   docker compose logs -f allora-worker
+services:
+  model-api:
+    image: your-inference-model:latest
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ground-truth-api:
+    image: your-ground-truth-provider:latest
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  allora-worker:
+    build: ../..
+    image: allora-sdk-worker:latest
+    command: ["run", "--config", "/app/worker_config.yaml"]
+    volumes:
+      - ./worker_config.yaml:/app/worker_config.yaml:ro
+      - ./app:/app/app:ro
+      - ./secrets/allora_mnemonic:/run/secrets/allora_mnemonic:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      model-api:
+        condition: service_healthy
+      ground-truth-api:
+        condition: service_healthy
+    restart: unless-stopped

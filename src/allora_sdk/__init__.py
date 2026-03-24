@@ -1,5 +1,18 @@
 from .worker import AlloraWorker
-from .rpc_client import AlloraRPCClient, AlloraNetworkConfig, AlloraWalletConfig, TxManager, FeeTier
+from .worker import WorkerRunnerConfig, FunctionRegistry, WorkerManager
+from .worker import (
+    APISourceConfig,
+    make_api_inferer_fn,
+    make_api_forecaster_fn,
+    make_api_ground_truth_fn,
+)
+from .rpc_client import (
+    AlloraRPCClient,
+    AlloraNetworkConfig,
+    AlloraWalletConfig,
+    TxManager,
+    FeeTier,
+)
 from .api_client import AlloraAPIClient
 from .logging_config import setup_sdk_logging
 from .loss_methods import (
@@ -12,6 +25,13 @@ from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 
 __all__ = [
     "AlloraWorker",
+    "WorkerRunnerConfig",
+    "FunctionRegistry",
+    "WorkerManager",
+    "APISourceConfig",
+    "make_api_inferer_fn",
+    "make_api_forecaster_fn",
+    "make_api_ground_truth_fn",
     "AlloraRPCClient",
     "AlloraAPIClient",
     "AlloraNetworkConfig",

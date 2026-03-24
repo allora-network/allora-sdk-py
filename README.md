@@ -20,6 +20,7 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 - [Command-line Tools](#command-line-tools)
   - [allora-export-txs](#allora-export-txs)
   - [allora-topic-lifecycle-visualizer](#allora-topic-lifecycle-visualizer)
+  - [allora-worker](#allora-worker)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Setup for development](#setup-for-development)
@@ -409,6 +410,16 @@ options:
   -h, --help           show this help message and exit
   --log_file LOG_FILE  AlloraWorker log file
 ````
+
+### `allora-worker`
+
+Run and validate a config-driven multi-topic worker deployment from one shared wallet.
+
+```
+usage: allora-worker [-h] {validate,run} ...
+```
+
+See `docs/worker_runner.md` for full config schema, Docker usage, and migration guidance.
 
 
 ## Development

@@ -1,6 +1,9 @@
 .allora_key
 .tox/
 .claude/
+.agents/
+skills/
+skills-lock.json
 .venv/
 .mypy_cache/
 .pytest_cache/
