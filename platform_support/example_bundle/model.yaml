@@ -1,0 +1,23 @@
+schema_version: "0.1"
+
+name: "simple-model"
+version: "0.1.0"
+
+python:
+  version: "3.11"
+
+entrypoint:
+  kind: "python_function"
+  module: "src.simple_model.runner"
+  function: "run"
+  workdir: "."
+  artifacts_dir: "artifacts"
+
+environment:
+  pip_requirements: "requirements.txt"
+
+allora:
+  topic_id: 69
+  polling_interval: 120
+  fee_tier: "STANDARD"
+  network: "testnet"
