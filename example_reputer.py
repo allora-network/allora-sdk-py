@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 def mse_loss(x: float, y: float) -> float:
-    return math.log((x-y)**2)   # the Allora chain uses log losses
+    return math.log((x-y)**2 + 1e-12)   # the Allora chain uses log losses
 
 async def get_ground_truth(context: RunContext) -> float:
     nonce_time = await get_block_time(context.client, context.nonce)

@@ -73,7 +73,7 @@ def setup_sdk_logging(debug: bool = False, force: bool = False, use_color: bool 
 
     logging.basicConfig(
         handlers=[handler],
-        force=False
+        force=force
     )
 
     # Configure all SDK loggers explicitly with the requested level
