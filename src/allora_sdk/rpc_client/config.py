@@ -65,7 +65,7 @@ class AlloraNetworkConfig:
         chain_id="allora-testnet-1",
         url="grpc+https://allora-grpc.testnet.allora.network:443",
         websocket_url="wss://allora-rpc.testnet.allora.network/websocket",
-        faucet_url="https://faucet.testnet.allora.network",
+        faucet_url="https://faucet.testnet.allora.run",
         fee_denom="uallo",
         fee_minimum_gas_price=10.0,
         use_dynamic_gas_price=True,
@@ -149,7 +149,7 @@ class AlloraNetworkConfig:
             fee_denom=require_env((env_prefix or "") + "FEE_DENOM"),
             fee_minimum_gas_price=float(require_env((env_prefix or "") + "FEE_MIN_GAS_PRICE")),
         )
-    
+
     def to_cosmpy_config(self) -> NetworkConfig:
         return NetworkConfig(
             chain_id=self.chain_id,

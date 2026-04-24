@@ -36,7 +36,7 @@ from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uall
 from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
 from allora_sdk.worker.inferer import Inferer, SanityCheckConfig, TInfererRunFn, TInfererRunFnResult
-from allora_sdk.worker.reputer import GroundTruthFn, LossFn, Reputer
+from allora_sdk.worker.reputer import Reputer, ReputerFn
 from allora_sdk.worker.autostake import AutoStakeConfig
 from allora_sdk.worker.types import (
     AlreadySubmittedError,
@@ -81,6 +81,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
+        lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
         sanity_check: SanityCheckConfig | None = None,
         debug: bool = False,
@@ -126,14 +127,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
+            lock=lock,
             debug=debug,
         )
 
     @classmethod
     def reputer(
         cls,
-        ground_truth_fn: GroundTruthFn,
-        loss_fn: Optional[LossFn] = None,
+        reputer_fn: ReputerFn,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         api_key: Optional[str] = None,
@@ -142,16 +143,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         polling_interval: int = 120,
         min_stake_uallo: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
+        lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
 
         Args:
-            ground_truth_fn: Function that returns ground truth values (str or float)
-            loss_fn: Loss function to calculate error between ground truth and predictions.
-                     If None (default), the SDK will automatically select the appropriate
-                     loss function based on the topic's on-chain `loss_method` configuration.
+            reputer_fn: Function that takes an inference value and returns a loss
             wallet: Wallet configuration (private key, mnemonic, or file)
             network: Allora network configuration (testnet/mainnet/custom)
             api_key: API key for testnet faucet (if needed)
@@ -176,8 +175,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
-                ground_truth_fn=ground_truth_fn,
-                loss_fn=loss_fn,
+                reputer_fn=reputer_fn,
                 fee_tier=fee_tier,
                 topic_id=topic_id,
                 client=client,
@@ -191,6 +189,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
+            lock=lock,
             debug=debug,
         )
 
@@ -205,6 +204,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
+        lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
@@ -249,6 +249,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
+            lock=lock,
             debug=debug,
         )
 
@@ -263,6 +264,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: int = 120,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
+        lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
     ) -> None:
         """
@@ -277,6 +279,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
+            lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
             debug: Enable debug logging
         """
         if use_case is None:
@@ -295,7 +298,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
 
         self.submitted_nonces = TimestampOrderedSet()
-        self._submit_lock = asyncio.Lock()
+        self._submit_lock = lock if lock is not None else asyncio.Lock()
 
         setup_sdk_logging(debug=debug)
 
@@ -380,7 +383,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         "address": self.address,
                     },
                     headers={
-                        "x-api-key": self.api_key,
+                        "x-api-key": self.api_key or "None",
                     },
                 )
                 faucet_resp.raise_for_status()
@@ -419,6 +422,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return "colab"
         else:
             return "shell"
+
 
     def _setup_signal_handlers(self, ctx: Context):
         env = self._detect_environment()
@@ -505,6 +509,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             ctx.cancel()
         finally:
             await self._cleanup(ctx)
+
 
     async def _run_with_context(self, ctx: Context) -> AsyncIterator[WorkerResult | Exception]:
         await self._ensure_initialized()
@@ -761,5 +766,3 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         if self._ctx:
             logger.debug("Manually stopping worker")
             self._ctx.cancel()
-
-

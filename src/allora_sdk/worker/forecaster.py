@@ -10,7 +10,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsWorkerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
+from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
 from allora_sdk.worker.utils import resolve_maybe_awaitable
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 
@@ -122,7 +122,13 @@ class Forecaster:
             if self.forecast_fn is None:
                 return Exception("no forecast fn configured")
 
-            forecasts_raw = await resolve_maybe_awaitable(self.forecast_fn, nonce)
+            run_context = RunContext(
+                nonce = nonce,
+                client = self.client,
+                topic_id = self.topic_id
+            )
+
+            forecasts_raw = await resolve_maybe_awaitable(self.forecast_fn, run_context)
         except Exception as err:
             logger.error("Forecast function failed", exc_info=True)
             return err
@@ -176,5 +182,3 @@ class Forecaster:
 
 
 _implements: type[UseCase[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]] = Forecaster
-
-
