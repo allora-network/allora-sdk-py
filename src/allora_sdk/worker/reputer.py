@@ -124,7 +124,7 @@ class Reputer:
         # GetOpenReputerSubmissionWindows would be the more appropriate RPC call, but
         # it doesn't seem to be implemented in the rpc client
         # Returning [] here means we only react to EventReputerSubmissionWindowOpened
-        return []
+        return set()
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
