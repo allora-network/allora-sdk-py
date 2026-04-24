@@ -71,12 +71,9 @@ def setup_sdk_logging(debug: bool = False, force: bool = False, use_color: bool 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
-    # Configure root logger with WARNING level to suppress third-party debug logs
-    # The handler has no level filter, so it will output any logs that pass through
     logging.basicConfig(
-        level=logging.WARNING,
         handlers=[handler],
-        force=True
+        force=False
     )
 
     # Configure all SDK loggers explicitly with the requested level
@@ -93,10 +90,9 @@ def setup_sdk_logging(debug: bool = False, force: bool = False, use_color: bool 
         logger = logging.getLogger(logger_name)
         logger.setLevel(sdk_level)
         logger.propagate = True
-    
+
     _LOGGING_CONFIGURED = True
 
 def is_configured() -> bool:
     """Check if SDK logging has been configured."""
     return _LOGGING_CONFIGURED
-

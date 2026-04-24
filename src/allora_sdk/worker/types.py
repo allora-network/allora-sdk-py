@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, Union, runtime_checkable
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
+from allora_sdk.rpc_client.client import AlloraRPCClient
 
 RunFnReturnType = TypeVar("RunFnReturnType")
 ResultDataType = TypeVar("ResultDataType")
@@ -23,13 +24,17 @@ class WorkerNotWhitelistedError(Exception):
 class StopQueue:
     pass
 
+@dataclass
+class RunContext:
+    client: AlloraRPCClient
+    topic_id: int
+    nonce: int
 
 class TSubmissionWindowOpenEventType(Protocol):
     nonce_block_height: int
 
-
 TQueueItem = Union["WorkerResult[RunFnReturnType]", Exception, StopQueue]
-TRunFn = Union[Callable[[int], RunFnReturnType], Callable[[int], Awaitable[RunFnReturnType]]]
+TRunFn = Union[Callable[[RunContext], RunFnReturnType], Callable[[RunContext], Awaitable[RunFnReturnType]]]
 
 class UseCase(Protocol[WindowOpenedEvent, UseCaseReturnType]):
     def name(self) -> str: ...

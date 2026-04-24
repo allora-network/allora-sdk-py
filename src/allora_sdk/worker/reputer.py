@@ -1,7 +1,7 @@
 from decimal import Decimal
 import logging
 import math
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Callable, Awaitable
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -29,14 +29,13 @@ from allora_sdk.loss_methods.defaults import (
 )
 from allora_sdk.loss_methods.squared_error import squared_error_loss
 from allora_sdk.utils.format import uallo_to_allo
-from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
+from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
 from allora_sdk.worker.utils import resolve_maybe_awaitable
 
 logger = logging.getLogger("allora_sdk")
 
-GroundTruthFnResult = Union[str, float, Decimal]
-GroundTruthFn = TRunFn[GroundTruthFnResult]
-
+ReputerFnResult = Union[str, float, Decimal]
+ReputerFn = Callable[[RunContext, float], Awaitable[ReputerFnResult]]
 
 class Reputer:
     """
@@ -51,8 +50,7 @@ class Reputer:
         wallet: Signing wallet for transactions.
         client: RPC client for chain queries and transaction submission.
         topic_id: Allora topic to repute on.
-        ground_truth_fn: Callback that returns the ground-truth value for a given epoch/nonce.
-        loss_fn: Loss function override. If None, auto-selected from the topic's on-chain loss_method.
+        reputer_fn: Callback that takes an inference value and returns the loss.
         min_stake_uallo: If set, the reputer will top-up self-stake to at least this amount after each submission.
         fee_tier: Transaction fee tier (ECO / STANDARD / PRIORITY).
     """
@@ -62,16 +60,14 @@ class Reputer:
         wallet: LocalWallet,
         client: AlloraRPCClient,
         topic_id: int,
-        ground_truth_fn: GroundTruthFn,
-        loss_fn: Optional[LossFn] = None,
+        reputer_fn: ReputerFn,
         min_stake_uallo: Optional[int] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
     ):
         self.wallet = wallet
         self.client = client
         self.topic_id = topic_id
-        self.ground_truth_fn = ground_truth_fn
-        self.loss_fn = loss_fn
+        self.reputer_fn = reputer_fn
         self.min_stake_uallo = min_stake_uallo
         self.fee_tier = fee_tier
 
@@ -85,9 +81,6 @@ class Reputer:
 
 
     async def initialize(self) -> bool:
-        # Auto-select loss function for reputers if not explicitly provided
-        await self._maybe_auto_select_loss_fn()
-
         # Check if reputer is already registered
         resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(
             IsReputerRegisteredInTopicIdRequest(
@@ -95,18 +88,23 @@ class Reputer:
                 address=str(self.wallet.address()),
             ),
         )
-        if resp.is_registered:
-            return False
 
-        logger.debug(f"   Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
-        tx = await self.client.emissions.tx.register(
-            topic_id=self.topic_id,
-            owner_addr=str(self.wallet.address()),
-            sender_addr=str(self.wallet.address()),
-            is_reputer=True,
-            fee_tier=self.fee_tier,
-        )
-        await tx.wait()
+        if not resp.is_registered:
+            logger.debug(f"   Registering reputer {str(self.wallet.address())} for topic {self.topic_id}")
+            tx = await self.client.emissions.tx.register(
+                topic_id=self.topic_id,
+                owner_addr=str(self.wallet.address()),
+                sender_addr=str(self.wallet.address()),
+                is_reputer=True,
+                fee_tier=self.fee_tier,
+            )
+            await tx.wait()
+
+        try:
+            await self._maybe_stake()
+        except Exception as err:
+            logger.error(f"Failed during initial stake fill up: {err}")
+
         return True
 
 
@@ -121,15 +119,12 @@ class Reputer:
 
 
     async def get_unfulfilled_nonces(self) -> set[int]:
-        resp = await self.client.emissions.query.get_unfulfilled_reputer_nonces(
-            GetUnfulfilledReputerNoncesRequest(topic_id=self.topic_id)
-        )
-        nonces = set[int]()
-        if resp.nonces is not None:
-            for nonce_item in resp.nonces.nonces:
-                if nonce_item.reputer_nonce and nonce_item.reputer_nonce.block_height:
-                    nonces.add(nonce_item.reputer_nonce.block_height)
-        return nonces
+
+        # GetUnfulfilledReputerNonces gives all epochs in flight, which is not what we want here
+        # GetOpenReputerSubmissionWindows would be the more appropriate RPC call, but
+        # it doesn't seem to be implemented in the rpc client
+        # Returning [] here means we only react to EventReputerSubmissionWindowOpened
+        return []
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
@@ -141,21 +136,6 @@ class Reputer:
         """
 
         sender = str(self.wallet.address())
-
-        # Get ground truth from user callback
-        try:
-            if self.ground_truth_fn is None:
-                return Exception("no ground truth fn configured")
-
-            ground_truth_raw = await resolve_maybe_awaitable(self.ground_truth_fn, nonce)
-            ground_truth = float(ground_truth_raw)
-            if not math.isfinite(ground_truth):
-                raise ValueError(
-                    f"ground_truth must be finite (got non-finite value: {ground_truth})"
-                )
-        except Exception as err:
-            logger.error(f"❌ Ground truth function failed: {err}")
-            return err
 
         # Fetch network inferences at block
         try:
@@ -175,7 +155,7 @@ class Reputer:
 
         # Compute loss bundle
         try:
-            loss_bundle = await self._compute_loss_bundle(ground_truth, value_bundle)
+            loss_bundle = await self._compute_loss_bundle(value_bundle)
         except Exception as err:
             logger.error(f"❌ Failed to compute loss bundle: {err}")
             return err
@@ -226,55 +206,12 @@ class Reputer:
 
         return result
 
-    async def _maybe_auto_select_loss_fn(self) -> None:
-        """
-        Auto-select the reputer loss function based on the topic's on-chain `loss_method`.
-
-        If `self.loss_fn` is already set, this is a no-op.
-        """
-        if self.loss_fn is not None:
-            return
-
-        topic_resp = await self.client.emissions.query.get_topic(
-            GetTopicRequest(topic_id=int(self.topic_id))
-        )
-        topic = topic_resp.topic
-        if topic is None:
-            raise ValueError(f"Topic {self.topic_id} not found on chain")
-
-        loss_method = getattr(topic, "loss_method", "") or ""
-        if not loss_method:
-            logger.info("Topic has no loss_method configured, defaulting to squared error (sqe)")
-            self.loss_fn = squared_error_loss
-            return
-
-        if not is_supported_loss_method(loss_method):
-            raise UnsupportedLossMethodError(
-                loss_method=loss_method,
-                supported=["sqe", "abse", "huber", "logcosh", "bce", "poisson", "ztae", "zptae"],
-            )
-
-        if requires_explicit_loss_fn(loss_method):
-            raise ValueError(
-                f"Topic uses loss_method='{loss_method}' which requires explicit configuration. "
-                "Provide a custom loss_fn using make_ztae_loss() or make_zptae_loss() with "
-                "the appropriate standard deviation for your data: "
-                "e.g. loss_fn=make_ztae_loss(std=0.02) or loss_fn=make_zptae_loss(std=0.02)."
-            )
-
-        self.loss_fn = get_default_loss_fn(loss_method)
-        logger.info(f"Auto-selected loss function for topic loss_method='{loss_method}'")
-
-    async def _compute_loss_bundle(self, ground_truth: float, value_bundle: ValueBundle) -> InputValueBundle:
+    async def _compute_loss_bundle(self, value_bundle: ValueBundle) -> InputValueBundle:
         """
         Compute loss bundle from ground truth and network inferences.
 
         Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
         """
-        if not math.isfinite(ground_truth):
-            raise ValueError(
-                f"ground_truth must be finite (got non-finite value: {ground_truth})"
-            )
 
         async def compute_loss(value_str: str) -> str:
             try:
@@ -287,10 +224,17 @@ class Reputer:
                     f"predicted must be finite (got non-finite value: {predicted})"
                 )
 
-            if self.loss_fn is None:
-                raise ValueError("no loss fn configured")
+            if self.reputer_fn is None:
+                raise ValueError("no reputer_fn configured")
 
-            loss = await resolve_maybe_awaitable(self.loss_fn, ground_truth, predicted)
+            nonce = value_bundle.reputer_request_nonce.reputer_nonce.block_height
+            run_context = RunContext(
+                nonce = nonce,
+                client = self.client,
+                topic_id = self.topic_id
+            )
+
+            loss = await resolve_maybe_awaitable(self.reputer_fn, run_context, predicted)
             return str(loss)
 
         # Compute combined and naive losses
@@ -365,7 +309,7 @@ class Reputer:
                     )
                 )
 
-        return InputValueBundle(
+        result = InputValueBundle(
             topic_id=self.topic_id,
             combined_value=combined_loss,
             naive_value=naive_loss,
@@ -377,6 +321,8 @@ class Reputer:
             one_out_inferer_forecaster_values=one_out_inferer_forecaster_values,
         )
 
+        return result
+
 
     async def _maybe_stake(self):
         """
@@ -385,6 +331,7 @@ class Reputer:
         If min_stake_uallo is unset (None) or zero, skip staking.
         Otherwise, top-up only the delta needed to reach min_stake_uallo.
         """
+
         min_stake = self.min_stake_uallo
         if min_stake is None or min_stake == 0:
             return
@@ -407,11 +354,11 @@ class Reputer:
         logger.info(f"   Reputer stake: current={uallo_to_allo(current_stake)} min_stake={uallo_to_allo(min_stake)}")
 
         if current_stake >= min_stake:
-            logger.debug("    Stake above minimum requested stake, skipping adding stake.")
+            logger.debug("   Stake above minimum requested stake, skipping adding stake.")
             return
 
         delta = min_stake - current_stake
-        logger.info(f"Stake below minimum requested stake, adding stake (delta={delta} uallo)")
+        logger.info(f"   Stake below minimum requested stake, adding stake (delta={delta} uallo)")
 
         try:
             pending_tx = await self.client.emissions.tx.add_stake(
@@ -430,5 +377,3 @@ class Reputer:
 
 
 _implements: type[UseCase[EventReputerSubmissionWindowOpened, InputValueBundle]] = Reputer
-
-
