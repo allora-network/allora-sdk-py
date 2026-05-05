@@ -22,6 +22,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
+from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 
 logger = logging.getLogger("allora_sdk")
 
@@ -114,6 +115,7 @@ class EmissionsTxs:
                 block_height=nonce,
                 inferer=worker_address,
                 value=inference_value,
+                value=canonicalize_dec(inference_value),
                 extra_data=extra_data or b"",
                 proof=proof or "",
             )
@@ -123,7 +125,7 @@ class EmissionsTxs:
             forecast_elems = [
                 InputForecastElement(
                     inferer=elem["inferer"],
-                    value=elem["value"]
+                    value=canonicalize_dec(elem["value"])
                 )
                 for elem in forecast_elements
             ]
