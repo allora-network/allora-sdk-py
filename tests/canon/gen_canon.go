@@ -49,6 +49,12 @@ var inputs = []string{
 	"1.2345E-7", "1.2345E+7", "1.2345E7",
 	"1E+10", "1E-10",
 
+	// === precision preservation across re-marshal (Florian called these
+	// "fucking weird" — apd preserves coefficient digits, so each round-trips
+	// to itself with different precision in the same E-form) ===
+	"1E-7", "1.0E-7", "1.00E-7", "1.000E-7",
+	"1E+7", "1.0E+7", "1.00E+7",
+
 	// === fmtF / fmtE boundary (adjExponentLimit = -6) ===
 	"1e-6",          // adj=-6, fmtF
 	"1e-7",          // adj=-7, fmtE

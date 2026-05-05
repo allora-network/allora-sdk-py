@@ -208,6 +208,34 @@
     "output": "1E-10"
   },
   {
+    "input": "1E-7",
+    "output": "1E-7"
+  },
+  {
+    "input": "1.0E-7",
+    "output": "1.0E-7"
+  },
+  {
+    "input": "1.00E-7",
+    "output": "1.00E-7"
+  },
+  {
+    "input": "1.000E-7",
+    "output": "1.000E-7"
+  },
+  {
+    "input": "1E+7",
+    "output": "1E+7"
+  },
+  {
+    "input": "1.0E+7",
+    "output": "1.0E+7"
+  },
+  {
+    "input": "1.00E+7",
+    "output": "1.00E+7"
+  },
+  {
     "input": "1e-6",
     "output": "0.000001"
   },
