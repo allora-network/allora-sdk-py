@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Union
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce
 from allora_sdk.rpc_client.protos.emissions.v9 import (
@@ -15,7 +16,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx
+from allora_sdk.rpc_client.tx_manager import FeeTier, PendingTx, TxManager, TxSubmissionHandle
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
 
 logger = logging.getLogger("allora_sdk")
@@ -41,7 +42,10 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
-    ) -> Union[PendingTx, int]:
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
+    ) -> Union[TxSubmissionHandle, int]:
         """
         Register as a worker or reputer for a topic.
 
@@ -53,11 +57,14 @@ class EmissionsTxs:
             fee_tier: Fee tier to use (ECO, STANDARD, or PRIORITY)
             gas_limit: Optional gas limit (used only if simulate=False)
             simulate: If True, only simulate and return estimated gas (int).
-                     If False, execute the transaction and return PendingTx.
+                     If False, execute the transaction and return an awaitable tx handle.
+            use_queue: If True, route submission through TxManager queue path.
+            queue_priority: Relative queue priority when use_queue is enabled.
+            queue_deadline_at: Optional deadline used by queue scheduling.
 
         Returns:
             If simulate=True: Estimated gas units required (int)
-            If simulate=False: PendingTx object that can be awaited for the result
+            If simulate=False: Awaitable transaction handle
         """
         msg = RegisterRequest(
             topic_id=topic_id,
@@ -76,7 +83,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.RegisterRequest",
                 msgs=[ msg ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
     async def insert_worker_payload(
@@ -90,7 +100,10 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
-    ) -> Union[PendingTx, int]:
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
+    ) -> Union[TxSubmissionHandle, int]:
         """
         Submit a worker payload (inference/forecast) to the Allora network.
 
@@ -106,11 +119,14 @@ class EmissionsTxs:
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
             gas_limit: Optional gas limit (used only if simulate=False)
             simulate: If True, only simulate and return estimated gas (int).
-                     If False, execute the transaction and return PendingTx.
+                     If False, execute the transaction and return an awaitable tx handle.
+            use_queue: If True, route submission through TxManager queue path.
+            queue_priority: Relative queue priority when use_queue is enabled.
+            queue_deadline_at: Optional deadline used by queue scheduling.
 
         Returns:
             If simulate=True: Estimated gas units required (int)
-            If simulate=False: PendingTx object that can be awaited for the result
+            If simulate=False: Awaitable transaction handle
         """
         if not self._txs:
             raise Exception("No wallet configured. Initialize client with private key or mnemonic.")
@@ -182,7 +198,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.InsertWorkerPayloadRequest",
                 msgs=[ payload_request ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
 
@@ -195,7 +214,10 @@ class EmissionsTxs:
         fee_tier: FeeTier = FeeTier.STANDARD,
         gas_limit: Optional[int] = None,
         simulate: bool = False,
-    ) -> Union[PendingTx, int]:
+        use_queue: bool = False,
+        queue_priority: int = 0,
+        queue_deadline_at: Optional[datetime] = None,
+    ) -> Union[TxSubmissionHandle, int]:
 
         msg = DelegateStakeRequest(
             sender=sender,
@@ -214,7 +236,10 @@ class EmissionsTxs:
                 type_url="/emissions.v9.DelegateStakeRequest",
                 msgs=[ msg ],
                 gas_limit=gas_limit,
-                fee_tier=fee_tier
+                fee_tier=fee_tier,
+                use_queue=use_queue,
+                queue_priority=queue_priority,
+                queue_deadline_at=queue_deadline_at,
             )
 
     async def create_topic(

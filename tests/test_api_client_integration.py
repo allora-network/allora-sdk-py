@@ -12,7 +12,10 @@ DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
 @pytest_asyncio.fixture
 def client():
-    return AlloraAPIClient(chain_id=ChainID.TESTNET, api_key=os.getenv("ALLORA_API_KEY"))
+    api_key = os.getenv("ALLORA_API_KEY")
+    if not api_key:
+        pytest.skip("ALLORA_API_KEY is not set; skipping integration tests")
+    return AlloraAPIClient(chain_id=ChainID.TESTNET, api_key=api_key)
 
 @pytest.mark.asyncio
 async def test_get_all_topics(client):

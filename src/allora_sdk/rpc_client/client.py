@@ -164,6 +164,8 @@ class AlloraRPCClient:
     async def close(self):
         """Close client and cleanup resources."""
         logger.debug("Closing Allora client")
+        if self.tx_manager is not None:
+            await self.tx_manager.close(cancel_pending_queue=False)
         if self.events:
             await self.events.stop()
         if self.grpc_client:
