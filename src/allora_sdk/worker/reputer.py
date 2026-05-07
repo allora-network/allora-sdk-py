@@ -20,14 +20,6 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.loss_methods.defaults import (
-    LossFn,
-    get_default_loss_fn,
-    is_supported_loss_method,
-    requires_explicit_loss_fn,
-    UnsupportedLossMethodError,
-)
-from allora_sdk.loss_methods.squared_error import squared_error_loss
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
 from allora_sdk.worker.utils import resolve_maybe_awaitable

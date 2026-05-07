@@ -85,6 +85,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         autostake: AutoStakeConfig | None = None,
         sanity_check: SanityCheckConfig | None = None,
         debug: bool = False,
+        show_banner: bool = True,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -129,6 +130,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
+            show_banner=show_banner,
         )
 
     @classmethod
@@ -145,6 +147,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
+        show_banner: bool = True,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -191,6 +194,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
+            show_banner=show_banner,
         )
 
     @classmethod
@@ -207,6 +211,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
+        show_banner: bool = True,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -251,6 +256,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
+            show_banner=show_banner,
         )
 
 
@@ -266,6 +272,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
+        show_banner: bool = True,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -296,6 +303,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.fee_tier = fee_tier
         self.polling_interval = polling_interval
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
+        self.show_banner = show_banner
 
         self.submitted_nonces = TimestampOrderedSet()
         self._submit_lock = lock if lock is not None else asyncio.Lock()
@@ -322,20 +330,23 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _show_banner(self):
         resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
 
-        print(indent(dedent(
-            rf"""
-                 _    _     _     ___  ____      _
-                / \  | |   | |   / _ \|  _ \    / \
-               / _ \ | |   | |  | | | | |_) |  / _ \
-              / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
-             /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
-             __        _____  ____  _  _______ ____          Address: {self.address}
-             \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
-              \ \ /\ / / | | | |_) | ' /|  _| | |_) |
-               \ V  V /| |_| |  _ <| . \| |___|  _ <
-                \_/\_/  \___/|_| \_\_|\_\_____|_| \_\
-            """
-        ), "   "))
+        if self.show_banner:
+            print(indent(dedent(
+                rf"""
+                     _    _     _     ___  ____      _
+                    / \  | |   | |   / _ \|  _ \    / \
+                   / _ \ | |   | |  | | | | |_) |  / _ \
+                  / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
+                 /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
+                 __        _____  ____  _  _______ ____          Address: {self.address}
+                 \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
+                  \ \ /\ / / | | | |_) | ' /|  _| | |_) |
+                   \ V  V /| |_| |  _ <| . \| |___|  _ <
+                    \_/\_/  \___/|_| \_\_|\_\_____|_| \_\
+                """
+            ), "   "))
+        else:
+            print(f"Allora Worker - Chain: {self._chain_id}, Topic: {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id}), Address: {self.address}, Role: {self.use_case.name().upper()}")
 
 
     async def _log_balance(self):
@@ -489,7 +500,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         logger.debug(f"Starting Allora {self.use_case.name()} for topic {self.topic_id}")
 
         try:
-            did_register = await self.use_case.initialize()
+            # use_case.initialize() may send txs, so guard it with _submit_lock to avoid account sequence issues
+            async with self._submit_lock:
+                did_register = await self.use_case.initialize()
             if did_register:
                 logger.info(f"✅ Registered {self.use_case.name()} {self.address} for topic {self.topic_id}")
 
