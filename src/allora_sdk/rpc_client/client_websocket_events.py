@@ -381,7 +381,7 @@ class AlloraWebsocketSubscriber:
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=None
+                        timeout=30,
                     )
                     await self._handle_message(str(message))
                     
@@ -390,9 +390,10 @@ class AlloraWebsocketSubscriber:
                     if not self.websocket.close_code:
                         await self.websocket.ping()
                     continue
-                    
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("WebSocket connection closed")
+
+            except websockets.exceptions.ConnectionClosed as e:
+                queries = [info.get("query", "?") for info in self.subscriptions.values()]
+                logger.warning(f"WebSocket connection closed: code={e.code} reason='{e.reason}' subscriptions={queries}")
                 self.websocket = None
                 if self.running:
                     await asyncio.sleep(self.reconnect_delay)
