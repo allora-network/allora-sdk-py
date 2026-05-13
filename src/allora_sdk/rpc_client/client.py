@@ -74,7 +74,27 @@ class AlloraRPCClient:
         self.ledger_client = LedgerClient(cfg=self.network.to_cosmpy_config())
         self._initialize_wallet(wallet)
 
-        parsed_url = parse_url(self.network.url)
+        self._parsed_url = parse_url(self.network.url)
+        self.grpc_client: Optional[Channel] = None
+
+        self._build_clients()
+
+        if self.network.websocket_url is not None:
+            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
+
+        logger.debug(f"Initialized Allora client for {self.network.chain_id}")
+
+
+    def _build_clients(self):
+        """
+        (Re)build the gRPC / REST query stubs and the TxManager.
+
+        Called once from __init__ and again from _reconnect_grpc() when a
+        transport-layer failure forces us to dial a new channel. Splitting
+        this out keeps the construction logic in one place so the
+        reconnect path can't drift from the initial-setup path.
+        """
+        parsed_url = self._parsed_url
 
         if parsed_url.protocol == Protocol.GRPC:
             self.grpc_client = Channel(host=parsed_url.hostname, port=parsed_url.port, ssl=parsed_url.secure)
@@ -97,7 +117,15 @@ class AlloraRPCClient:
             mint_query: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
             feemarket_query: rest.FeemarketFeemarketV1QueryLike = rest.FeemarketFeemarketV1RestQueryClient(parsed_url.rest_url)
 
-        if self.wallet is not None:
+        # If we already have a tx_manager (reconnect path), re-bind its
+        # stub references in-place so the existing instance stays valid
+        # for any caller that captured it. Otherwise construct fresh.
+        if self.tx_manager is not None:
+            self.tx_manager.tx_client = tx_query
+            self.tx_manager.auth_client = auth_query
+            self.tx_manager.bank_client = bank_query
+            self.tx_manager.feemarket_client = feemarket_query
+        elif self.wallet is not None:
             self.tx_manager = TxManager(
                 wallet=self.wallet,
                 tx_client=tx_query,
@@ -105,6 +133,7 @@ class AlloraRPCClient:
                 bank_client=bank_query,
                 feemarket_client=feemarket_query,
                 config=self.network,
+                reconnect_callback=self._reconnect_grpc,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
@@ -115,10 +144,47 @@ class AlloraRPCClient:
         self.mint       = MintClient(query_client=mint_query)
         self.feemarket  = FeemarketClient(query_client=feemarket_query)
 
-        if self.network.websocket_url is not None:
-            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
-        
-        logger.debug(f"Initialized Allora client for {self.network.chain_id}")
+
+    async def _reconnect_grpc(self):
+        """
+        Close the current grpclib.Channel and dial a fresh one, then re-bind
+        all the gRPC stubs (and the TxManager's stub references) to the new
+        channel.
+
+        Called from TxManager when it observes a transport-layer failure
+        (Cloudflare half-close, stream reset, server "Unavailable"). The
+        caller is the only thing that knows the channel is dead — there's
+        no notification from grpclib itself, since grpclib.Channel has no
+        keepalive or connectivity-state machine.
+
+        IMPORTANT: callers that captured a stub reference (e.g. via
+        `self.tx`, `self.bank`, etc.) BEFORE the reconnect will continue
+        holding the new stub because the Client* wrappers reference
+        TxManager / query_client by attribute, and we mutate those in
+        place above. New invocations against `self.tx.broadcast_tx(...)`
+        will hit the new channel. Direct references to a Stub instance
+        (rare) will still point at the dead one.
+
+        This is REST-protocol-aware: if the configured URL is REST-only,
+        there is no gRPC channel to recycle, and this is a no-op (the
+        REST clients use pooled HTTP and don't have the same problem).
+        """
+        if self._parsed_url.protocol != Protocol.GRPC:
+            logger.debug("Reconnect called but URL is REST-only — no gRPC channel to recycle")
+            return
+
+        old = self.grpc_client
+        logger.warning(f"Reconnecting gRPC channel to {self.network.url}")
+        try:
+            if old is not None:
+                old.close()
+        except Exception as exc:
+            # Closing a dead channel can itself raise; log and continue
+            logger.debug(f"Closing old gRPC channel raised: {exc}")
+
+        # Clear the reference so _build_clients dials a fresh one
+        self.grpc_client = None
+        self._build_clients()
     
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):

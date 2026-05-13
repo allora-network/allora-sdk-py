@@ -178,3 +178,62 @@ def test_grpclib_error_message_attribute_is_string_not_method():
     # details is None here (no trailing metadata provided), NOT callable
     assert err.details is None
     assert not callable(err.details)
+
+
+@pytest.mark.asyncio
+async def test_on_transport_failure_invokes_reconnect_callback():
+    """
+    If a reconnect_callback is configured on TxManager, _on_transport_failure
+    must call it. This is how the channel actually gets re-dialed on a
+    transport-class failure.
+    """
+    callback_calls: list[None] = []
+
+    async def fake_reconnect():
+        callback_calls.append(None)
+
+    mgr = TxManager(
+        wallet=Mock(),
+        tx_client=Mock(),
+        auth_client=Mock(),
+        bank_client=Mock(),
+        feemarket_client=Mock(),
+        config=AlloraNetworkConfig.testnet(),
+        reconnect_callback=fake_reconnect,
+    )
+
+    await mgr._on_transport_failure()
+    assert len(callback_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_on_transport_failure_is_noop_without_callback():
+    """If no callback is configured, _on_transport_failure logs and returns cleanly."""
+    mgr = _make_manager()  # no callback
+    # Must not raise; pre-fix this was a no-op stub anyway, just make sure
+    # the absence of a callback is handled gracefully.
+    await mgr._on_transport_failure()
+
+
+@pytest.mark.asyncio
+async def test_on_transport_failure_swallows_reconnect_errors():
+    """
+    If the reconnect callback itself raises, _on_transport_failure must
+    NOT propagate the error. The retry loop is going to retry anyway; we
+    don't want a failed reconnect to cascade into a failed submission.
+    """
+    async def failing_reconnect():
+        raise RuntimeError("DNS failed or something")
+
+    mgr = TxManager(
+        wallet=Mock(),
+        tx_client=Mock(),
+        auth_client=Mock(),
+        bank_client=Mock(),
+        feemarket_client=Mock(),
+        config=AlloraNetworkConfig.testnet(),
+        reconnect_callback=failing_reconnect,
+    )
+
+    # Must not raise
+    await mgr._on_transport_failure()

@@ -5,7 +5,7 @@ from grpclib.exceptions import GRPCError, StreamTerminatedError
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
-from typing import Any, Optional, Union, Dict, cast
+from typing import Any, Awaitable, Callable, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
 from cosmpy.aerial.wallet import LocalWallet
@@ -157,6 +157,7 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 5,
+        reconnect_callback: Optional[Callable[[], Awaitable[None]]] = None,
     ):
         self.wallet = wallet
         self.tx_client = tx_client
@@ -167,6 +168,12 @@ class TxManager:
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
         self.parent_tx_id = 0
+        # If set, called by the retry loop when a transport failure is
+        # detected. The callback is expected to close the current channel,
+        # dial a fresh one, and re-bind the stub references on this
+        # TxManager (tx_client, auth_client, bank_client, feemarket_client).
+        # AlloraRPCClient injects this; tests may leave it None for a no-op.
+        self._reconnect_callback = reconnect_callback
 
         self._default_gas_limits = {
             "/emissions.v9.InsertWorkerPayloadRequest": 250000,
@@ -497,17 +504,32 @@ class TxManager:
         """
         Hook called by the retry loop when a gRPC transport error is observed.
 
-        Commit 3 wires this up to actually close-and-redial the channel.
-        Until then this is a no-op marker: the retry loop will retry, but
-        on a likely-dead channel, so the next attempt may still fail.
-        Logged at warning level so the dead-channel-retry situation is at
-        least visible.
+        If a reconnect_callback was injected at construction time
+        (AlloraRPCClient does this in production), call it to close the
+        current grpclib.Channel, dial a fresh one, and re-bind the stub
+        references on this TxManager. The callback is responsible for the
+        rebinding because TxManager doesn't own the Channel directly.
+
+        If no callback is configured (e.g. in unit tests, or if TxManager
+        is wired up standalone), this is a no-op marker that at least makes
+        the dead-channel-retry situation visible in logs.
         """
-        logger.warning(
-            "Transport-failure recovery hook fired (no-op stub — channel "
-            "reconnect not yet wired up; next attempt will use the same "
-            "underlying channel)"
-        )
+        if self._reconnect_callback is None:
+            logger.warning(
+                "Transport-failure observed but no reconnect_callback "
+                "configured — next attempt will reuse the same (likely "
+                "dead) channel"
+            )
+            return
+        try:
+            await self._reconnect_callback()
+            logger.info("gRPC channel reconnected after transport failure")
+        except Exception as exc:
+            # The reconnect itself failed (DNS, TCP, TLS, whatever). The
+            # retry loop will still try the next attempt — the channel may
+            # be dead, but we don't want the failed-reconnect exception to
+            # cascade and abort the whole submission. Surface as warning.
+            logger.warning(f"gRPC channel reconnect failed: {exc}")
 
     async def wait_for_tx(self,
         hash: str,
