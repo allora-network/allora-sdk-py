@@ -17,6 +17,8 @@ from allora_sdk.rpc_client.tx_manager import (
     TxManager,
     TxNotFoundError,
     AccountSequenceMismatchError,
+    GRPCTransportError,
+    _is_grpclib_transport_error,
 )
 
 
@@ -50,16 +52,86 @@ async def test_get_tx_raises_tx_not_found_on_grpclib_not_found_error():
 
 
 @pytest.mark.asyncio
-async def test_get_tx_reraises_grpclib_error_when_not_a_not_found():
-    """A non-NOT_FOUND grpclib error should propagate untouched."""
+async def test_get_tx_reraises_grpclib_error_when_not_a_not_found_and_not_transport():
+    """A non-NOT_FOUND, non-transport grpclib error should propagate untouched."""
     tx_client = Mock()
-    err = GRPCError(Status.UNAVAILABLE, "upstream is down", None)
+    err = GRPCError(Status.PERMISSION_DENIED, "permission denied", None)
     tx_client.get_tx = AsyncMock(side_effect=err)
     mgr = _make_manager(tx_client=tx_client)
 
     with pytest.raises(GRPCError) as exc_info:
         await mgr._get_tx("ABC123")
     assert exc_info.value is err
+
+
+@pytest.mark.asyncio
+async def test_get_tx_converts_unavailable_to_transport_error():
+    """grpclib UNAVAILABLE → GRPCTransportError for the retry loop to react on."""
+    tx_client = Mock()
+    tx_client.get_tx = AsyncMock(
+        side_effect=GRPCError(Status.UNAVAILABLE, "upstream is down", None)
+    )
+    mgr = _make_manager(tx_client=tx_client)
+
+    with pytest.raises(GRPCTransportError):
+        await mgr._get_tx("ABC123")
+
+
+@pytest.mark.asyncio
+async def test_get_tx_converts_connection_reset_to_transport_error():
+    """grpclib error with 'connection reset by peer' in message → GRPCTransportError."""
+    tx_client = Mock()
+    tx_client.get_tx = AsyncMock(
+        side_effect=GRPCError(
+            Status.UNKNOWN,
+            "error reading from server: read tcp 10.0.0.1:443: read: connection reset by peer",
+            None,
+        )
+    )
+    mgr = _make_manager(tx_client=tx_client)
+
+    with pytest.raises(GRPCTransportError):
+        await mgr._get_tx("ABC123")
+
+
+@pytest.mark.asyncio
+async def test_get_tx_converts_stream_terminated_to_transport_error():
+    """grpclib StreamTerminatedError → GRPCTransportError."""
+    from grpclib.exceptions import StreamTerminatedError
+    tx_client = Mock()
+    tx_client.get_tx = AsyncMock(side_effect=StreamTerminatedError("Connection lost"))
+    mgr = _make_manager(tx_client=tx_client)
+
+    with pytest.raises(GRPCTransportError):
+        await mgr._get_tx("ABC123")
+
+
+def test_is_grpclib_transport_error_classification():
+    """Direct unit test of the transport-classifier helper."""
+    from grpclib.exceptions import StreamTerminatedError
+
+    # Positive cases
+    assert _is_grpclib_transport_error(StreamTerminatedError("anything"))
+    assert _is_grpclib_transport_error(GRPCError(Status.UNAVAILABLE, "go away", None))
+    assert _is_grpclib_transport_error(
+        GRPCError(Status.UNKNOWN, "read tcp ...: connection reset by peer", None)
+    )
+    assert _is_grpclib_transport_error(
+        GRPCError(Status.UNKNOWN, "code = Unavailable desc = unexpected EOF", None)
+    )
+
+    # Negative cases — not transport
+    assert not _is_grpclib_transport_error(
+        GRPCError(Status.NOT_FOUND, "tx ABC not found", None)
+    )
+    assert not _is_grpclib_transport_error(
+        GRPCError(Status.INVALID_ARGUMENT, "account sequence mismatch", None)
+    )
+    assert not _is_grpclib_transport_error(
+        GRPCError(Status.PERMISSION_DENIED, "denied", None)
+    )
+    assert not _is_grpclib_transport_error(RuntimeError("unrelated"))
+    assert not _is_grpclib_transport_error(Exception("unrelated"))
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import asyncio
 from enum import Enum
-from grpclib.exceptions import GRPCError
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError, StreamTerminatedError
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
@@ -101,6 +102,48 @@ class TxNotFoundError(Exception):
 
 class TxTimeoutError(Exception):
     pass
+
+
+class GRPCTransportError(Exception):
+    """
+    A gRPC transport-layer failure that may be recoverable by re-dialing the
+    underlying channel. Raised when the SDK observes one of:
+      - grpclib.StreamTerminatedError (HTTP/2 stream killed)
+      - grpclib.GRPCError with Status.UNAVAILABLE (server-reported "go away")
+      - grpclib.GRPCError whose message looks like an upstream CDN/LB
+        half-close ("connection reset by peer", "unexpected EOF", etc.)
+
+    The retry loop in _attempt_submissions catches this type and forces a
+    channel reconnect before the next attempt. Without this class, transport
+    failures fell into the generic 'except Exception' block which failed the
+    whole transaction with zero retries.
+    """
+    pass
+
+
+def _is_grpclib_transport_error(exc: BaseException) -> bool:
+    """
+    Classify whether a grpclib exception represents a transport-layer failure
+    that warrants closing-and-redialing the channel.
+
+    Mirrors the logic in lib/errors.go isGRPCTransportError() from the Go
+    offchain-node fix — same scenarios, same response (treat as switching
+    event). Substrings chosen to match grpclib's wrapping of the underlying
+    socket/HTTP2 errors observed in production.
+    """
+    if isinstance(exc, StreamTerminatedError):
+        return True
+    if isinstance(exc, GRPCError):
+        if exc.status == Status.UNAVAILABLE:
+            return True
+        msg = (exc.message or "").lower()
+        if "connection reset by peer" in msg:
+            return True
+        if "connection timed out" in msg:
+            return True
+        if "unexpected eof" in msg:
+            return True
+    return False
 
 
 class TxManager:
@@ -257,6 +300,13 @@ class TxManager:
             # .details is an optional attribute (often None) — NOT a callable
             # (this used to call .details() on the wrong exception type).
             error_details = e.message or str(e)
+
+            # Transport-layer failure: surface as GRPCTransportError so the
+            # retry loop can force a channel reconnect.
+            if _is_grpclib_transport_error(e):
+                logger.warning(f"Simulation hit gRPC transport failure: {error_details}")
+                raise GRPCTransportError(f"transport failure during simulation: {error_details}") from e
+
             logger.error(f"Simulation failed: {error_details}")
 
             # Check for common errors
@@ -265,6 +315,10 @@ class TxManager:
                 raise AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_details}")
 
             raise Exception(f"Transaction simulation failed: {error_details}")
+        except StreamTerminatedError as e:
+            # grpclib's HTTP/2-stream-killed exception — also a transport failure.
+            logger.warning(f"Simulation hit gRPC stream termination: {e}")
+            raise GRPCTransportError(f"stream terminated during simulation: {e}") from e
         except Exception as e:
             logger.error(f"Simulation error: {e}")
             raise
@@ -340,6 +394,35 @@ class TxManager:
                 logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
 
+            except GRPCTransportError as err:
+                # Transport-layer failure (Cloudflare half-close, stream
+                # reset, server "Unavailable"). The current grpclib.Channel
+                # is likely dead. Force a reconnect before retrying.
+                if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                    logger.error(f"Transaction failed after max retries due to gRPC transport failure: {err}")
+                    pending._final_future.set_exception(err)
+                    return
+                logger.warning(f"gRPC transport failure on attempt {attempt + 1}, reconnecting and retrying: {err}")
+                await self._on_transport_failure()
+                continue
+
+            except (GRPCError, StreamTerminatedError) as err:
+                # Defensive net: a transport-classified grpclib error escaped
+                # without being wrapped in GRPCTransportError (e.g. raised
+                # from broadcast_tx or account_info, not _estimate_gas/_get_tx).
+                # Treat the same as GRPCTransportError if it classifies as one.
+                if _is_grpclib_transport_error(err):
+                    if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                        logger.error(f"Transaction failed after max retries due to gRPC transport failure: {err}")
+                        pending._final_future.set_exception(GRPCTransportError(str(err)))
+                        return
+                    logger.warning(f"gRPC transport failure on attempt {attempt + 1} (unwrapped), reconnecting and retrying: {err}")
+                    await self._on_transport_failure()
+                    continue
+                # Non-transport grpclib error → fall through to generic Exception handler below
+                pending._final_future.set_exception(err)
+                return
+
             except Exception as err:
                 pending._final_future.set_exception(err)
                 return
@@ -410,6 +493,22 @@ class TxManager:
 
         return tx_hash, gas_limit, fee
 
+    async def _on_transport_failure(self):
+        """
+        Hook called by the retry loop when a gRPC transport error is observed.
+
+        Commit 3 wires this up to actually close-and-redial the channel.
+        Until then this is a no-op marker: the retry loop will retry, but
+        on a likely-dead channel, so the next attempt may still fail.
+        Logged at warning level so the dead-channel-retry situation is at
+        least visible.
+        """
+        logger.warning(
+            "Transport-failure recovery hook fired (no-op stub — channel "
+            "reconnect not yet wired up; next attempt will use the same "
+            "underlying channel)"
+        )
+
     async def wait_for_tx(self,
         hash: str,
         timeout: Optional[Union[int, float, timedelta]] = None,
@@ -444,7 +543,14 @@ class TxManager:
             details = e.message or ""
             if "not found" in details:
                 raise TxNotFoundError() from e
+            # Transport-layer failure during a tx-status poll: surface as
+            # GRPCTransportError so the caller (wait_for_tx → its caller)
+            # can choose to reconnect rather than tearing down the wait.
+            if _is_grpclib_transport_error(e):
+                raise GRPCTransportError(f"transport failure during get_tx: {details}") from e
             raise
+        except StreamTerminatedError as e:
+            raise GRPCTransportError(f"stream terminated during get_tx: {e}") from e
         except RuntimeError as e:
             details = str(e)
             if "tx" in details and "not found" in details:
