@@ -1,6 +1,6 @@
 import asyncio
 from enum import Enum
-import grpc
+from grpclib.exceptions import GRPCError
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
@@ -252,15 +252,18 @@ class TxManager:
             # Add a 20% safety margin to the estimate
             return int(gas_used * 1.2)
             
-        except grpc.RpcError as e:
-            error_details = e.details() if hasattr(e, 'details') else str(e)
+        except GRPCError as e:
+            # grpclib.GRPCError.message is the upstream-provided message string;
+            # .details is an optional attribute (often None) — NOT a callable
+            # (this used to call .details() on the wrong exception type).
+            error_details = e.message or str(e)
             logger.error(f"Simulation failed: {error_details}")
-            
+
             # Check for common errors
-            error_str = str(error_details).lower() if error_details else ""
+            error_str = error_details.lower()
             if "account sequence mismatch" in error_str:
                 raise AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_details}")
-            
+
             raise Exception(f"Transaction simulation failed: {error_details}")
         except Exception as e:
             logger.error(f"Simulation error: {e}")
@@ -434,9 +437,12 @@ class TxManager:
             if resp is None or resp.tx_response is None:
                 raise TxNotFoundError()
             return resp
-        except grpc.RpcError as e:
-            details = e.details()
-            if details is not None and "not found" in details:
+        except GRPCError as e:
+            # See note in _estimate_gas: grpclib.GRPCError.message is the
+            # upstream string (often "tx <hash> not found" for NOT_FOUND).
+            # .details is NOT callable; .message is the textual payload.
+            details = e.message or ""
+            if "not found" in details:
                 raise TxNotFoundError() from e
             raise
         except RuntimeError as e:
