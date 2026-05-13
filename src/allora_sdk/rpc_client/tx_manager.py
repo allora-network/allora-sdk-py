@@ -307,14 +307,18 @@ class TxManager:
             # .details is an optional attribute (often None) — NOT a callable
             # (this used to call .details() on the wrong exception type).
             error_details = e.message or str(e)
+            status_name = e.status.name if e.status is not None else "UNKNOWN"
 
             # Transport-layer failure: surface as GRPCTransportError so the
             # retry loop can force a channel reconnect.
             if _is_grpclib_transport_error(e):
-                logger.warning(f"Simulation hit gRPC transport failure: {error_details}")
+                logger.warning(
+                    f"Simulation hit gRPC transport failure "
+                    f"(grpc_status={status_name}): {error_details}"
+                )
                 raise GRPCTransportError(f"transport failure during simulation: {error_details}") from e
 
-            logger.error(f"Simulation failed: {error_details}")
+            logger.error(f"Simulation failed (grpc_status={status_name}): {error_details}")
 
             # Check for common errors
             error_str = error_details.lower()
@@ -371,7 +375,7 @@ class TxManager:
                 gas_multiplier = 1.0 + (attempt * 0.3)
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to insufficient gas")
-                logger.debug(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
+                logger.warning(f"Gas estimation too low, retrying with higher gas (attempt {attempt + 2})")
                 continue
 
             except InsufficientFeesError:
@@ -382,7 +386,7 @@ class TxManager:
                 fee_multiplier = 1.0 + attempt * 0.5
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to insufficient fees")
-                logger.debug("Insufficient fees, retrying with refreshed gas price...")
+                logger.warning("Insufficient fees, retrying with refreshed gas price...")
                 continue
 
             except AccountSequenceMismatchError:
@@ -390,7 +394,7 @@ class TxManager:
                 # TODO: maybe build a nonce manager?
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     raise Exception("Transaction failed after multiple attempts due to repeated account sequence mismatches")
-                logger.debug("Account sequence mismatch, retrying...")
+                logger.warning("Account sequence mismatch, retrying...")
                 continue
 
             except TxTimeoutError:
@@ -398,7 +402,7 @@ class TxManager:
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
                     return
-                logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
+                logger.warning(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
 
             except GRPCTransportError as err:
