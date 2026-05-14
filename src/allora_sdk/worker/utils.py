@@ -131,7 +131,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
             gt = await gt_fn(context)
             gt_cache = (cache_key, gt)
 
-            logger.debug(f'Ground truth resolved for topic {context.topic_id} at nonce {context.nonce}')
+            logger.info(f'📐 Ground truth for topic {context.topic_id} at nonce {context.nonce}: {gt}')
 
         loss = loss_fn(inference, gt)
 
