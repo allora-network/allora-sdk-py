@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 def mse_loss(x: float, y: float) -> float:
-    return math.log((x-y)**2 + 1e-12)   # the Allora chain uses log losses
+    return (x-y)**2
 
 async def get_ground_truth(context: RunContext) -> float:
     nonce_time = await get_block_time(context.client, context.nonce)
@@ -27,7 +27,7 @@ async def main():
         topic_id=69,
         # wallet=AlloraWalletConfig(mnemonic="..."),  # uncomment to use a specific wallet instead of generating one
         network=AlloraNetworkConfig.testnet(),
-        reputer_fn=make_reputer_function(get_ground_truth, mse_loss, log_loss=False),
+        reputer_fn=make_reputer_function(get_ground_truth, mse_loss),
         min_stake_uallo=1_000_000,
     )
 
