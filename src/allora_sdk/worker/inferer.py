@@ -16,7 +16,8 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsWorkerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
-from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult, RunContext
+from allora_sdk.worker.context import RunContext
+from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
 from allora_sdk.worker.utils import resolve_maybe_awaitable
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 

@@ -10,7 +10,7 @@ from .loss_methods import (
     UnsupportedLossMethodError,
 )
 from .worker.utils import get_block_time, get_network_inference, make_reputer_function
-from .worker.types import RunContext
+from .worker.context import RunContext
 from cosmpy.aerial.wallet import LocalWallet, PrivateKey
 
 __all__ = [
