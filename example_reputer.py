@@ -27,7 +27,7 @@ async def main():
         topic_id=69,
         # wallet=AlloraWalletConfig(mnemonic="..."),  # uncomment to use a specific wallet instead of generating one
         network=AlloraNetworkConfig.testnet(),
-        reputer_fn=make_reputer_function(get_ground_truth, mse_loss),
+        reputer_fn=make_reputer_function(get_ground_truth, mse_loss, log_loss=False),
         min_stake_uallo=1_000_000,
     )
 
