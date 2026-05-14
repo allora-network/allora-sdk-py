@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Generic, Protocol, TypeVar, Union, runtime_checkable
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
 from allora_sdk.rpc_client.tx_manager import TxError
-from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.worker.context import RunContext
 
 RunFnReturnType = TypeVar("RunFnReturnType")
 ResultDataType = TypeVar("ResultDataType")
@@ -24,12 +24,6 @@ class WorkerNotWhitelistedError(Exception):
 class StopQueue:
     pass
 
-@dataclass
-class RunContext:
-    client: AlloraRPCClient
-    topic_id: int
-    nonce: int
-
 class TSubmissionWindowOpenEventType(Protocol):
     nonce_block_height: int
 
@@ -49,3 +43,8 @@ class UseCase(Protocol[WindowOpenedEvent, UseCaseReturnType]):
 class SupportsAutoStake(Protocol):
     autostake: object | None
     async def handle_rewards_settled(self, event: Any, block_height: int | None = None) -> None: ...
+
+
+@runtime_checkable
+class SupportsInitialStake(Protocol):
+    async def maybe_initial_stake(self) -> None: ...
