@@ -9,6 +9,9 @@ async def run_model(ctx: RunContext) -> dict[str, float]:
     # get inferers who participated in the previous epoch
     epoch_length = 54
     value_bundle = await get_network_inference(ctx.client, ctx.topic_id, ctx.nonce - epoch_length)
+    if value_bundle is None:
+        return {}
+
     inferer_addrs = [x.worker for x in value_bundle.inferer_values]
 
     # predict loss for each inferer
