@@ -100,7 +100,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval: Interval in seconds to poll for new submission windows
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
+            lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             debug: Enable debug logging
+            show_banner: Set to false to replace startup banner by one-line message
 
         Returns:
             An instance of AlloraWorker configured as an inferer
@@ -161,7 +163,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
+            lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             debug: Enable debug logging
+            show_banner: Set to false to replace startup banner by one-line message
 
         Returns:
             An instance of AlloraWorker configured as a reputer
@@ -227,7 +231,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission windows
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
+            lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             debug: Enable debug logging
+            show_banner: Set to false to replace startup banner by one-line message
 
         Returns:
             An instance of AlloraWorker configured as a forecaster

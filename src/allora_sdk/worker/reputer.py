@@ -27,7 +27,9 @@ from allora_sdk.worker.utils import resolve_maybe_awaitable
 logger = logging.getLogger("allora_sdk")
 
 ReputerFnResult = Union[str, float, Decimal]
-ReputerFn = Callable[[RunContext, float], Awaitable[ReputerFnResult]]
+ReputerFnAsync = Callable[[RunContext, float], Awaitable[ReputerFnResult]]
+ReputerFnSync = Callable[[RunContext, float], ReputerFnResult]
+ReputerFn = ReputerFnSync | ReputerFnAsync
 
 class Reputer:
     """
