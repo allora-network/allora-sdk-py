@@ -48,26 +48,27 @@ Submits predictions to Allora Network topics with your ML models. The worker han
 
 The simplest way to start participating in the Allora network is to paste the following snippet into a Jupyter or Google Colab notebook (or just a Python file that you can run from your terminal).  It will automatically handle all of the network onboarding and configuration behind the scenes, and will start submitting inferences automatically.
 
-**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
+A slightly more complete example can be found in the file `example_inference_worker.py`.
 
 ```python
-from allora_sdk import AlloraWorker
+from allora_sdk import AlloraNetworkConfig, AlloraWorker, RunContext
 
-def my_model():
-    # Your ML model prediction logic
-    return 120000.0  # Example BTC price prediction
+async def run_model(context: RunContext) -> float:
+    # your ML model prediction logic
+    return 123.45
 
 async def main():
-    worker = AlloraWorker.testnet(
-        run=my_model,
-        api_key="<YOUR API KEY HERE>",
+    worker = AlloraWorker.inferer(
+        topic_id=69,
+        network=AlloraNetworkConfig.testnet(),
+        run=run_model,
     )
-    
+
     async for result in worker.run():
         if isinstance(result, Exception):
-            print(f"Error: {result}")
+            print(f"Inference worker error: {result}")
         else:
-            print(f"Prediction submitted: {result.prediction}")
+            print(f"Prediction submitted to Allora: {result.submission}")
 
 # IF YOU'RE RUNNING IN A PYTHON FILE:
 import asyncio
@@ -159,80 +160,43 @@ inference_worker = AlloraWorker.inferer(
 
 ### Reputer Configuration
 
-Reputers evaluate inference quality by computing losses between ground truth and predictions. The SDK supports automatic loss function selection based on the topic's on-chain configuration.
+Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: float) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function. 
+
+In practice, it is often more convenient to have two separate callbacks:
+1. A ground truth function `get_ground_truth(context: RunContext) -> GroundTruthType` which only runs once per epoch.
+2. A loss function `loss(inference: float, gt: GroundTruthType) -> float`, which runs for every value in the inference bundle
+
+Note that the ground truth type does not need to agree with the inference type (`float`). That is useful for certain loss functions which require extra data. For example, the `czar` and `ztae` loss functions require a standard deviation of historical values, which can just be treated as part of the ground truth.
+
+We provide a helper function `make_reputer_function` which takes two functions `get_ground_truth` and `loss_fn` as above and returns a `reputer_fn` that is suitable for passing to the Allora worker. It handles the caching of the ground truth, so that `get_ground_truth` only needs to be called once.
 
 ```python
-from allora_sdk.worker import AlloraWorker
+def mse_loss(x: float, y: float) -> float:
+    return (x-y)**2
 
-async def get_ground_truth(nonce: int) -> float:
-    # Return the actual value for the given epoch/nonce
-    return 100.0
+async def get_ground_truth(context: RunContext) -> float:
+    nonce_time = await get_block_time(context.client, context.nonce)
+    prediction_time = nonce_time.replace(second=0, microsecond=0) + timedelta(days = 1)
 
-# Simplest reputer setup - loss function auto-selected based on topic config
-reputer = AlloraWorker.reputer(
-    ground_truth_fn=get_ground_truth,
-    topic_id=1,
-    api_key="UP-...",
-)
+    logger.info(f'Generating ground truth for epoch starting at {nonce_time}')
+    logger.info(f'As this is a 1 day BTC/USD price prediction topic, we need to get the price of BTC at {prediction_time}')
 
-# Custom loss function example
-def my_custom_loss(ground_truth: float, predicted: float) -> float:
-    return abs(ground_truth - predicted)  # MAE
+    # getting this from some data source
+    ground_truth = 123.45
 
-reputer_custom = AlloraWorker.reputer(
-    ground_truth_fn=get_ground_truth,
-    loss_fn=my_custom_loss,  # Override auto-selection
-    topic_id=1,
-    api_key="UP-...",
+    return ground_truth
+
+# ...
+
+worker = AlloraWorker.reputer(
+    topic_id=69,
+    network=AlloraNetworkConfig.testnet(),
+    reputer_fn=make_reputer_function(get_ground_truth, mse_loss),
+    min_stake_uallo=1_000_000,
 )
 ```
 
-`loss_fn` can be synchronous or asynchronous. Supported signatures are
-`(ground_truth: float, predicted: float) -> float` and
-`(ground_truth: float, predicted: float) -> Awaitable[float]`.
-
-**Supported Default Loss Methods:**
-
-When `loss_fn` is not provided, the SDK auto-selects from these implementations based on the topic's `loss_method`:
-
-| Method | Aliases | Description |
-|--------|---------|-------------|
-| `sqe` | `mse`, `squared_error` | Squared Error |
-| `abse` | `mae`, `absolute_error` | Absolute Error |
-| `huber` | - | Huber Loss (delta=1.0) |
-| `logcosh` | `log_cosh` | Log-Cosh Loss |
-| `bce` | `binary_cross_entropy` | Binary Cross Entropy |
-| `poisson` | - | Poisson Loss |
-| `ztae` | - | Z-Transformed Absolute Error* |
-| `zptae` | - | Z Power-Tanh Absolute Error* |
-
-*Note: `ztae` and `zptae` require a standard deviation (std) parameter. The default functions use std=1.0. For proper use, create custom functions with `make_ztae_loss(std=...)` or `make_zptae_loss(std=...)`.
-
-You can also use these loss functions directly:
-
-```python
-from allora_sdk.loss_methods import (
-    get_default_loss_fn,
-    squared_error_loss,
-    absolute_error_loss,
-    huber_loss,
-    make_ztae_loss,
-    make_zptae_loss,
-)
-
-# Get by name
-loss_fn = get_default_loss_fn("mse")
-
-# Or use directly
-loss = squared_error_loss(ground_truth=100.0, predicted=95.0)  # Returns 25.0
-
-# For ztae/zptae, create with your data's std:
-ztae = make_ztae_loss(std=0.02)  # std = historical volatility
-loss = ztae(ground_truth=0.01, predicted=0.02)
-
-zptae = make_zptae_loss(std=0.02, alpha=0.25, beta=2.0)
-loss = zptae(ground_truth=0.01, predicted=0.02)
-```
+A full example is in `example_reputer.py`.
 
 ## Allora RPC Client
 
