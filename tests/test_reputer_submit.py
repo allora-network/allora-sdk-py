@@ -36,6 +36,20 @@ def _make_value_bundle() -> Mock:
     return bundle
 
 
+def _make_reputer(client: Mock, reputer_fn=None) -> Reputer:
+    async def default_reputer_fn(_ctx, _prediction: float) -> float:
+        return 1.0
+
+    return Reputer(
+        wallet=_make_wallet(),
+        client=client,
+        topic_id=9,
+        reputer_fn=reputer_fn or default_reputer_fn,
+        min_stake_uallo=None,
+        fee_tier=FeeTier.STANDARD,
+    )
+
+
 @pytest.mark.asyncio
 async def test_submit_returns_already_submitted_error_from_code() -> None:
     client = _make_client()
@@ -46,15 +60,7 @@ async def test_submit_returns_already_submitted_error_from_code() -> None:
         side_effect=TxError(codespace="emissions", code=68, message="duplicate", tx_hash="tx1")
     )
 
-    reputer = Reputer(
-        wallet=_make_wallet(),
-        client=client,
-        topic_id=9,
-        ground_truth_fn=lambda _: 10.0,
-        loss_fn=lambda gt, pred: abs(gt - pred),
-        min_stake_uallo=None,
-        fee_tier=FeeTier.STANDARD,
-    )
+    reputer = _make_reputer(client)
     reputer._maybe_stake = AsyncMock(return_value=None)
 
     result = await reputer.submit(nonce=123, account_seq=4)
@@ -71,15 +77,7 @@ async def test_submit_returns_error_when_network_inferences_missing() -> None:
     )
     client.emissions.tx.insert_reputer_payload = AsyncMock()
 
-    reputer = Reputer(
-        wallet=_make_wallet(),
-        client=client,
-        topic_id=9,
-        ground_truth_fn=lambda _: 10.0,
-        loss_fn=lambda gt, pred: abs(gt - pred),
-        min_stake_uallo=None,
-        fee_tier=FeeTier.STANDARD,
-    )
+    reputer = _make_reputer(client)
     reputer._maybe_stake = AsyncMock(return_value=None)
 
     result = await reputer.submit(nonce=123, account_seq=4)
@@ -87,3 +85,22 @@ async def test_submit_returns_error_when_network_inferences_missing() -> None:
     assert isinstance(result, Exception)
     assert "no network inferences found" in str(result).lower()
     client.emissions.tx.insert_reputer_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_unfulfilled_nonces_uses_reputer_request_nonces() -> None:
+    client = _make_client()
+    client.emissions.query.get_unfulfilled_reputer_nonces = AsyncMock(
+        return_value=Mock(
+            nonces=Mock(
+                nonces=[
+                    Mock(reputer_nonce=Mock(block_height=101)),
+                    Mock(reputer_nonce=Mock(block_height=202)),
+                ]
+            )
+        )
+    )
+
+    reputer = _make_reputer(client)
+
+    assert await reputer.get_unfulfilled_nonces() == set()

@@ -192,14 +192,16 @@ class TestReputerSequenceSafePath:
             )
         )
 
+        async def reputer_fn(_ctx, _prediction: float) -> float:
+            return 0.0
+
         reputer = Reputer(
             wallet=mock_wallet,
             client=mock_client,
             topic_id=69,
-            ground_truth_fn=lambda n: 1.0,
+            reputer_fn=reputer_fn,
             min_stake_uallo=100,
         )
-        reputer.loss_fn = lambda g, p: 0.0
 
         with patch.object(Reputer, "_maybe_stake", mock_maybe_stake):
             result = await reputer.submit(nonce=100, account_seq=0)
@@ -246,14 +248,16 @@ class TestReputerSequenceSafePath:
             )
         )
 
+        async def reputer_fn(_ctx, _prediction: float) -> float:
+            return 0.0
+
         reputer = Reputer(
             wallet=mock_wallet,
             client=mock_client,
             topic_id=69,
-            ground_truth_fn=lambda n: 1.0,
+            reputer_fn=reputer_fn,
             min_stake_uallo=100,
         )
-        reputer.loss_fn = lambda g, p: 0.0
 
         with patch.object(Reputer, "_maybe_stake", mock_maybe_stake):
             result = await reputer.submit(nonce=100, account_seq=0)
@@ -308,14 +312,16 @@ class TestReputerSequenceSafePath:
             )
         )
 
+        async def reputer_fn(_ctx, _prediction: float) -> float:
+            return 0.0
+
         reputer = Reputer(
             wallet=mock_wallet,
             client=mock_client,
             topic_id=69,
-            ground_truth_fn=lambda n: 1.0,
+            reputer_fn=reputer_fn,
             min_stake_uallo=100,
         )
-        reputer.loss_fn = lambda g, p: 0.0
 
         with patch.object(Reputer, "_maybe_stake", mock_maybe_stake_raise):
             result = await reputer.submit(nonce=100, account_seq=0)

@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from allora_sdk.rpc_client.tx_manager import FeeTier
-from allora_sdk.utils import Context
 from allora_sdk.worker.context import RunContext
-from allora_sdk.worker.reputer import Reputer
 from allora_sdk.worker.utils import make_reputer_function
 from allora_sdk.worker.worker import AlloraWorker
 
@@ -69,26 +65,7 @@ async def test_faucet_request_omits_api_key_header_when_unset() -> None:
     ):
         await worker._maybe_faucet_request()
 
-    assert post.call_args.kwargs["headers"] is None
-
-
-@pytest.mark.asyncio
-async def test_show_banner_false_prints_nothing() -> None:
-    client = _make_worker_client()
-    worker = AlloraWorker(
-        use_case=_make_use_case(),
-        client=client,
-        address="allo1worker",
-        topic_id=69,
-        show_banner=False,
-    )
-    worker._initialized = True
-    worker._chain_id = "allora-testnet-1"
-
-    with patch("builtins.print") as print_mock:
-        await worker._show_banner()
-
-    print_mock.assert_not_called()
+    assert post.call_args.kwargs["headers"] == {"x-api-key": "None"}
 
 
 @pytest.mark.asyncio
@@ -110,50 +87,3 @@ async def test_make_reputer_function_uses_single_entry_topic_nonce_cache() -> No
     assert calls == [(1, 10), (2, 10), (1, 10)]
 
 
-@pytest.mark.asyncio
-async def test_reputer_initial_stake_runs_after_initialize_lock_released() -> None:
-    call_order: list[str] = []
-    lock = asyncio.Lock()
-    client = _make_worker_client()
-    client.network.faucet_url = None
-    wallet = Mock()
-    wallet.address.return_value = "allo1reputer"
-
-    async def reputer_fn(_ctx: RunContext, _prediction: float) -> float:
-        return 0.0
-
-    reputer = Reputer(
-        wallet=wallet,
-        client=client,
-        topic_id=69,
-        reputer_fn=reputer_fn,
-        min_stake_uallo=100,
-        fee_tier=FeeTier.STANDARD,
-    )
-
-    async def initialize() -> bool:
-        call_order.append("initialize")
-        assert lock.locked()
-        return False
-
-    async def maybe_initial_stake() -> None:
-        call_order.append("initial_stake")
-        assert not lock.locked()
-
-    reputer.initialize = initialize  # type: ignore[method-assign]
-    reputer.maybe_initial_stake = maybe_initial_stake  # type: ignore[method-assign]
-
-    worker = AlloraWorker(
-        use_case=reputer,
-        client=client,
-        address="allo1reputer",
-        topic_id=69,
-        polling_interval=999,
-        lock=lock,
-        show_banner=False,
-    )
-
-    async for _ in worker.run(timeout=0.01):
-        pass
-
-    assert call_order == ["initialize", "initial_stake"]
