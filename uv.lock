@@ -221,7 +221,6 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "pyyaml", marker = "extra == 'codegen'" },
     { name = "requests" },
-    { name = "requests", specifier = "~=2.32" },
     { name = "requests-async", specifier = ">=0.2.4" },
     { name = "starlette", marker = "extra == 'dev'" },
     { name = "tox", marker = "extra == 'dev'" },
