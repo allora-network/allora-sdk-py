@@ -31,7 +31,6 @@ dependencies = [
     "protobuf>=5.0.0",
     "grpclib >= 0.4.8",
     "betterproto2 ~= 0.7.0",
-    "requests *",
     "async-timeout>=5.0.1",
     "hdwallets>=0.1.2",
     "mnemonic>=0.21",
