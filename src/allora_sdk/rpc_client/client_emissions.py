@@ -114,7 +114,6 @@ class EmissionsTxs:
                 topic_id=topic_id,
                 block_height=nonce,
                 inferer=worker_address,
-                value=inference_value,
                 value=canonicalize_dec(inference_value),
                 extra_data=extra_data or b"",
                 proof=proof or "",

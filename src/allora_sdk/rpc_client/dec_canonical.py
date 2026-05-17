@@ -100,7 +100,7 @@ def _to_decimal(value: DecInput) -> Decimal:
 def _fmt_f(digits: str, exponent: int) -> str:
     """Replicate apd's fmtF (decimal-point form, no exponent)."""
     if exponent >= 0:
-        return digits
+        return digits + "0" * exponent
     left = -exponent - len(digits)
     if left >= 0:
         return "0." + "0" * left + digits
