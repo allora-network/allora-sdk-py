@@ -102,6 +102,10 @@ class AccountSequenceMismatchError(Exception):
     """Raised when account sequence is out of sync."""
     pass
 
+class GasSimulationUnavailableError(Exception):
+    """Raised when gas simulation cannot be reached or completed by the RPC service."""
+    pass
+
 class WalletNotConfiguredError(Exception):
     """Raised when a transaction method is called without a configured wallet."""
     pass
@@ -173,20 +177,34 @@ class TxManager:
         account_seq: Optional[int] = None,
     ) -> "PendingTx":
         if self.wallet is None:
-            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
 
         estimated_gas_limit: Optional[int] = None
         try:
-            estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
-            logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
-            fee_preview = await self._calculate_optimal_fee(
-                estimated_gas_limit,
-                self._fee_multipliers[fee_tier],
+            estimated_gas_limit = await self.simulate_transaction(
+                type_url,
+                msgs,
+                account_seq=account_seq,
             )
-            logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
-        except Exception as e:
-            logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
-            estimated_gas_limit = None
+        except GasSimulationUnavailableError as err:
+            logger.warning(
+                f"Unable to simulate transaction for {type_url}; "
+                f"falling back to default gas estimate: {err}"
+            )
+        except (TxError, OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError):
+            logger.error(f"Transaction simulation failed for {type_url}; not broadcasting", exc_info=True)
+            raise
+
+        if estimated_gas_limit is not None:
+            logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
+            try:
+                fee_preview = await self._calculate_optimal_fee(
+                    estimated_gas_limit,
+                    self._fee_multipliers[fee_tier],
+                )
+                logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+            except Exception as err:
+                logger.debug(f"Unable to preview estimated fee for {type_url}: {err}")
 
         async with self._parent_tx_id_lock:
             next_parent_tx_id = self.parent_tx_id
@@ -213,6 +231,7 @@ class TxManager:
         self,
         type_url: str,
         msgs: list[Any],
+        account_seq: Optional[int] = None,
     ) -> int:
         """
         Simulate a transaction to estimate gas usage.
@@ -223,7 +242,8 @@ class TxManager:
         Args:
             type_url: The message type URL (e.g., "/cosmos.bank.v1beta1.MsgSend")
             msgs: List of protobuf messages to include in the transaction
-            memo: Optional transaction memo
+            account_seq: Optional sequence override to simulate with the same
+                account sequence that will be used for signing/broadcast.
             
         Returns:
             Estimated gas units required for the transaction (with 20% safety margin)
@@ -232,7 +252,7 @@ class TxManager:
             Exception: If simulation fails or account info cannot be retrieved
         """
         if self.wallet is None:
-            raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
+            raise WalletNotConfiguredError("No wallet configured. Initialize client with private key or mnemonic.")
         
         logger.debug(f"Simulating transaction for {type_url}")
         
@@ -259,7 +279,12 @@ class TxManager:
             dummy_fee = Coin(amount=1, denom=self.config.fee_denom)
 
             tx.seal(
-                signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
+                signing_cfgs=[
+                    SigningCfg.direct(
+                        self.wallet.public_key(),
+                        sequence_num=account_seq if account_seq is not None else info.sequence,
+                    )
+                ],
                 fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit),
             )
 
@@ -281,7 +306,7 @@ class TxManager:
                 sim_response = await self.tx_client.simulate(sim_request)
 
                 if sim_response is None or sim_response.gas_info is None:
-                    raise Exception('Simulation response is None or missing gas_info')
+                    raise GasSimulationUnavailableError("Simulation response is None or missing gas_info")
 
                 gas_used = int(sim_response.gas_info.gas_used)
                 logger.debug(f"Simulation successful after {attempt} attempt(s): estimated gas = {gas_used}")
@@ -300,7 +325,8 @@ class TxManager:
                     current_gas_limit = next_limit
                     continue
 
-                logger.error(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
+                log_fn = logger.warning if isinstance(err, GasSimulationUnavailableError) else logger.error
+                log_fn(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
                 raise err
 
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
@@ -353,9 +379,8 @@ class TxManager:
                     pending._final_future.set_exception(oog_err)
                     return
 
-                suggested_limit = (
-                    int(oog_err.gas_wanted * 1.2) if getattr(oog_err, "gas_wanted", None) else None
-                )
+                gas_wanted = oog_err.gas_wanted
+                suggested_limit = int(gas_wanted * 1.2) if gas_wanted is not None else None
 
                 if suggested_limit is None and pending.last_gas_limit is not None:
                     suggested_limit = int(pending.last_gas_limit * 1.3)
@@ -610,8 +635,12 @@ class TxManager:
             return InsufficientFeesError(f"Insufficient fees during simulation: {error_msg}")
         else:
             code = error.code() if hasattr(error, 'code') else None
+            if code in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED):
+                return GasSimulationUnavailableError(f"Gas simulation unavailable: {error_msg}")
+            code_value = 1
             try:
-                code_value = code.value[0] if isinstance(code.value, tuple) else int(code.value)
+                if code is not None:
+                    code_value = code.value[0] if isinstance(code.value, tuple) else int(code.value)
             except (TypeError, IndexError, AttributeError):
                 code_value = 1
 
