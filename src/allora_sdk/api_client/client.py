@@ -1,4 +1,3 @@
-import pprint
 import aiohttp
 from enum import Enum
 from typing import List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
@@ -122,7 +121,6 @@ class AlloraAPIClient:
             f"allora/consumer/{signature_format.value}?allora_topic_id={topic_id}&inference_value_type=uint256",
             Inference,
         )
-        pprint.pprint(response)
 
         if not response.data.inference_data:
             raise ValueError("Failed to fetch price inference")
@@ -149,13 +147,13 @@ class AlloraAPIClient:
         :raises: requests.RequestException if the API request fails
         """
         url = self.get_request_url(endpoint)
-        headers = {
+        headers: dict[str, str] = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "x-api-key": self.api_key,
         }
+        if self.api_key is not None:
+            headers["x-api-key"] = self.api_key
         response_data = await self.fetcher.fetch(url, headers)
 
-        pprint.pprint(response_data)
         return APIResponse[response_model](**response_data)
 

@@ -27,9 +27,10 @@ dependencies = [
     "aiohttp ~= 3.12",
     "cosmpy >= 0.11.1",
     "websockets >= 15.0.1",
+    "grpcio>=1.71.2",
+    "protobuf>=5.0.0",
     "grpclib >= 0.4.8",
     "betterproto2 ~= 0.7.0",
-    "requests *",
     "async-timeout>=5.0.1",
     "hdwallets>=0.1.2",
     "mnemonic>=0.21",
@@ -144,3 +145,9 @@ commands = [["mypy", { replace = "posargs", default = ["src", "tests"], extend =
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["asyncio: mark test as async test"]
+
+[dependency-groups]
+dev = [
+    "betterproto2-compiler>=0.7.1",
+    "pyright>=1.1.407",
+]

@@ -10,7 +10,7 @@
   "defineConstant": {
     "DEBUG": true
   },
-  "typeCheckingMode": "basic",
+  "typeCheckingMode": "standard",
   "pythonVersion": "3.10",
   "pythonPlatform": "Linux",
   "executionEnvironments": [

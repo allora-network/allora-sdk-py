@@ -48,26 +48,27 @@ Submits predictions to Allora Network topics with your ML models. The worker han
 
 The simplest way to start participating in the Allora network is to paste the following snippet into a Jupyter or Google Colab notebook (or just a Python file that you can run from your terminal).  It will automatically handle all of the network onboarding and configuration behind the scenes, and will start submitting inferences automatically.
 
-**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
+A slightly more complete example can be found in the file `example_inference_worker.py`.
 
 ```python
-from allora_sdk import AlloraWorker
+from allora_sdk import AlloraNetworkConfig, AlloraWorker, RunContext
 
-def my_model():
-    # Your ML model prediction logic
-    return 120000.0  # Example BTC price prediction
+async def run_model(context: RunContext) -> float:
+    # your ML model prediction logic
+    return 123.45
 
 async def main():
-    worker = AlloraWorker.testnet(
-        run=my_model,
-        api_key="<YOUR API KEY HERE>",
+    worker = AlloraWorker.inferer(
+        topic_id=69,
+        network=AlloraNetworkConfig.testnet(),
+        run=run_model,
     )
-    
+
     async for result in worker.run():
         if isinstance(result, Exception):
-            print(f"Error: {result}")
+            print(f"Inference worker error: {result}")
         else:
-            print(f"Prediction submitted: {result.prediction}")
+            print(f"Prediction submitted to Allora: {result.submission}")
 
 # IF YOU'RE RUNNING IN A PYTHON FILE:
 import asyncio
@@ -92,26 +93,24 @@ More resources:
 
 ```python
 from allora_sdk import AlloraWorker, FeeTier, AlloraWalletConfig, AlloraNetworkConfig
+from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeTargetType
+from allora_sdk.worker import SanityCheckConfig
 
 inference_worker = AlloraWorker.inferer(
     #
     # Wallet config
     #
-
     # Initialize with a mnemonic
-    wallet = AlloraWalletConfig(mnemonic="..."),
-
-    # Initialize with a private key (hex-encoded)
-    wallet = AlloraWalletConfig(private_key="..."),
+    wallet=AlloraWalletConfig(mnemonic="..."),
 
     #
     # Networking config
     #
 
     # Helpers for common networks/environments
-    network = AlloraNetworkConfig.testnet(),
-    network = AlloraNetworkConfig.mainnet(),
-    network = AlloraNetworkConfig.local(),
+    # network = AlloraNetworkConfig.testnet(),
+    # network = AlloraNetworkConfig.mainnet(),
+    # network = AlloraNetworkConfig.local(),
 
     # Specify network options directly
     network=AlloraNetworkConfig(
@@ -125,23 +124,79 @@ inference_worker = AlloraWorker.inferer(
     ),
 
     # Topic ID (see https://explorer.allora.network for the full list)
-    topic_id = 1,
+    topic_id=1,
 
     # Specify the inference function directly
-    run = my_model,
+    run=my_model,
 
     # Allora API key -- see https://developer.allora.network for a free key.
     # This is a convenience feature that allows the worker to fetch ALLO for gas fees on testnet.
-    api_key = "UP-...",
+    api_key="UP-...",
 
     # `fee_tier` controls how much you pay to ensure your inferences are included within
     # an epoch.  The options are ECO, STANDARD, or PRIORITY -- default is STANDARD.
-    fee_tier = FeeTier.PRIORITY,
+    fee_tier=FeeTier.PRIORITY,
 
     # `debug` enables debug logging -- very noisy.
-    debug = True,
+    debug=True,
+
+    # Optional: auto-stake this worker's rewards to a reputer (Allora emissions module)
+    autostake=AutoStakeConfig(
+        target_type=AutoStakeTargetType.REPUTER,
+        target_address="allo1...reputer",
+    ),
+
+    # Or: auto-stake to a Cosmos validator (staking MsgDelegate)
+    # autostake = AutoStakeConfig(
+    #     target_type=AutoStakeTargetType.VALIDATOR,
+    #     target_address="allovaloper1...validator",
+    # ),
+
+    # Optional sanity check (default: enabled, 60s throttle)
+    # sanity_check=SanityCheckConfig(enabled=False),  # disable
+    # sanity_check=SanityCheckConfig(throttle_interval_seconds=30.0),
 )
 ```
+
+### Reputer Configuration
+
+Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: float) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function. 
+
+In practice, it is often more convenient to have two separate callbacks:
+1. A ground truth function `get_ground_truth(context: RunContext) -> GroundTruthType` which only runs once per epoch.
+2. A loss function `loss(inference: float, gt: GroundTruthType) -> float`, which runs for every value in the inference bundle
+
+Note that the ground truth type does not need to agree with the inference type (`float`). That is useful for certain loss functions which require extra data. For example, the `czar` and `ztae` loss functions require a standard deviation of historical values, which can just be treated as part of the ground truth.
+
+We provide a helper function `make_reputer_function` which takes two functions `get_ground_truth` and `loss_fn` as above and returns a `reputer_fn` that is suitable for passing to the Allora worker. It handles the caching of the ground truth, so that `get_ground_truth` only needs to be called once.
+
+```python
+def mse_loss(x: float, y: float) -> float:
+    return (x-y)**2
+
+async def get_ground_truth(context: RunContext) -> float:
+    nonce_time = await get_block_time(context.client, context.nonce)
+    prediction_time = nonce_time.replace(second=0, microsecond=0) + timedelta(days = 1)
+
+    logger.info(f'Generating ground truth for epoch starting at {nonce_time}')
+    logger.info(f'As this is a 1 day BTC/USD price prediction topic, we need to get the price of BTC at {prediction_time}')
+
+    # getting this from some data source
+    ground_truth = 123.45
+
+    return ground_truth
+
+# ...
+
+worker = AlloraWorker.reputer(
+    topic_id=69,
+    network=AlloraNetworkConfig.testnet(),
+    reputer_fn=make_reputer_function(get_ground_truth, mse_loss),
+    min_stake_uallo=1_000_000,
+)
+```
+
+A full example is in `example_reputer.py`.
 
 ## Allora RPC Client
 

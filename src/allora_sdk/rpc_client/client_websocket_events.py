@@ -8,9 +8,6 @@ for monitoring Allora blockchain events in real-time.
 import asyncio
 import json
 import logging
-import importlib
-import pkgutil
-import inspect
 import time
 from typing import AsyncIterable, Awaitable, Dict, Iterable, List, Callable, Any, Literal, Optional, Union, Type, TypeVar, Protocol, runtime_checkable
 import websockets
@@ -46,7 +43,9 @@ async def default_websocket_connect(url: str) -> WebSocketLike:
 
 
 
-T = TypeVar('T', bound=betterproto2.Message)
+class TBetterproto2Message(Protocol):
+    # __name__: ClassVar[str]
+    pass
 
 class NewBlockEventsData(BaseModel):
     height: str
@@ -167,13 +166,13 @@ class EventFilter:
     
 
 
-GenericSyncCallbackFn  = Callable[[Dict[str, Any], int], None]
+TEvent = TypeVar("TEvent", bound="TBetterproto2Message")
+GenericSyncCallbackFn = Callable[[Dict[str, Any], int], None]
 GenericAsyncCallbackFn = Callable[[Dict[str, Any], int], Awaitable[None]]
-GenericCallbackFn      = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
-
-TypedSyncCallbackFn  = Callable[[T, int], None]
-TypedAsyncCallbackFn = Callable[[T, int], Awaitable[None]]
-TypedCallbackFn      = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
+GenericCallbackFn = Union[GenericSyncCallbackFn, GenericAsyncCallbackFn]
+TypedSyncCallbackFn = Callable[[TEvent, int], None]
+TypedAsyncCallbackFn = Callable[[TEvent, int], Awaitable[None]]
+TypedCallbackFn = Union[TypedSyncCallbackFn, TypedAsyncCallbackFn]
 
 
 class AlloraWebsocketSubscriber:
@@ -382,7 +381,7 @@ class AlloraWebsocketSubscriber:
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=None
+                        timeout=30,
                     )
                     await self._handle_message(str(message))
                     
@@ -391,9 +390,10 @@ class AlloraWebsocketSubscriber:
                     if not self.websocket.close_code:
                         await self.websocket.ping()
                     continue
-                    
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("WebSocket connection closed")
+
+            except websockets.exceptions.ConnectionClosed as e:
+                queries = [info.get("query", "?") for info in self.subscriptions.values()]
+                logger.warning(f"WebSocket connection closed: code={e.code} reason='{e.reason}' subscriptions={queries}")
                 self.websocket = None
                 if self.running:
                     await asyncio.sleep(self.reconnect_delay)
@@ -842,7 +842,7 @@ class AlloraWebsocketSubscriber:
     
     async def subscribe_new_block_events_typed(
         self,
-        event_class: Type[T],
+        event_class: type[TEvent],
         event_attribute_conditions: List[EventAttributeCondition],
         callback: TypedCallbackFn,
         subscription_id: Optional[str] = None,
@@ -904,7 +904,7 @@ class AlloraWebsocketSubscriber:
         logger.debug(f"✅ Completed typed subscription: {event_name} -> {event_class.__name__} (ID: {subscription_id})")
         return subscription_id
     
-    def _get_event_type_from_class(self, event_class: Type[betterproto2.Message]) -> Optional[str]:
+    def _get_event_type_from_class(self, event_class: type[TBetterproto2Message]) -> Optional[str]:
         """Get the event type string from a protobuf class."""
         
         # First try direct class match
