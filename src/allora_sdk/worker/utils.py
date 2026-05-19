@@ -10,8 +10,7 @@ from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
-from allora_sdk.rpc_client.protos.emissions.v9 import GetNetworkInferencesAtBlockRequest
-from allora_sdk.rpc_client.protos.emissions.v3 import ValueBundle
+from allora_sdk.rpc_client.protos.emissions.v10 import GetNetworkInferencesAtBlockRequest, NetworkInferenceBundle, LabeledValue
 from .context import RunContext
 
 logger = logging.getLogger("allora_sdk")
@@ -80,7 +79,7 @@ async def get_block_time(client: AlloraRPCClient, height: int) -> datetime:
     block_time = response.sdk_block.header.time
     return block_time
 
-async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: int) -> ValueBundle | None:
+async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: int) -> NetworkInferenceBundle | None:
     """Fetch the network inference bundle for a topic at a specific block height.
 
     Args:
@@ -99,7 +98,8 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
     return network_inferences_resp.network_inferences
 
 Truth = TypeVar('Truth')
-def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, float], float], log_loss: bool = True) -> Callable[[RunContext, float], Awaitable[float]]:
+Inference = float | dict[str, float]
+def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, Inference], float], log_loss: bool = True) -> Callable[[RunContext, Inference], Awaitable[float]]:
     """Build a reputer scoring function from separate ground-truth and loss components.
 
     Returns a function that can be passed to `AlloraWorker.reputer()`. The ground truth function
@@ -121,7 +121,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
     # Ground truth is cached for the current topic/nonce bundle only.
     gt_cache: tuple[tuple[int, int], Truth] | None = None
 
-    async def rep_func(context: RunContext, inference: float) -> float:
+    async def rep_func(context: RunContext, inference: dict[str, float]) -> float:
         nonlocal gt_cache
 
         cache_key = (context.topic_id, context.nonce)
@@ -133,7 +133,14 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
 
             logger.info(f'📐 Ground truth for topic {context.topic_id} at nonce {context.nonce}: {gt}')
 
-        loss = loss_fn(gt, inference)
+        if len(inference) != 1 or 'y' not in inference:
+            raise Error('Expected scalar, got vector valued network inference')
+
+        if multi_output:
+            loss = loss_fn(gt, inference)
+        else:
+            # scalar-valued topics are represented by a single element dict with the key "y"
+            loss = loss_fn(gt, inference['y'])
 
         if log_loss:
             loss = math.log10(loss + 1e-100)

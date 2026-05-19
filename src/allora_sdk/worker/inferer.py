@@ -7,13 +7,14 @@ from typing import Union
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitWorkerPayloadRequest,
     EventWorkerSubmissionWindowOpened,
     EventRewardsSettled,
     GetLatestNetworkInferencesRequest,
     GetUnfulfilledWorkerNoncesRequest,
     IsWorkerRegisteredInTopicIdRequest,
+    InputLabeledValue,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
@@ -45,7 +46,8 @@ class SanityCheckConfig:
             raise ValueError("throttle_interval_seconds must be >= 0")
 
 
-TInfererRunFnResult = Union[str, float, Decimal]
+TInfererRunFnResultPrimitive = Union[str, float, Decimal]
+TInfererRunFnResult = TInfererRunFnResultPrimitive | dict[str, TInfererRunFnResultPrimitive]
 TInfererRunFn = TRunFn[TInfererRunFnResult]
 
 
@@ -182,16 +184,24 @@ class Inferer:
             return err
 
         # Sanity check prediction against network consensus (throttled; see SanityCheckConfig)
-        if self.sanity_check.enabled:
+        # We currently skip the sanity check for multi-output topics
+        if self.sanity_check.enabled and not isinstance(prediction, dict):
             try:
                 await self._sanity_check_submission(float(prediction))
             except (ValueError, TypeError):
                 logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
+        if isinstance(prediction, TInfererRunFnResultPrimitive):
+            prediction_dict = [InputLabeledValue(label='y', value=str(prediction))]
+        elif isinstance(prediction, TInfererRunFnResult):
+            prediction_dict = [InputLabeledValue(label=label, value=str(value)) for (label, value) in prediction.items()]
+        else:
+            raise ValueError(f'Prediction has type {type(prediction)} which is not supported.')
+
         try:
             pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
-                inference_value=str(prediction),
+                inference_value=prediction_dict,
                 nonce=nonce,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
@@ -282,9 +292,11 @@ class Inferer:
                     return
 
                 inferer_values = []
-                for inferer in response.network_inferences.inferer_values:
+                for wi in response.network_inferences.inferer_values:
+                    if not wi.values:
+                        continue
                     try:
-                        inferer_values.append(float(inferer.value))
+                        inferer_values.append(float(wi.values[0].value))
                     except (ValueError, TypeError):
                         continue
 

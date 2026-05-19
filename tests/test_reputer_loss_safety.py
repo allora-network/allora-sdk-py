@@ -16,10 +16,19 @@ from allora_sdk.worker.reputer import Reputer
 # ---------------------------------------------------------------------------
 
 
+def _make_labeled_value(value: str) -> Mock:
+    lv = Mock()
+    lv.value = value
+    lv.label_id = 0
+    lv.label_name = ""
+    return lv
+
+
 def _make_value_bundle(combined_value: str, naive_value: str = "0") -> Mock:
     vb = Mock()
-    vb.combined_value = combined_value
-    vb.naive_value = naive_value
+    vb.combined_value = [_make_labeled_value(combined_value)]
+    vb.naive_value = [_make_labeled_value(naive_value)]
+    vb.nonce = 12345
     vb.inferer_values = []
     vb.forecaster_values = []
     vb.one_out_inferer_values = []

@@ -160,7 +160,7 @@ inference_worker = AlloraWorker.inferer(
 
 ### Reputer Configuration
 
-Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: float) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function. 
+Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: float) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function.
 
 In practice, it is often more convenient to have two separate callbacks:
 1. A ground truth function `get_ground_truth(context: RunContext) -> GroundTruthType` which only runs once per epoch.
@@ -249,9 +249,9 @@ client = AlloraRPCClient.from_env()
 # Query network data
 # Note: `height` is optional.  Defaults to the latest block on the chain.
 request = GetLatestRegretStdNormRequest(topic_id=123)
-response = client.emissions.query.get_latest_regret_std_norm(request, height=6200000) 
+response = client.emissions.query.get_latest_regret_std_norm(request, height=6200000)
 
-# Submit transactions  
+# Submit transactions
 response = await client.emissions.tx.insert_worker_payload(
     topic_id=1,
     inference_value="55000.0",
@@ -259,7 +259,7 @@ response = await client.emissions.tx.insert_worker_payload(
 )
 
 # WebSocket event subscriptions
-from allora_sdk.rpc_client.protos.emissions.v9 import EventWorkerSubmissionWindowOpened
+from allora_sdk.rpc_client.protos.emissions.v10 import EventWorkerSubmissionWindowOpened
 
 async def handle_event(event, block_height):
     print(f"New epoch: {event.topic_id} at block {block_height}")
@@ -291,7 +291,7 @@ Wire protocol is determined by the RPC url string passed to the config construct
 - `grpc+http(s)` will use the gRPC Protobuf client
 - `rest+http(s)` will use the Cosmos-LCD client
 
-- **Transaction support**: Fee estimation, signing, and broadcasting  
+- **Transaction support**: Fee estimation, signing, and broadcasting
 - **WebSocket events**: Real-time blockchain event subscriptions.  For a usage example, see the `AlloraWorker`
 - **Multi-chain**: Testnet and mainnet support come with batteries included, but there is maximal configurability.  Can be used with other Cosmos SDK chains.
 - **Type safety**: Full protobuf type and service definitions, codegen clients
@@ -325,7 +325,7 @@ asyncio.run(main())
 ### Features
 
 - **Price predictions**: BTC, ETH, SOL, etc. across multiple timeframes
-- **Topic index**: Browse all network topics and their metadata  
+- **Topic index**: Browse all network topics and their metadata
 - **Confidence intervals**: Access prediction uncertainty bounds
 - **Async/await**: Fully asynchronous API
 
@@ -424,7 +424,7 @@ The SDK uses two code generation systems:
 - Command: `make grpc`
 
 **REST Client Generation:**
-- Analyzes protobuf HTTP annotations to generate REST clients  
+- Analyzes protobuf HTTP annotations to generate REST clients
 - Matches gRPC client interfaces exactly
 - Sources: Same .proto files as above
 - Output: `src/allora_sdk/rpc_client/rest/`
@@ -441,13 +441,11 @@ source .venv/bin/activate
 make dev
 
 # After changes to .proto files
-rm -rf src/allora_sdk/rpc_client/rest
-rm -rf src/allora_sdk/rpc_client/grpc
-rm -rf src/allora_sdk/rpc_client/interfaces
-rm -rf src/allora_sdk/rpc_client/protos
+rm -rf src/allora_sdk/rpc_client/{rest,grpc,interfaces,protos}
+rm -rf proto-deps    # if chain version changed
 make dev
 
-# Run tests  
+# Run tests
 tox
 
 # Build wheel for distribution
@@ -457,8 +455,5 @@ make wheel      # or: uv build
 ### Dependencies
 
 - **Runtime dependencies**: Defined in `pyproject.toml` under `dependencies`
-- **Development dependencies**: Under `[project.optional-dependencies.dev]`  
+- **Development dependencies**: Under `[project.optional-dependencies.dev]`
 - **Code generation**: Under `[project.optional-dependencies.codegen]`
-
-
-

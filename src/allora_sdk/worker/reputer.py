@@ -5,19 +5,23 @@ from typing import List, Optional, Union, Callable, Awaitable
 from cosmpy.aerial.wallet import LocalWallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce, ValueBundle
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitReputerPayloadRequest,
     EventReputerSubmissionWindowOpened,
     GetNetworkInferencesAtBlockRequest,
     GetStakeFromReputerInTopicInSelfRequest,
     GetTopicRequest,
     GetUnfulfilledReputerNoncesRequest,
+    IsReputerRegisteredInTopicIdRequest,
+    NetworkInferenceBundle,
+    LabeledValue,
+)
+from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputOneOutInfererForecasterValues,
     InputValueBundle,
     InputWithheldWorkerAttributedValue,
     InputWorkerAttributedValue,
-    IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
@@ -28,8 +32,8 @@ from allora_sdk.worker.utils import resolve_maybe_awaitable
 logger = logging.getLogger("allora_sdk")
 
 ReputerFnResult = Union[str, float, Decimal]
-ReputerFnAsync = Callable[[RunContext, float], Awaitable[ReputerFnResult]]
-ReputerFnSync = Callable[[RunContext, float], ReputerFnResult]
+ReputerFnAsync = Callable[[RunContext, dict[str, float]], Awaitable[ReputerFnResult]]
+ReputerFnSync = Callable[[RunContext, dict[str, float]], ReputerFnResult]
 ReputerFn = ReputerFnSync | ReputerFnAsync
 
 class Reputer:
@@ -201,30 +205,21 @@ class Reputer:
 
         return result
 
-    async def _compute_loss_bundle(self, value_bundle: ValueBundle) -> InputValueBundle:
+    async def _compute_loss_bundle(self, network_inference: NetworkInferenceBundle) -> InputValueBundle:
         """
         Compute loss bundle from ground truth and network inferences.
 
         Computes losses for combined, naive, inferer, forecaster, one-out, and one-in values.
         """
 
-        async def compute_loss(value_str: str) -> str:
+        async def compute_loss(values: list[LabeledValue]) -> str:
             try:
-                predicted = float(value_str)
+                predicted = {v.label_name: float(v.value) for v in values}
             except (ValueError, TypeError) as err:
-                raise ValueError(f"invalid numeric value for loss computation: '{value_str}'") from err
+                raise ValueError(f"invalid numeric value for loss computation: {values}") from err
 
-            if not math.isfinite(predicted):
-                raise ValueError(
-                    f"predicted must be finite (got non-finite value: {predicted})"
-                )
-
-            if self.reputer_fn is None:
-                raise ValueError("no reputer_fn configured")
-
-            nonce = value_bundle.reputer_request_nonce.reputer_nonce.block_height
             run_context = RunContext(
-                nonce = nonce,
+                nonce = network_inference.nonce,
                 client = self.client,
                 topic_id = self.topic_id
             )
@@ -232,91 +227,47 @@ class Reputer:
             loss = await resolve_maybe_awaitable(self.reputer_fn, run_context, predicted)
             return canonicalize_dec(loss)
 
-        # Compute combined and naive losses
-        combined_loss = await compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"
-        naive_loss = await compute_loss(value_bundle.naive_value) if value_bundle.naive_value else "0"
+        if self.reputer_fn is None:
+            raise ValueError("no reputer_fn configured")
 
-        # Compute inferer losses
-        inferer_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.inferer_values:
-            for iv in value_bundle.inferer_values:
-                inferer_values.append(InputWorkerAttributedValue(
-                    worker=iv.worker,
-                    value=await compute_loss(iv.value) if iv.value else "0",
-                ))
-
-        # Compute forecaster losses
-        forecaster_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.forecaster_values:
-            for fv in value_bundle.forecaster_values:
-                forecaster_values.append(InputWorkerAttributedValue(
-                    worker=fv.worker,
-                    value=await compute_loss(fv.value) if fv.value else "0",
-                ))
-
-        # Compute one-out inferer losses
-        one_out_inferer_values: List[InputWithheldWorkerAttributedValue] = []
-        if value_bundle.one_out_inferer_values:
-            for ooi in value_bundle.one_out_inferer_values:
-                one_out_inferer_values.append(InputWithheldWorkerAttributedValue(
-                    worker=ooi.worker,
-                    value=await compute_loss(ooi.value) if ooi.value else "0",
-                ))
-
-        # Compute one-out forecaster losses
-        one_out_forecaster_values: List[InputWithheldWorkerAttributedValue] = []
-        if value_bundle.one_out_forecaster_values:
-            for oof in value_bundle.one_out_forecaster_values:
-                one_out_forecaster_values.append(InputWithheldWorkerAttributedValue(
-                    worker=oof.worker,
-                    value=await compute_loss(oof.value) if oof.value else "0",
-                ))
-
-        # Compute one-in forecaster losses
-        one_in_forecaster_values: List[InputWorkerAttributedValue] = []
-        if value_bundle.one_in_forecaster_values:
-            for oif in value_bundle.one_in_forecaster_values:
-                one_in_forecaster_values.append(InputWorkerAttributedValue(
-                    worker=oif.worker,
-                    value=await compute_loss(oif.value) if oif.value else "0",
-                ))
+        combined_loss = await compute_loss(network_inference.combined_value)
+        naive_loss = await compute_loss(network_inference.naive_value)
+        inferer_losses = [InputWorkerAttributedValue(worker=x.worker, value=await compute_loss(x.values)) for x in network_inference.inferer_values]
+        forecaster_losses = [InputWorkerAttributedValue(worker=x.worker, value=await compute_loss(x.values)) for x in network_inference.forecaster_values]
+        one_out_inferer_losses = [InputWithheldWorkerAttributedValue(worker=x.withheld_inferer, value = await compute_loss(x.combined_inference)) for x in network_inference.one_out_inferer_values]
+        one_out_forecaster_losses = [InputWithheldWorkerAttributedValue(worker=x.withheld_forecaster, value = await compute_loss(x.combined_inference)) for x in network_inference.one_out_forecaster_values]
+        one_in_forecaster_losses = [InputWorkerAttributedValue(worker=x.forecaster, value = await compute_loss(x.combined_inference)) for x in network_inference.one_in_forecaster_values]
 
         # Compute one-out inferer-forecaster losses
-        one_out_inferer_forecaster_values: List[InputOneOutInfererForecasterValues] = []
-        if value_bundle.one_out_inferer_forecaster_values:
-            for ooif in value_bundle.one_out_inferer_forecaster_values:
-                one_out_losses: List[InputWithheldWorkerAttributedValue] = []
-                if ooif.one_out_inferer_values:
-                    for withheld in ooif.one_out_inferer_values:
-                        one_out_losses.append(
-                            InputWithheldWorkerAttributedValue(
-                                worker=withheld.worker,
-                                value=await compute_loss(withheld.value)
-                                if withheld.value
-                                else "0",
-                            )
-                        )
+        # v10 flattens these: each OneOutInfererForecasterValue has .forecaster, .withheld_inferer, .combined_inference
+        # Group by forecaster to produce InputOneOutInfererForecasterValues (which expects nested structure)
+        ooifs: dict[str, dict[str, str]] = {}
+        for ooif in network_inference.one_out_inferer_forecaster_values:
+            if not ooif.forecaster in ooifs:
+                oofs[ooif.forecaster] = {}
+            ooifs[ooif.forecaster][ooif.withheld_inferer] = await compute_loss(ooif.combined_inference)
 
-                one_out_inferer_forecaster_values.append(
-                    InputOneOutInfererForecasterValues(
-                        forecaster=ooif.forecaster,
-                        one_out_inferer_values=one_out_losses,
-                    )
-                )
+        one_out_inferer_forecaster_losses = [
+            InputOneOutInfererForecasterValues(
+                forecaster=f,
+                one_out_inferer_values=InputWithheldWorkerAttributedValue(
+                    worker=i,
+                    value=v,
+                ))
+            for (f, x) in ooifs for (i, v) in x
+        ]
 
-        result = InputValueBundle(
+        return InputValueBundle(
             topic_id=self.topic_id,
             combined_value=combined_loss,
             naive_value=naive_loss,
-            inferer_values=inferer_values,
-            forecaster_values=forecaster_values,
-            one_out_inferer_values=one_out_inferer_values,
-            one_out_forecaster_values=one_out_forecaster_values,
-            one_in_forecaster_values=one_in_forecaster_values,
-            one_out_inferer_forecaster_values=one_out_inferer_forecaster_values,
+            inferer_values=inferer_losses,
+            forecaster_values=forecaster_losses,
+            one_out_inferer_values=one_out_inferer_losses,
+            one_out_forecaster_values=one_out_forecaster_losses,
+            one_in_forecaster_values=one_in_forecaster_losses,
+            one_out_inferer_forecaster_values=one_out_inferer_forecaster_losses,
         )
-
-        return result
 
 
     async def _maybe_stake(self):

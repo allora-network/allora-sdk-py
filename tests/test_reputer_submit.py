@@ -23,10 +23,19 @@ def _make_client() -> Mock:
     return client
 
 
+def _make_labeled_value(value: str) -> Mock:
+    lv = Mock()
+    lv.value = value
+    lv.label_id = 0
+    lv.label_name = ""
+    return lv
+
+
 def _make_value_bundle() -> Mock:
     bundle = Mock()
-    bundle.combined_value = "8.0"
-    bundle.naive_value = "9.0"
+    bundle.combined_value = [_make_labeled_value("8.0")]
+    bundle.naive_value = [_make_labeled_value("9.0")]
+    bundle.nonce = 123
     bundle.inferer_values = []
     bundle.forecaster_values = []
     bundle.one_out_inferer_values = []

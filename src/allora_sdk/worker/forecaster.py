@@ -2,7 +2,7 @@ import logging
 from typing import Dict
 from cosmpy.aerial.wallet import LocalWallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitWorkerPayloadRequest,
     EventWorkerSubmissionWindowOpened,
     EventRewardsSettled,

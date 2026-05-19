@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Iterable
 
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     EventRewardsSettled,
     IsReputerRegisteredInTopicIdRequest,
 )
