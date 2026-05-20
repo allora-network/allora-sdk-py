@@ -191,12 +191,10 @@ class Inferer:
             except (ValueError, TypeError):
                 logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
-        if isinstance(prediction, TInfererRunFnResultPrimitive):
-            prediction_dict = [InputLabeledValue(label='y', value=str(prediction))]
-        elif isinstance(prediction, TInfererRunFnResult):
+        if isinstance(prediction, dict):
             prediction_dict = [InputLabeledValue(label=label, value=str(value)) for (label, value) in prediction.items()]
         else:
-            raise ValueError(f'Prediction has type {type(prediction)} which is not supported.')
+            prediction_dict = [InputLabeledValue(label='y', value=str(prediction))]
 
         try:
             pending = await self.client.emissions.tx.insert_worker_payload(

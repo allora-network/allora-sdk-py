@@ -133,12 +133,12 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
 
             logger.info(f'📐 Ground truth for topic {context.topic_id} at nonce {context.nonce}: {gt}')
 
-        if len(inference) != 1 or 'y' not in inference:
-            raise Error('Expected scalar, got vector valued network inference')
-
         if multi_output:
             loss = loss_fn(gt, inference)
         else:
+            if len(inference) != 1 or 'y' not in inference:
+                raise ValueError('Expected scalar, got vector valued network inference')
+
             # scalar-valued topics are represented by a single element dict with the key "y"
             loss = loss_fn(gt, inference['y'])
 
