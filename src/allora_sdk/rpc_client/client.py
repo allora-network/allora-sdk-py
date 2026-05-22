@@ -10,9 +10,11 @@ provided it is given the appropriate configuration.
 """
 
 import logging
-from typing import Optional, cast
+import time
+from typing import Any, Optional, cast
 
 from grpclib.client import Channel
+from grpclib.protocol import H2Protocol
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
 from cosmpy.aerial.wallet import LocalWallet
@@ -41,6 +43,31 @@ from .client_websocket_events import AlloraWebsocketSubscriber
 from .tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
+
+
+class ReconnectingGRPCChannel(Channel):
+    """Channel subclass that forces a reconnect after a configurable max age."""
+
+    def __init__(self, *args: Any, max_age_secs: int = 1800, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self._max_age_secs = max_age_secs
+        self._connected_at: Optional[float] = None
+
+    async def __connect__(self) -> H2Protocol:
+        if (
+            self._connected_at is not None
+            and self._connected
+            and time.monotonic() - self._connected_at > self._max_age_secs
+        ):
+            logger.info("gRPC connection exceeded max age, reconnecting")
+            self.close()
+            self._connected_at = None
+
+        was_connected = self._connected
+        protocol = await super().__connect__()
+        if not was_connected:
+            self._connected_at = time.monotonic()
+        return protocol
 
 
 class AlloraRPCClient:
@@ -79,7 +106,12 @@ class AlloraRPCClient:
         parsed_url = parse_url(self.network.url)
 
         if parsed_url.protocol == Protocol.GRPC:
-            self.grpc_client = Channel(host=parsed_url.hostname, port=parsed_url.port, ssl=parsed_url.secure)
+            self.grpc_client = ReconnectingGRPCChannel(
+                host=parsed_url.hostname,
+                port=parsed_url.port,
+                ssl=parsed_url.secure,
+                max_age_secs=self.network.grpc_max_connection_age_secs,
+            )
 
             # Set up gRPC services
             auth_query = cast(rest.CosmosAuthV1Beta1QueryLike, cosmos_auth_v1beta1.QueryStub(self.grpc_client))
