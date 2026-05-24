@@ -114,6 +114,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
         gt_fn: Async function that fetches the ground-truth value. The ground truth can be any type.
         loss_fn: Function that computes a scalar loss given the ground truth and an inference.
         log_loss: If true, take log10 of each loss value before submitting (the chain expects log losses)
+        multi_output: If true, passes inference as to callback `dict[str, float]` instead of unpacking.
 
     Returns:
         An async function ``(context, inference) -> float`` suitable for use as a reputer function.

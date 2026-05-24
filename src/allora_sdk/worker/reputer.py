@@ -244,7 +244,7 @@ class Reputer:
         ooifs: dict[str, dict[str, str]] = {}
         for ooif in network_inference.one_out_inferer_forecaster_values:
             if not ooif.forecaster in ooifs:
-                oofs[ooif.forecaster] = {}
+                ooifs[ooif.forecaster] = {}
             ooifs[ooif.forecaster][ooif.withheld_inferer] = await compute_loss(ooif.combined_inference)
 
         one_out_inferer_forecaster_losses = [
@@ -254,7 +254,7 @@ class Reputer:
                     worker=i,
                     value=v,
                 ))
-            for (f, x) in ooifs for (i, v) in x
+            for (f, x) in ooifs.items() for (i, v) in x.items()
         ]
 
         return InputValueBundle(
