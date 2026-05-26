@@ -595,31 +595,32 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
             await asyncio.sleep(self.polling_interval)
 
-        logger.debug(f"🔄 Polling worker stopped for topic {self.topic_id}")
+        logger.info(f"🔄 Polling worker stopped for topic {self.topic_id}")
 
 
     async def _subscribe_websocket_events(self):
         await self._ensure_initialized()
 
-        self._subscription_id = await self.client.events.subscribe_new_block_events_typed(
-            self.use_case.submission_window_event_type(),
+        await self.client.events.subscribe_new_block_events_typed(
+            EventWorkerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened_event,
         )
         await self.client.events.subscribe_new_block_events_typed(
-            EventWorkerSubmissionWindowClosed,
-            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
-        )
-        await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"🚀 Reputer submission window opened (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
+            self._handle_submission_window_opened_event,
+        )
+
+        await self.client.events.subscribe_new_block_events_typed(
+            EventWorkerSubmissionWindowClosed,
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
         await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={evt.topic_id} nonce={evt.nonce_block_height} height={height})"),
+            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
 
         # Subscribe to rewards events for autostaking if configured on the use case
@@ -635,14 +636,24 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
+        if isinstance(event, EventWorkerSubmissionWindowOpened):
+            logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
+
+            # reputers only handle EventReputerSubmissionWindowOpened
+            if self.use_case.name() == 'reputer':
+                return
+        else:
+            logger.info(f"🚀 Reputer submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
+
+            # inferers and forecasters only handle EventWorkerSubmissionWindowOpened
+            if self.use_case.name() == 'inferer' or self.use_case.name() == 'forecaster':
+                return
+
         await self._ensure_initialized()
 
         ctx = self._ctx
         if ctx is None or ctx.is_cancelled():
             return
-
-        role_name = self.use_case.name().capitalize()
-        logger.info(f"🚀 {role_name} submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
 
         try:
             await self._maybe_submit(ctx, event.nonce_block_height)
