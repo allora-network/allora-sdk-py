@@ -34,12 +34,8 @@ dependencies = [
     "async-timeout>=5.0.1",
     "hdwallets>=0.1.2",
     "mnemonic>=0.21",
-    "pandas",
     "numpy",
-    "lightgbm",
     "requests",
-    "dill",
-    "matplotlib",
     "requests-async>=0.2.4",
 ]
 
@@ -55,6 +51,9 @@ dev = [
     "starlette",
     "httpx",
     "tox",
+]
+tools = [
+    "matplotlib",
 ]
 codegen = [
     "grpcio-tools",
