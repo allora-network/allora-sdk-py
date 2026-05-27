@@ -321,7 +321,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._ctx: Optional[Context] = None
         self._queue: Optional[asyncio.Queue[TQueueItem[WorkerFnReturnType]]] = None
-        self._subscription_id: Optional[str] = None
+        self._subscription_ids: list[str] = []
 
 
     async def _ensure_initialized(self):
@@ -601,27 +601,31 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _subscribe_websocket_events(self):
         await self._ensure_initialized()
 
-        await self.client.events.subscribe_new_block_events_typed(
+        id = await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened_event,
         )
-        await self.client.events.subscribe_new_block_events_typed(
+        self._subscription_ids.append(id)
+        id = await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowOpened,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             self._handle_submission_window_opened_event,
         )
+        self._subscription_ids.append(id)
 
-        await self.client.events.subscribe_new_block_events_typed(
+        id = await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
-        await self.client.events.subscribe_new_block_events_typed(
+        self._subscription_ids.append(id)
+        id = await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
+        self._subscription_ids.append(id)
 
         # Subscribe to rewards events for autostaking if configured on the use case
         if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
@@ -638,16 +642,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
         if isinstance(event, EventWorkerSubmissionWindowOpened):
             logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
-
-            # reputers only handle EventReputerSubmissionWindowOpened
-            if self.use_case.name() == 'reputer':
-                return
         else:
             logger.info(f"🚀 Reputer submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
 
-            # inferers and forecasters only handle EventWorkerSubmissionWindowOpened
-            if self.use_case.name() == 'inferer' or self.use_case.name() == 'forecaster':
-                return
+        if not isinstance(event, self.use_case.submission_window_event_type()):
+            # wrong type of window (worker/reputer)
+            return
 
         await self._ensure_initialized()
 
@@ -777,14 +777,13 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
 
-        if self._subscription_id:
+        for id in self._subscription_ids:
             try:
-                await self.client.events.unsubscribe(self._subscription_id)
+                await self.client.events.unsubscribe(id)
                 logger.debug("WebSocket subscription cancelled")
             except Exception as e:
                 logger.warning(f"Error during unsubscribe: {e}")
-            finally:
-                self._subscription_id = None
+        self._subscription_ids.clear()
 
         await ctx.cleanup()
         self._queue = None
