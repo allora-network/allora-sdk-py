@@ -20,6 +20,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
+from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
 from allora_sdk.worker.utils import resolve_maybe_awaitable
@@ -229,7 +230,7 @@ class Reputer:
             )
 
             loss = await resolve_maybe_awaitable(self.reputer_fn, run_context, predicted)
-            return str(loss)
+            return canonicalize_dec(loss)
 
         # Compute combined and naive losses
         combined_loss = await compute_loss(value_bundle.combined_value) if value_bundle.combined_value else "0"

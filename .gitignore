@@ -25,4 +25,4 @@ proto-deps/
 mnemonic*
 src/allora_sdk/test.py
 src/allora_sdk/test_many.py
-
+src/check_wallets.py
