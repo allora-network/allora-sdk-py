@@ -58,6 +58,7 @@ class AlloraNetworkConfig:
     gas_price_cache_ttl_secs: int = 30
     congestion_aware_fees: bool = False
     query_timeout_secs: int = 10
+    grpc_max_connection_age_secs: int = 1800
 
     @classmethod
     def testnet(
