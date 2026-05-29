@@ -1,0 +1,45 @@
+69:
+  ground_truth_method: price
+  loss_method: mse
+  ticker: btcusd
+  timeframe: 86400
+70:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: nearusd
+  timeframe: 604800
+71:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: nearusd
+  timeframe: 28800
+72:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: btcusd
+  timeframe: 3600
+73:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: ethusd
+  timeframe: 3600
+74:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: btcusd
+  timeframe: 900
+75:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: ethusd
+  timeframe: 900
+76:
+  ground_truth_method: logreturn+stddev
+  loss_method: czar
+  ticker: solusd
+  timeframe: 900
+77:
+  ground_truth_method: price
+  loss_method: mse
+  ticker: btcusd
+  timeframe: 300
