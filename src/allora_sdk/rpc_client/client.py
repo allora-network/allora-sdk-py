@@ -46,18 +46,34 @@ logger = logging.getLogger("allora_sdk")
 
 
 class ReconnectingGRPCChannel(Channel):
-    """Channel subclass that forces a reconnect after a configurable max age."""
+    """Channel subclass that forces a reconnect after a configurable max age.
+
+    The reconnect is deferred until no other request is in flight, so it never
+    aborts a concurrent RPC. On a channel that is continuously busy the recycle
+    may be postponed past `max_age_secs`; callers relying on the recycle to dodge
+    a server-side connection cap should tolerate a transient error on the next
+    request in that rare case and retry.
+    """
 
     def __init__(self, *args: Any, max_age_secs: int = 1800, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self._max_age_secs = max_age_secs
         self._connected_at: Optional[float] = None
 
+    @property
+    def _in_flight_calls(self) -> int:
+        # grpclib brackets each request: _calls_started in Stream.__aenter__,
+        # _calls_succeeded/_calls_failed in Stream.__aexit__.
+        return self._calls_started - self._calls_succeeded - self._calls_failed
+
     async def __connect__(self) -> H2Protocol:
+        # Only recycle when this is the only in-flight call, so closing the
+        # channel cannot abort a concurrent request (e.g. a tx broadcast).
         if (
             self._connected_at is not None
             and self._connected
             and time.monotonic() - self._connected_at > self._max_age_secs
+            and self._in_flight_calls <= 1
         ):
             logger.info("gRPC connection exceeded max age, reconnecting")
             self.close()
