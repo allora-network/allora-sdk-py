@@ -16,6 +16,7 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     IsWorkerRegisteredInTopicIdRequest,
     InputLabeledValue,
 )
+from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
@@ -192,9 +193,9 @@ class Inferer:
                 logger.debug(f"Could not convert prediction to float for sanity check: {prediction}")
 
         if isinstance(prediction, dict):
-            prediction_dict = [InputLabeledValue(label=label, value=str(value)) for (label, value) in prediction.items()]
+            prediction_dict = [InputLabeledValue(label=label, value=canonicalize_dec(value)) for (label, value) in prediction.items()]
         else:
-            prediction_dict = [InputLabeledValue(label='y', value=str(prediction))]
+            prediction_dict = [InputLabeledValue(label='y', value=canonicalize_dec(prediction))]
 
         try:
             pending = await self.client.emissions.tx.insert_worker_payload(
