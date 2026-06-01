@@ -156,7 +156,7 @@ class Forecaster:
             )
             resp = await pending.wait()
 
-            return WorkerResult(submission=forecasts, tx_result=resp)
+            return WorkerResult(submission=forecasts_raw, tx_result=resp)
 
         except TxError as err:
             already_submitted = False

@@ -79,10 +79,10 @@ async def test_make_reputer_function_uses_single_entry_topic_nonce_cache() -> No
     rep_fn = make_reputer_function(gt_fn, lambda truth, prediction: truth + prediction, log_loss=False)
     client = Mock()
 
-    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), 1.0)
-    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), 2.0)
-    await rep_fn(RunContext(client=client, topic_id=2, nonce=10), 3.0)
-    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), 4.0)
+    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), {"y": 1.0})
+    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), {"y": 2.0})
+    await rep_fn(RunContext(client=client, topic_id=2, nonce=10), {"y": 3.0})
+    await rep_fn(RunContext(client=client, topic_id=1, nonce=10), {"y": 4.0})
 
     assert calls == [(1, 10), (2, 10), (1, 10)]
 
