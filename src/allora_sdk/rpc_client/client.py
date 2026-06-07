@@ -9,6 +9,7 @@ The client can make queries, submit transactions, and subscribe to websocket eve
 provided it is given the appropriate configuration.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Optional, cast
@@ -46,12 +47,23 @@ logger = logging.getLogger("allora_sdk")
 
 
 class ReconnectingGRPCChannel(Channel):
-    """Channel subclass that forces a reconnect after a configurable max age."""
+    """Channel subclass that forces a reconnect after a configurable max age.
+
+    When the connection exceeds max_age_secs, the old connection is replaced
+    immediately so new RPCs use a fresh connection. The old connection is closed
+    after a short delay (5s) to allow in-flight RPCs to complete.
+    """
 
     def __init__(self, *args: Any, max_age_secs: int = 1800, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self._max_age_secs = max_age_secs
         self._connected_at: Optional[float] = None
+        self._cleanup_task: Optional[asyncio.Task[None]] = None
+
+    async def _close_old_protocol(self, old_protocol: H2Protocol) -> None:
+        """Wait briefly for in-flight RPCs, then close the old connection."""
+        await asyncio.sleep(5)
+        old_protocol.processor.close()
 
     async def __connect__(self) -> H2Protocol:
         if (
@@ -60,8 +72,10 @@ class ReconnectingGRPCChannel(Channel):
             and time.monotonic() - self._connected_at > self._max_age_secs
         ):
             logger.info("gRPC connection exceeded max age, reconnecting")
-            self.close()
+            old_protocol = self._protocol
+            self._protocol = None  # this also sets self._connected = False
             self._connected_at = None
+            self._cleanup_task = asyncio.create_task(self._close_old_protocol(old_protocol))
 
         was_connected = self._connected
         protocol = await super().__connect__()
