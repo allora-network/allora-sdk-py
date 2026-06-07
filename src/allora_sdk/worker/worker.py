@@ -629,11 +629,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         # Subscribe to rewards events for autostaking if configured on the use case
         if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
-            await self.client.events.subscribe_new_block_events_typed(
+            id = await self.client.events.subscribe_new_block_events_typed(
                 EventRewardsSettled,
                 [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
                 self.use_case.handle_rewards_settled,
             )
+            self._subscription_ids.append(id)
             logger.info(
                 f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
             )
