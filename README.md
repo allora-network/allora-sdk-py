@@ -164,7 +164,7 @@ Reputers evaluate inference quality by computing losses between ground truth and
 
 In practice, it is often more convenient to have two separate callbacks:
 1. A ground truth function `get_ground_truth(context: RunContext) -> GroundTruthType` which only runs once per epoch.
-2. A loss function `loss(inference: float, gt: GroundTruthType) -> float`, which runs for every value in the inference bundle
+2. A loss function `loss(gt: GroundTruthType, inference: float) -> float`, which runs for every value in the inference bundle
 
 Note that the ground truth type does not need to agree with the inference type (`float`). That is useful for certain loss functions which require extra data. For example, the `czar` and `ztae` loss functions require a standard deviation of historical values, which can just be treated as part of the ground truth.
 
