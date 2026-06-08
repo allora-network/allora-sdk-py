@@ -99,7 +99,7 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
     return network_inferences_resp.network_inferences
 
 Truth = TypeVar('Truth')
-def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[float, Truth], float], log_loss: bool = True) -> Callable[[RunContext, float], Awaitable[float]]:
+def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, float], float], log_loss: bool = True) -> Callable[[RunContext, float], Awaitable[float]]:
     """Build a reputer scoring function from separate ground-truth and loss components.
 
     Returns a function that can be passed to `AlloraWorker.reputer()`. The ground truth function
@@ -133,7 +133,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
 
             logger.info(f'📐 Ground truth for topic {context.topic_id} at nonce {context.nonce}: {gt}')
 
-        loss = loss_fn(inference, gt)
+        loss = loss_fn(gt, inference)
 
         if log_loss:
             loss = math.log10(loss + 1e-100)
