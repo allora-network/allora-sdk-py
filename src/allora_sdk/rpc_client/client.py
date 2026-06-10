@@ -51,19 +51,23 @@ class ReconnectingGRPCChannel(Channel):
 
     When the connection exceeds max_age_secs, the old connection is replaced
     immediately so new RPCs use a fresh connection. The old connection is closed
-    after a short delay (5s) to allow in-flight RPCs to complete.
+    after a short delay (drain_window_secs) to allow in-flight RPCs to complete.
     """
 
-    def __init__(self, *args: Any, max_age_secs: int = 1800, **kwargs: Any):
+    def __init__(self, *args: Any, max_age_secs: int = 1800, drain_window_secs: int = 5, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self._max_age_secs = max_age_secs
+        self._drain_window_secs = drain_window_secs
         self._connected_at: Optional[float] = None
         self._cleanup_task: Optional[asyncio.Task[None]] = None
 
     async def _close_old_protocol(self, old_protocol: H2Protocol) -> None:
         """Wait briefly for in-flight RPCs, then close the old connection."""
-        await asyncio.sleep(5)
-        old_protocol.processor.close()
+        await asyncio.sleep(self._drain_window_secs)
+        try:
+            old_protocol.processor.close()
+        except Exception as e:
+            logger.warning(f"Error closing old gRPC connection: {e}")
 
     async def __connect__(self) -> H2Protocol:
         if (
@@ -125,6 +129,7 @@ class AlloraRPCClient:
                 port=parsed_url.port,
                 ssl=parsed_url.secure,
                 max_age_secs=self.network.grpc_max_connection_age_secs,
+                drain_window_secs=self.network.grpc_drain_window_secs,
             )
 
             # Set up gRPC services
@@ -241,11 +246,12 @@ class AlloraRPCClient:
     def testnet(
         cls,
         wallet: Optional[AlloraWalletConfig] = None,
+        network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
-            network=AlloraNetworkConfig.testnet(),
+            network=network or AlloraNetworkConfig.testnet(),
             wallet=wallet,
             debug=debug
         )
@@ -255,11 +261,12 @@ class AlloraRPCClient:
     def mainnet(
         cls,
         wallet: Optional[AlloraWalletConfig] = None,
+        network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
-            network=AlloraNetworkConfig.mainnet(),
+            network=network or AlloraNetworkConfig.mainnet(),
             wallet=wallet,
             debug=debug
         )
@@ -267,13 +274,13 @@ class AlloraRPCClient:
     @classmethod
     def local(
         cls,
-        port: int = 26657,
         wallet: Optional[AlloraWalletConfig] = None,
+        network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
-            network=AlloraNetworkConfig.local(port=port),
+            network=network or AlloraNetworkConfig.local(),
             wallet=wallet,
             debug=debug
         )

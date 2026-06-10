@@ -59,6 +59,7 @@ class AlloraNetworkConfig:
     congestion_aware_fees: bool = False
     query_timeout_secs: int = 10
     grpc_max_connection_age_secs: int = 1800
+    grpc_drain_window_secs: int = 5
 
     @classmethod
     def testnet(
@@ -73,6 +74,8 @@ class AlloraNetworkConfig:
         dynamic_gas_price_default_multiplier=3.0,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
+        grpc_max_connection_age_secs=1800,
+        grpc_drain_window_secs=5,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -85,6 +88,8 @@ class AlloraNetworkConfig:
             dynamic_gas_price_default_multiplier=dynamic_gas_price_default_multiplier,
             gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
             congestion_aware_fees=congestion_aware_fees,
+            grpc_max_connection_age_secs=grpc_max_connection_age_secs,
+            grpc_drain_window_secs=grpc_drain_window_secs,
         )
 
     @classmethod
@@ -99,6 +104,8 @@ class AlloraNetworkConfig:
         dynamic_gas_price_default_multiplier=3.0,
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
+        grpc_max_connection_age_secs=1800,
+        grpc_drain_window_secs=5,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -110,6 +117,8 @@ class AlloraNetworkConfig:
             dynamic_gas_price_default_multiplier=dynamic_gas_price_default_multiplier,
             gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
             congestion_aware_fees=congestion_aware_fees,
+            grpc_max_connection_age_secs=grpc_max_connection_age_secs,
+            grpc_drain_window_secs=grpc_drain_window_secs,
         )
 
     @classmethod
@@ -124,6 +133,8 @@ class AlloraNetworkConfig:
         gas_price_cache_ttl_secs=30,
         congestion_aware_fees=False,
         query_timeout_secs=30,
+        grpc_max_connection_age_secs=1800,
+        grpc_drain_window_secs=5,
         port: int = 9090,
         url: str | None = None,
     ) -> 'AlloraNetworkConfig':
@@ -138,6 +149,8 @@ class AlloraNetworkConfig:
             gas_price_cache_ttl_secs=gas_price_cache_ttl_secs,
             congestion_aware_fees=congestion_aware_fees,
             query_timeout_secs=query_timeout_secs,
+            grpc_max_connection_age_secs=grpc_max_connection_age_secs,
+            grpc_drain_window_secs=grpc_drain_window_secs,
         )
 
     @classmethod

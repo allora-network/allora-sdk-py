@@ -643,7 +643,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
         if isinstance(event, EventWorkerSubmissionWindowOpened):
             logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
-        else:
+        elif isinstance(event, EventReputerSubmissionWindowOpened):
             logger.info(f"🚀 Reputer submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
 
         if not isinstance(event, self.use_case.submission_window_event_type()):
