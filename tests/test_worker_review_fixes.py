@@ -76,7 +76,7 @@ async def test_make_reputer_function_uses_single_entry_topic_nonce_cache() -> No
         calls.append((ctx.topic_id, ctx.nonce))
         return float(len(calls))
 
-    rep_fn = make_reputer_function(gt_fn, lambda prediction, truth: prediction + truth, log_loss=False)
+    rep_fn = make_reputer_function(gt_fn, lambda truth, prediction: truth + prediction, log_loss=False)
     client = Mock()
 
     await rep_fn(RunContext(client=client, topic_id=1, nonce=10), 1.0)

@@ -99,12 +99,12 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
     return network_inferences_resp.network_inferences
 
 Truth = TypeVar('Truth')
-def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[float, Truth], float], log_loss: bool = True) -> Callable[[RunContext, float], Awaitable[float]]:
+def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, float], float], log_loss: bool = True) -> Callable[[RunContext, float], Awaitable[float]]:
     """Build a reputer scoring function from separate ground-truth and loss components.
 
     Returns a function that can be passed to `AlloraWorker.reputer()`. The ground truth function
     `gt_fn` is only going to be called once per epoch, then the `loss_fn` gets called once for every
-    value in the `ValueBundle` (passing the fetched ground truth as the second argument).
+    value in the `ValueBundle` (passing the fetched ground truth as the first argument).
 
     The type of the "ground truth" is only used internally, and not exposed by the resulting function.
     This means it can be arbitrarily chosen and is not defined by the topic. For example, if a loss function
@@ -112,7 +112,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
 
     Args:
         gt_fn: Async function that fetches the ground-truth value. The ground truth can be any type.
-        loss_fn: Function that computes a scalar loss given an inference and the ground truth.
+        loss_fn: Function that computes a scalar loss given the ground truth and an inference.
         log_loss: If true, take log10 of each loss value before submitting (the chain expects log losses)
 
     Returns:
@@ -133,7 +133,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
 
             logger.info(f'📐 Ground truth for topic {context.topic_id} at nonce {context.nonce}: {gt}')
 
-        loss = loss_fn(inference, gt)
+        loss = loss_fn(gt, inference)
 
         if log_loss:
             loss = math.log10(loss + 1e-100)
