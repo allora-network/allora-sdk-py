@@ -5,8 +5,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Literal, Optional
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+except ImportError:
+    raise ImportError(
+        "matplotlib is required for the topic lifecycle visualizer. "
+        "Install it with: pip install allora_sdk[tools]"
+    )
 from collections import defaultdict
 
 @dataclass
