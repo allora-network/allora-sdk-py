@@ -8,9 +8,9 @@ from typing import Awaitable, Callable, ParamSpec, TypeVar, Union, cast
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
-from allora_sdk.rpc_client.protos.emissions.v10 import GetNetworkInferencesAtBlockRequest, NetworkInferenceBundle, LabeledValue
+from allora_sdk.rpc_client.protos.emissions.v10 import GetNetworkInferencesAtBlockRequest, NetworkInferenceBundle
 from .context import RunContext
 
 logger = logging.getLogger("allora_sdk")
@@ -99,7 +99,7 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
 
 Truth = TypeVar('Truth')
 Inference = float | dict[str, float]
-def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, Inference], float], log_loss: bool = True) -> Callable[[RunContext, Inference], Awaitable[float]]:
+def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_fn: Callable[[Truth, Inference], float], log_loss: bool = True, multi_output: bool = False) -> Callable[[RunContext, dict[str, float]], Awaitable[float]]:
     """Build a reputer scoring function from separate ground-truth and loss components.
 
     Returns a function that can be passed to `AlloraWorker.reputer()`. The ground truth function
@@ -114,7 +114,7 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
         gt_fn: Async function that fetches the ground-truth value. The ground truth can be any type.
         loss_fn: Function that computes a scalar loss given the ground truth and an inference.
         log_loss: If true, take log10 of each loss value before submitting (the chain expects log losses)
-        multi_output: If true, passes inference as to callback `dict[str, float]` instead of unpacking.
+        multi_output: If true, passes inference to callback as `dict[str, float]` instead of unpacking to `float`.
 
     Returns:
         An async function ``(context, inference) -> float`` suitable for use as a reputer function.
