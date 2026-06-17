@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 
 
 @dataclass
@@ -14,14 +14,16 @@ class AlloraWalletConfig:
     - private_key: Hex-encoded private key string.
     - mnemonic: Mnemonic phrase string.
     - mnemonic_file: Path to a file containing the mnemonic phrase.
-    - wallet: An existing LocalWallet instance.
+    - wallet: An existing cosmpy Wallet instance (e.g. a LocalWallet for self-managed
+      signing, or a RemoteWallet from make_remote_wallet() for Privy-managed signing
+      delegated to the Forge backend).
 
     The address prefix can also be specified (default is "allo").
     """
     private_key: Optional[str] = None
     mnemonic: Optional[str] = None
     mnemonic_file: Optional[str] = None
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     prefix: str = "allo"
 
     @classmethod

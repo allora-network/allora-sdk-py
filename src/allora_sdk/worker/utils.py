@@ -5,7 +5,7 @@ import math
 from datetime import datetime
 from getpass import getpass
 from typing import Awaitable, Callable, ParamSpec, TypeVar, Union, cast
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
@@ -17,9 +17,13 @@ from .context import RunContext
 logger = logging.getLogger("allora_sdk")
 
 
-def init_worker_wallet(wallet: AlloraWalletConfig | None) -> LocalWallet:
+def init_worker_wallet(wallet: AlloraWalletConfig | None) -> Wallet:
     wallet_prefix = wallet.prefix if wallet else "allo"
     if wallet:
+        # A pre-built Wallet (e.g. a RemoteWallet for Privy-managed signing) takes
+        # precedence over key material.
+        if wallet.wallet:
+            return wallet.wallet
         if wallet.private_key:
             return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
         if wallet.mnemonic:
