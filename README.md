@@ -296,6 +296,38 @@ Wire protocol is determined by the RPC url string passed to the config construct
 - **Multi-chain**: Testnet and mainnet support come with batteries included, but there is maximal configurability.  Can be used with other Cosmos SDK chains.
 - **Type safety**: Full protobuf type and service definitions, codegen clients
 
+### Privy-Managed (Delegated) Signing
+
+By default the worker signs with a local key (mnemonic / private key / `.allora_key`).
+Alternatively, you can delegate signing to the Forge backend, which signs with a
+Privy-managed server wallet — the worker holds no private key. `make_remote_wallet()`
+returns a cosmpy `Wallet` you pass via `AlloraWalletConfig(wallet=...)`; the worker loop
+and both tx + bundle signing work unchanged.
+
+```python
+import os
+from allora_sdk import (
+    AlloraWorker, AlloraNetworkConfig, AlloraWalletConfig, make_remote_wallet,
+)
+
+# wallet_id + api_key are minted in the Forge web app.
+remote = make_remote_wallet(
+    backend_url="https://forge.allora.network",
+    api_key=os.environ["FORGE_API_KEY"],
+    wallet_id=os.environ["FORGE_SIGNING_WALLET_ID"],
+)
+
+worker = AlloraWorker.inferer(
+    topic_id=69,
+    network=AlloraNetworkConfig.testnet(),
+    wallet=AlloraWalletConfig(wallet=remote),
+    run=run_model,
+)
+```
+
+Worker gas can be subsidized by a master-wallet feegrant configured on the backend, so
+the signing wallet needs no ALLO of its own.
+
 ## Allora API Client
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
