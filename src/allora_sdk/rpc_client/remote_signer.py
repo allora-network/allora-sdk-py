@@ -230,6 +230,10 @@ class RemoteSigner(Signer):
             )
 
     def _remote_sign(self, payload: bytes, prehashed: bool) -> bytes:
+        if not payload:
+            # The backend binds `payload` with gin's `binding:"required"`, which treats
+            # an empty string as missing and returns a 400; fail locally with a clear error.
+            raise ValueError("cannot sign an empty payload")
         result = self._client.sign(self._wallet_id, payload, prehashed)
         if not result.signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
