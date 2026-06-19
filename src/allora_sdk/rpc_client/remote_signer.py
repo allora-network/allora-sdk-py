@@ -301,7 +301,17 @@ class RemoteWallet(Wallet):
             if not public_key_hex:
                 raise ForgeBackendError("forge wallet-info response missing 'pubkey'")
 
-        self._public_key = PublicKey(bytes.fromhex(public_key_hex))
+        try:
+            pubkey_bytes = bytes.fromhex(public_key_hex)
+        except ValueError as e:
+            raise WalletConfigError(f"wallet pubkey is not valid hex: {e}") from e
+        if len(pubkey_bytes) != 33:
+            # Cosmos secp256k1 pubkeys are 33-byte compressed; surface a clear error
+            # rather than an obscure ecdsa failure deep inside cosmpy.
+            raise WalletConfigError(
+                f"expected 33-byte compressed secp256k1 pubkey, got {len(pubkey_bytes)} bytes"
+            )
+        self._public_key = PublicKey(pubkey_bytes)
 
         # Cross-check the backend's reported address against the pubkey-derived one so a
         # misconfigured wallet fails here rather than producing rejected transactions.
