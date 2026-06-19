@@ -1,6 +1,13 @@
 from .client import AlloraRPCClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
-from .remote_signer import RemoteSigner, RemoteWallet, make_remote_wallet
+from .remote_signer import (
+    ForgeBackendError,
+    RemoteSigner,
+    RemoteSignerError,
+    RemoteWallet,
+    WalletConfigError,
+    make_remote_wallet,
+)
 from .tx_manager import FeeTier, TxManager
 
 
@@ -13,4 +20,7 @@ __all__ = [
     "RemoteSigner",
     "RemoteWallet",
     "make_remote_wallet",
+    "RemoteSignerError",
+    "ForgeBackendError",
+    "WalletConfigError",
 ]

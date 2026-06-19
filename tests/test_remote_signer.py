@@ -14,7 +14,7 @@ import pytest
 from cosmpy.crypto.address import Address
 from cosmpy.crypto.keypairs import PrivateKey
 
-from allora_sdk.rpc_client.remote_signer import make_remote_wallet
+from allora_sdk.rpc_client.remote_signer import WalletConfigError, make_remote_wallet
 
 WALLET_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -108,7 +108,7 @@ def test_address_mismatch_raises():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        with pytest.raises(RuntimeError, match="does not match"):
+        with pytest.raises(WalletConfigError, match="does not match"):
             make_remote_wallet(url, "forge_sk_test", WALLET_ID)
     finally:
         server.shutdown()

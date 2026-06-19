@@ -32,6 +32,20 @@ API_KEY_HEADER = "X-Forge-API-Key"
 DEFAULT_TIMEOUT = 30.0
 
 
+class RemoteSignerError(Exception):
+    """Base exception for Privy-delegated (remote) signing errors."""
+
+
+class ForgeBackendError(RemoteSignerError):
+    """The Forge backend returned an HTTP error, was unreachable, or sent a
+    malformed/unexpected response."""
+
+
+class WalletConfigError(RemoteSignerError):
+    """The remote wallet is misconfigured (e.g. the backend-reported address does
+    not match the public key, or required fields are inconsistent)."""
+
+
 class RemoteSigner(Signer):
     """A cosmpy Signer that delegates signing to the Forge backend.
 
@@ -64,7 +78,7 @@ class RemoteSigner(Signer):
         data = _post_json(url, body, self._api_key, self._timeout)
         signature = data.get("signature")
         if not signature:
-            raise RuntimeError("forge sign response missing 'signature'")
+            raise ForgeBackendError("forge sign response missing 'signature'")
         return bytes.fromhex(signature)
 
 
@@ -97,7 +111,7 @@ class RemoteWallet(Wallet):
             public_key_hex = info.get("pubkey")
             reported_address = info.get("address")
             if not public_key_hex:
-                raise RuntimeError("forge wallet-info response missing 'pubkey'")
+                raise ForgeBackendError("forge wallet-info response missing 'pubkey'")
 
         self._public_key = PublicKey(bytes.fromhex(public_key_hex))
 
@@ -105,7 +119,7 @@ class RemoteWallet(Wallet):
         # misconfigured wallet fails here rather than producing rejected transactions.
         derived = str(Address(self._public_key, self._prefix))
         if reported_address and reported_address != derived:
-            raise RuntimeError(
+            raise WalletConfigError(
                 f"backend address {reported_address} does not match pubkey-derived address {derived}"
             )
 
@@ -157,6 +171,6 @@ def _do(req: urllib.request.Request, timeout: float) -> dict:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
-        raise RuntimeError(f"forge backend returned {e.code}: {detail}") from e
+        raise ForgeBackendError(f"forge backend returned {e.code}: {detail}") from e
     except urllib.error.URLError as e:
-        raise RuntimeError(f"failed to reach forge backend: {e.reason}") from e
+        raise ForgeBackendError(f"failed to reach forge backend: {e.reason}") from e
