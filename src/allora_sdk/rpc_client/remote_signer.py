@@ -164,9 +164,10 @@ class ForgeBackendClient:
             )
 
         if not (200 <= resp.status_code < 300):
-            raise ForgeBackendError(
-                f"forge backend returned {resp.status_code}: {raw.decode(errors='replace')}"
-            )
+            # Truncate: backend 4xx bodies can reflect request fields / wallet ids, and
+            # this message bubbles up to operator logs.
+            detail = raw.decode(errors="replace")[:512]
+            raise ForgeBackendError(f"forge backend returned {resp.status_code}: {detail}")
 
         try:
             parsed = json.loads(raw.decode())
