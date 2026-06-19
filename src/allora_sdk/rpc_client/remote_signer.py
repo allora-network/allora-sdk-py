@@ -19,10 +19,9 @@ Usage::
 """
 
 import json
-import urllib.error
-import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
+import requests
 from cosmpy.aerial.wallet import Wallet
 from cosmpy.crypto.address import Address
 from cosmpy.crypto.interface import Signer
@@ -46,6 +45,60 @@ class WalletConfigError(RemoteSignerError):
     not match the public key, or required fields are inconsistent)."""
 
 
+class ForgeBackendClient:
+    """HTTP transport for the Forge signing-wallet API.
+
+    Owns a single :class:`requests.Session` so connections to the backend are reused
+    across wallet-info and signing calls. Inject a custom ``session`` to install a CA
+    bundle, retry policy, or a stub transport in tests. All errors surface as
+    :class:`ForgeBackendError`.
+    """
+
+    def __init__(
+        self,
+        backend_url: str,
+        api_key: str,
+        timeout: float = DEFAULT_TIMEOUT,
+        session: Optional[requests.Session] = None,
+    ):
+        self._base = backend_url.rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout
+        self._session = session if session is not None else requests.Session()
+
+    def get_wallet_info(self, wallet_id: str) -> dict[str, Any]:
+        """Fetch a signing wallet's public, non-secret info (id, address, pubkey)."""
+        return self._request("GET", f"/api/v1/signing-wallets/{wallet_id}")
+
+    def sign(self, wallet_id: str, payload: bytes, prehashed: bool) -> dict[str, Any]:
+        """Delegate signing of ``payload`` to the backend.
+
+        When ``prehashed`` is False the backend SHA-256 hashes the payload (Cosmos
+        SignDoc); when True it signs the 32-byte digest as-is.
+        """
+        body = json.dumps({"payload": payload.hex(), "prehashed": prehashed})
+        return self._request("POST", f"/api/v1/signing-wallets/{wallet_id}/sign", body)
+
+    def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
+        headers = {API_KEY_HEADER: self._api_key}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        try:
+            resp = self._session.request(
+                method,
+                self._base + path,
+                data=body,
+                headers=headers,
+                timeout=self._timeout,
+            )
+        except requests.RequestException as e:
+            raise ForgeBackendError(f"failed to reach forge backend: {e}") from e
+
+        if not (200 <= resp.status_code < 300):
+            raise ForgeBackendError(f"forge backend returned {resp.status_code}: {resp.text}")
+        return resp.json()
+
+
 class RemoteSigner(Signer):
     """A cosmpy Signer that delegates signing to the Forge backend.
 
@@ -57,11 +110,9 @@ class RemoteSigner(Signer):
     The private key never leaves Privy/the backend.
     """
 
-    def __init__(self, backend_url: str, api_key: str, wallet_id: str, timeout: float = DEFAULT_TIMEOUT):
-        self._base = backend_url.rstrip("/")
-        self._api_key = api_key
+    def __init__(self, client: ForgeBackendClient, wallet_id: str):
+        self._client = client
         self._wallet_id = wallet_id
-        self._timeout = timeout
 
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
         # The backend hashes the message (SHA-256) before signing, matching cosmpy's
@@ -73,9 +124,7 @@ class RemoteSigner(Signer):
         return self._remote_sign(digest, prehashed=True)
 
     def _remote_sign(self, payload: bytes, prehashed: bool) -> bytes:
-        url = f"{self._base}/api/v1/signing-wallets/{self._wallet_id}/sign"
-        body = json.dumps({"payload": payload.hex(), "prehashed": prehashed}).encode()
-        data = _post_json(url, body, self._api_key, self._timeout)
+        data = self._client.sign(self._wallet_id, payload, prehashed)
         signature = data.get("signature")
         if not signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
@@ -98,16 +147,16 @@ class RemoteWallet(Wallet):
         prefix: str = "allo",
         timeout: float = DEFAULT_TIMEOUT,
         public_key_hex: Optional[str] = None,
+        client: Optional[ForgeBackendClient] = None,
     ):
-        self._base = backend_url.rstrip("/")
-        self._api_key = api_key
         self._wallet_id = wallet_id
         self._prefix = prefix
-        self._signer = RemoteSigner(backend_url, api_key, wallet_id, timeout)
+        self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
+        self._signer = RemoteSigner(self._client, wallet_id)
 
         reported_address: Optional[str] = None
         if public_key_hex is None:
-            info = self._fetch_info(timeout)
+            info = self._client.get_wallet_info(wallet_id)
             public_key_hex = info.get("pubkey")
             reported_address = info.get("address")
             if not public_key_hex:
@@ -122,10 +171,6 @@ class RemoteWallet(Wallet):
             raise WalletConfigError(
                 f"backend address {reported_address} does not match pubkey-derived address {derived}"
             )
-
-    def _fetch_info(self, timeout: float) -> dict:
-        url = f"{self._base}/api/v1/signing-wallets/{self._wallet_id}"
-        return _get_json(url, self._api_key, timeout)
 
     def address(self) -> Address:
         return Address(self._public_key, self._prefix)
@@ -143,34 +188,15 @@ def make_remote_wallet(
     wallet_id: str,
     prefix: str = "allo",
     timeout: float = DEFAULT_TIMEOUT,
+    client: Optional[ForgeBackendClient] = None,
 ) -> RemoteWallet:
     """Construct a backend-backed wallet for the Privy-managed signing path.
 
     Pass the result to ``AlloraWalletConfig(wallet=...)`` (or ``AlloraWorker`` via its
-    wallet config) to sign through the Forge backend instead of a local key.
+    wallet config) to sign through the Forge backend instead of a local key. Inject a
+    custom ``client`` (e.g. with a tuned :class:`requests.Session`) to control the HTTP
+    transport.
     """
-    return RemoteWallet(backend_url, api_key, wallet_id, prefix=prefix, timeout=timeout)
-
-
-def _get_json(url: str, api_key: str, timeout: float) -> dict:
-    req = urllib.request.Request(url, method="GET")
-    req.add_header(API_KEY_HEADER, api_key)
-    return _do(req, timeout)
-
-
-def _post_json(url: str, body: bytes, api_key: str, timeout: float) -> dict:
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header(API_KEY_HEADER, api_key)
-    return _do(req, timeout)
-
-
-def _do(req: urllib.request.Request, timeout: float) -> dict:
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
-        raise ForgeBackendError(f"forge backend returned {e.code}: {detail}") from e
-    except urllib.error.URLError as e:
-        raise ForgeBackendError(f"failed to reach forge backend: {e.reason}") from e
+    return RemoteWallet(
+        backend_url, api_key, wallet_id, prefix=prefix, timeout=timeout, client=client
+    )

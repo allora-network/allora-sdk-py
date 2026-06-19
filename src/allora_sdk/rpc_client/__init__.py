@@ -1,6 +1,7 @@
 from .client import AlloraRPCClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .remote_signer import (
+    ForgeBackendClient,
     ForgeBackendError,
     RemoteSigner,
     RemoteSignerError,
@@ -23,4 +24,5 @@ __all__ = [
     "RemoteSignerError",
     "ForgeBackendError",
     "WalletConfigError",
+    "ForgeBackendClient",
 ]

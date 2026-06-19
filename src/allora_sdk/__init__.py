@@ -7,6 +7,7 @@ from .rpc_client import (
     RemoteSignerError,
     ForgeBackendError,
     WalletConfigError,
+    ForgeBackendClient,
 )
 from .rpc_client.protos.emissions.v3 import ValueBundle
 from .api_client import AlloraAPIClient
@@ -38,6 +39,7 @@ __all__ = [
     "RemoteSignerError",
     "ForgeBackendError",
     "WalletConfigError",
+    "ForgeBackendClient",
     # Loss methods
     "get_default_loss_fn",
     "is_supported_loss_method",
