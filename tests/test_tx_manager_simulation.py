@@ -9,7 +9,7 @@ from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxManager
 
 
-def _make_manager() -> TxManager:
+def _make_manager(fee_granter: str | None = None) -> TxManager:
     wallet = Mock()
     wallet.address.return_value = "allo1sender"
     wallet.public_key.return_value = Mock()
@@ -27,7 +27,13 @@ def _make_manager() -> TxManager:
         bank_client=bank_client,
         feemarket_client=feemarket_client,
         config=config,
+        fee_granter=fee_granter,
     )
+
+
+def test_fee_granter_is_stored() -> None:
+    assert _make_manager()._fee_granter is None
+    assert _make_manager(fee_granter="allo1granter")._fee_granter == "allo1granter"
 
 
 @pytest.mark.asyncio

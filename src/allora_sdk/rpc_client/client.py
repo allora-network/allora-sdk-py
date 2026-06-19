@@ -164,6 +164,7 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
+                fee_granter=self._fee_granter,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
@@ -183,6 +184,7 @@ class AlloraRPCClient:
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
+        self._fee_granter: Optional[str] = wallet.fee_granter if wallet else None
         if not wallet:
             return
 

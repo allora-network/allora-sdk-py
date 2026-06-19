@@ -19,17 +19,24 @@ class AlloraWalletConfig:
       delegated to the Forge backend).
 
     The address prefix can also be specified (default is "allo").
+
+    fee_granter optionally sets the bech32 address of a fee granter (a master/subsidy
+    wallet that has created an on-chain feegrant for this wallet). When set, transactions
+    are broadcast with this granter as the fee payer, so the signing wallet needs no ALLO
+    of its own — this is the recommended pairing for Privy-delegated (RemoteWallet) signing.
     """
     private_key: Optional[str] = None
     mnemonic: Optional[str] = None
     mnemonic_file: Optional[str] = None
     wallet: Optional[Wallet] = None
     prefix: str = "allo"
+    fee_granter: Optional[str] = None
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
         p = env_prefix or ""
         prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
+        fee_granter = os.getenv(p + "FEE_GRANTER")
 
         # Privy-delegated signing: if the Forge env vars are present, build a RemoteWallet
         # so 12-factor deployments can use delegated signing without hand-written wiring.
@@ -42,13 +49,14 @@ class AlloraWalletConfig:
 
             backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
             wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
-            return cls(wallet=wallet, prefix=prefix)
+            return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
 
         return cls(
             private_key=os.getenv(p + "PRIVATE_KEY"),
             mnemonic=os.getenv(p + "MNEMONIC"),
             mnemonic_file=os.getenv(p + "MNEMONIC_FILE"),
             prefix=prefix,
+            fee_granter=fee_granter,
         )
 
     def __post_init__(self):

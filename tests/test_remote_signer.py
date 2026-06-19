@@ -104,6 +104,19 @@ def test_from_env_builds_remote_wallet(backend, monkeypatch):
     assert str(cfg.wallet.address()) == str(Address(priv.public_key, "allo"))
 
 
+def test_from_env_reads_fee_granter(backend, monkeypatch):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    _priv, url = backend
+    monkeypatch.setenv("FORGE_API_KEY", "forge_sk_test")
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("FORGE_BACKEND_URL", url)
+    monkeypatch.setenv("FEE_GRANTER", "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.fee_granter == "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
 def test_public_key_hex_shortcut_skips_fetch():
     # With public_key_hex (+ address) the constructor must not contact the backend,
     # so async callers can build a wallet without a blocking GET.

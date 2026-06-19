@@ -11,6 +11,7 @@ from google.protobuf.message import Message
 from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
+from cosmpy.crypto.address import Address
 from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
@@ -124,6 +125,7 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
+        fee_granter: Optional[str] = None,
     ):
         self.wallet = wallet
         self.tx_client = tx_client
@@ -133,6 +135,9 @@ class TxManager:
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
+        # bech32 address of a feegrant granter (master/subsidy wallet) that pays fees on
+        # behalf of self.wallet; None means the signing wallet pays its own fees.
+        self._fee_granter = fee_granter
         self.parent_tx_id = 0
         self._parent_tx_id_lock = asyncio.Lock()
 
@@ -441,9 +446,12 @@ class TxManager:
         resolved_seq = account_seq if account_seq is not None else info.sequence
         logger.debug(f"Account info: seq={resolved_seq}, num={info.account_number}")
 
+        # When a feegrant granter is configured, set it as the fee payer so the signing
+        # wallet needs no ALLO of its own (the granter must have an on-chain allowance).
+        granter = Address(self._fee_granter) if self._fee_granter else None
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=granter),
         )
 
         tx.sign(

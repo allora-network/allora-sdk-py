@@ -320,18 +320,25 @@ remote = make_remote_wallet(
 worker = AlloraWorker.inferer(
     topic_id=69,
     network=AlloraNetworkConfig.testnet(),
-    wallet=AlloraWalletConfig(wallet=remote),
+    wallet=AlloraWalletConfig(
+        wallet=remote,
+        # Subsidize gas from a master wallet via feegrant (optional).
+        fee_granter=os.environ.get("FEE_GRANTER"),
+    ),
     run=run_model,
 )
 ```
 
-Worker gas can be subsidized by a master-wallet feegrant configured on the backend, so
-the signing wallet needs no ALLO of its own.
+Worker gas can be subsidized by a master-wallet feegrant: set `fee_granter` to the master
+wallet address (which must hold an on-chain feegrant allowance for the signing wallet) and
+transactions are broadcast with that granter as the fee payer, so the signing wallet needs
+no ALLO of its own. Leave `fee_granter` unset to have the signing wallet pay its own fees.
 
 For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds the remote
 wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
 (`FORGE_BACKEND_URL` defaults to `https://forge.allora.network`), alongside the existing
-`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options.
+`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FEE_GRANTER` to enable the
+feegrant subsidy described below.
 
 ## Allora API Client
 
