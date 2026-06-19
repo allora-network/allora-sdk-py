@@ -93,10 +93,10 @@ class AlloraWalletConfig:
             # downstream code uses the wallet directly, so `prefix` would otherwise be a
             # silently-ignored, possibly-misleading value. Align it to the wallet's actual
             # prefix (e.g. a RemoteWallet built with prefix="cosmos").
-            try:
-                hrp = str(self.wallet.address()).split("1", 1)[0]
-            except Exception:
-                hrp = ""
+            # No try/except: only wallet.address() can raise here, and a Wallet whose
+            # address() raises is a real bug that should surface, not be swallowed into a
+            # silently wrong prefix that fails far downstream in the broadcast path.
+            hrp = str(self.wallet.address()).split("1", 1)[0]
             if hrp:
                 self.prefix = hrp
 
