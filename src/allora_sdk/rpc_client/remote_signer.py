@@ -117,7 +117,8 @@ class ForgeBackendClient:
 
     def get_wallet_info(self, wallet_id: str) -> SigningWalletInfo:
         """Fetch a signing wallet's public, non-secret info (id, address, pubkey)."""
-        raw = self._request("GET", f"/api/v1/signing-wallets/{wallet_id}")
+        wid = urllib.parse.quote(wallet_id, safe="")
+        raw = self._request("GET", f"/api/v1/signing-wallets/{wid}")
         return _validate(SigningWalletInfo, raw, "wallet-info")
 
     def sign(self, wallet_id: str, payload: bytes, prehashed: bool) -> SignResult:
@@ -126,8 +127,9 @@ class ForgeBackendClient:
         When ``prehashed`` is False the backend SHA-256 hashes the payload (Cosmos
         SignDoc); when True it signs the 32-byte digest as-is.
         """
+        wid = urllib.parse.quote(wallet_id, safe="")
         body = json.dumps({"payload": payload.hex(), "prehashed": prehashed})
-        raw = self._request("POST", f"/api/v1/signing-wallets/{wallet_id}/sign", body)
+        raw = self._request("POST", f"/api/v1/signing-wallets/{wid}/sign", body)
         return _validate(SignResult, raw, "sign")
 
     def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
