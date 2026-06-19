@@ -28,11 +28,27 @@ class AlloraWalletConfig:
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
+        p = env_prefix or ""
+        prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
+
+        # Privy-delegated signing: if the Forge env vars are present, build a RemoteWallet
+        # so 12-factor deployments can use delegated signing without hand-written wiring.
+        # Note: this performs a blocking wallet-info fetch; async callers that need to avoid
+        # it can build the wallet via make_remote_wallet(..., public_key_hex=...) directly.
+        api_key = os.getenv(p + "FORGE_API_KEY")
+        wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
+        if api_key and wallet_id:
+            from .remote_signer import make_remote_wallet
+
+            backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
+            wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
+            return cls(wallet=wallet, prefix=prefix)
+
         return cls(
-            private_key=os.getenv((env_prefix or "") + "PRIVATE_KEY"),
-            mnemonic=os.getenv((env_prefix or "") + "MNEMONIC"),
-            mnemonic_file=os.getenv((env_prefix or "") + "MNEMONIC_FILE"),
-            prefix=os.getenv((env_prefix or "") + "ADDRESS_PREFIX", "allo"),
+            private_key=os.getenv(p + "PRIVATE_KEY"),
+            mnemonic=os.getenv(p + "MNEMONIC"),
+            mnemonic_file=os.getenv(p + "MNEMONIC_FILE"),
+            prefix=prefix,
         )
 
     def __post_init__(self):

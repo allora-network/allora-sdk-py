@@ -328,6 +328,11 @@ worker = AlloraWorker.inferer(
 Worker gas can be subsidized by a master-wallet feegrant configured on the backend, so
 the signing wallet needs no ALLO of its own.
 
+For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds the remote
+wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
+(`FORGE_BACKEND_URL` defaults to `https://forge.allora.network`), alongside the existing
+`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options.
+
 ## Allora API Client
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
