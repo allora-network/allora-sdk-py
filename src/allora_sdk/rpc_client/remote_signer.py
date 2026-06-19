@@ -277,6 +277,13 @@ class RemoteWallet(Wallet):
     The public key and address are fetched from the backend on construction (or supplied
     directly) so the wallet can seal/simulate transactions before it has ever transacted
     on-chain. ``signer()`` returns a :class:`RemoteSigner`.
+
+    Passing ``public_key_hex`` skips the (blocking) wallet-info fetch — useful from async
+    contexts. **When you use it, the backend is not contacted at construction, so the
+    (api_key, wallet_id) binding and the wallet's existence are NOT verified until the
+    first ``sign`` call.** Pass ``address`` alongside ``public_key_hex`` to keep the local
+    pubkey↔address cross-check; a wrong ``wallet_id`` will then only surface as a 404/403
+    on the first signing request.
     """
 
     def __init__(
@@ -287,13 +294,15 @@ class RemoteWallet(Wallet):
         prefix: str = "allo",
         timeout: float = DEFAULT_TIMEOUT,
         public_key_hex: Optional[str] = None,
+        address: Optional[str] = None,
         client: Optional[ForgeBackendClient] = None,
     ):
         self._wallet_id = wallet_id
         self._prefix = prefix
         self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
 
-        reported_address: Optional[str] = None
+        # For the public_key_hex shortcut, cross-check against a caller-supplied address.
+        reported_address: Optional[str] = address
         if public_key_hex is None:
             info = self._client.get_wallet_info(wallet_id)
             # Guard against a proxy misroute / cache bug returning a different wallet.
