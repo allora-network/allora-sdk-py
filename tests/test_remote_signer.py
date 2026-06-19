@@ -121,6 +121,19 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
     assert cfg.fee_granter == "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 
+def test_from_env_conflicting_credentials_rejected(monkeypatch):
+    # Forge env vars set alongside a stale local key (a common mid-migration state) must
+    # fail loudly, not silently sign through Forge — mirrors __post_init__'s single-source
+    # guard. The check fires before any backend contact.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("PRIVATE_KEY", "deadbeef")
+    with pytest.raises(ValueError, match="exactly one signing source"):
+        AlloraWalletConfig.from_env()
+
+
 def test_public_key_hex_shortcut_skips_fetch():
     # With public_key_hex (+ address) the constructor must not contact the backend,
     # so async callers can build a wallet without a blocking GET.

@@ -45,6 +45,21 @@ class AlloraWalletConfig:
         api_key = os.getenv(p + "FORGE_API_KEY")
         wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
         if api_key and wallet_id:
+            # The early return below never reads PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a
+            # stale local-key env var (a common mid-migration state) would be silently
+            # ignored and signing would go through Forge with no log. Mirror __post_init__'s
+            # "exactly one credential source" guard at the env layer and fail loudly instead.
+            conflicting = [
+                name
+                for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
+                if os.getenv(p + name)
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"FORGE_API_KEY and FORGE_SIGNING_WALLET_ID are set alongside "
+                    f"{conflicting}; choose exactly one signing source"
+                )
+
             from .remote_signer import make_remote_wallet
 
             backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
