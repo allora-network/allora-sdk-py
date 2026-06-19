@@ -31,6 +31,9 @@ from cosmpy.crypto.keypairs import PublicKey
 
 API_KEY_HEADER = "X-Forge-API-Key"
 DEFAULT_TIMEOUT = 30.0
+# Legitimate responses (hex signature + pubkey, wallet-info object) are well under 1 KiB.
+# Cap reads so a misbehaving or hostile backend cannot drive the worker to OOM.
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
 class RemoteSignerError(Exception):
@@ -140,6 +143,7 @@ class ForgeBackendClient:
             # Never follow redirects: requests re-sends the X-Forge-API-Key header on
             # cross-host 3xx, so a redirecting/compromised backend could exfiltrate the
             # key (which authorizes delegated signing). Treat any 3xx as an error below.
+            # stream=True so the body is read with an explicit size cap (see below).
             resp = self._session.request(
                 method,
                 self._base + path,
@@ -147,13 +151,23 @@ class ForgeBackendClient:
                 headers=headers,
                 timeout=self._timeout,
                 allow_redirects=False,
+                stream=True,
             )
         except requests.RequestException as e:
             raise ForgeBackendError(f"failed to reach forge backend: {e}") from e
 
+        with resp:
+            raw = resp.raw.read(MAX_RESPONSE_BYTES + 1, decode_content=True)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ForgeBackendError(
+                f"forge backend response exceeded {MAX_RESPONSE_BYTES} bytes"
+            )
+
         if not (200 <= resp.status_code < 300):
-            raise ForgeBackendError(f"forge backend returned {resp.status_code}: {resp.text}")
-        return resp.json()
+            raise ForgeBackendError(
+                f"forge backend returned {resp.status_code}: {raw.decode(errors='replace')}"
+            )
+        return json.loads(raw.decode())
 
 
 class RemoteSigner(Signer):
