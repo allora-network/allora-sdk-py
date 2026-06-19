@@ -296,6 +296,11 @@ class RemoteWallet(Wallet):
         reported_address: Optional[str] = None
         if public_key_hex is None:
             info = self._client.get_wallet_info(wallet_id)
+            # Guard against a proxy misroute / cache bug returning a different wallet.
+            if info.id and info.id != wallet_id:
+                raise WalletConfigError(
+                    f"forge wallet-info id {info.id} does not match requested wallet_id {wallet_id}"
+                )
             public_key_hex = info.pubkey
             reported_address = info.address
             if not public_key_hex:
