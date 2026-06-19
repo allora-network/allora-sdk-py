@@ -191,7 +191,7 @@ class AlloraRPCClient:
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                logger.debug("Wallet initialized from LocalWallet")
+                logger.debug(f"Wallet initialized from pre-built {type(wallet.wallet).__name__}")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix=wallet.prefix)
