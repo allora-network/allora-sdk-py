@@ -298,15 +298,36 @@ def test_non_https_backend_url_rejected():
 
 
 def test_redirect_is_not_followed():
-    # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop;
-    # the client disables redirects and treats the 3xx as a backend error.
+    # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop. Point
+    # the redirect at a second "leak" server and assert it is never contacted, so a future
+    # change that re-enables redirects (which would forward the key) fails this test — not
+    # just that the 3xx surfaces as an error.
+    leak_requests: list[str] = []
+
+    class LeakHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            # Record the API-key header (if any) so a leak is observable, then 200.
+            leak_requests.append(self.headers.get("X-Forge-API-Key", "<none>"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    leak_server = HTTPServer(("127.0.0.1", 0), LeakHandler)
+    leak_thread = threading.Thread(target=leak_server.serve_forever, daemon=True)
+    leak_thread.start()
+    leak_url = f"http://127.0.0.1:{leak_server.server_address[1]}/leak"
+
     class RedirectHandler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_GET(self):
             self.send_response(302)
-            self.send_header("Location", "http://127.0.0.1:1/leak")
+            self.send_header("Location", leak_url)
             self.end_headers()
 
     server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
@@ -316,9 +337,15 @@ def test_redirect_is_not_followed():
     try:
         with pytest.raises(ForgeBackendError):
             make_remote_wallet(url, API_KEY, WALLET_ID)
+        # The redirect target must never be contacted, so the X-Forge-API-Key was not re-sent.
+        assert leak_requests == [], (
+            f"client followed the redirect and leaked headers to the target: {leak_requests}"
+        )
     finally:
         server.shutdown()
         thread.join(timeout=2)
+        leak_server.shutdown()
+        leak_thread.join(timeout=2)
 
 
 def test_sign_response_uppercase_pubkey_accepted():
