@@ -198,12 +198,13 @@ class RemoteSigner(Signer):
         self,
         client: ForgeBackendClient,
         wallet_id: str,
-        public_key: Optional[PublicKey] = None,
+        public_key: PublicKey,
     ):
         self._client = client
         self._wallet_id = wallet_id
-        # When known, the wallet pubkey is used to verify every returned signature
-        # locally so a backend bug or MITM cannot make the worker broadcast garbage.
+        # The wallet pubkey verifies every returned signature locally so a backend bug or
+        # MITM cannot make the worker broadcast garbage. Required (not optional) so a signer
+        # constructed directly can never silently skip verification; RemoteWallet supplies it.
         self._public_key = public_key
 
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
@@ -253,8 +254,6 @@ class RemoteSigner(Signer):
 
     def _verify(self, payload: bytes, sig: bytes, prehashed: bool, response_pubkey: Optional[str]) -> None:
         """Verify the backend's signature against the pinned wallet public key."""
-        if self._public_key is None:
-            return
         expected = self._public_key.public_key_bytes.hex()
         if response_pubkey and response_pubkey != expected:
             raise WalletConfigError(
