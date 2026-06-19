@@ -254,11 +254,21 @@ class RemoteSigner(Signer):
 
     def _verify(self, payload: bytes, sig: bytes, prehashed: bool, response_pubkey: Optional[str]) -> None:
         """Verify the backend's signature against the pinned wallet public key."""
-        expected = self._public_key.public_key_bytes.hex()
-        if response_pubkey and response_pubkey != expected:
-            raise WalletConfigError(
-                "forge sign response pubkey does not match the wallet public key"
-            )
+        # Compare decoded bytes, not hex strings: bytes.hex() is lowercase but a future
+        # backend / proxy could return uppercase hex for an otherwise-valid signature.
+        # (Go decodes both sides to bytes; allora-sdk-ts lower-cases defensively.)
+        expected = self._public_key.public_key_bytes
+        if response_pubkey:
+            try:
+                resp_bytes = bytes.fromhex(response_pubkey)
+            except ValueError as e:
+                raise ForgeBackendError(
+                    f"forge sign response pubkey is not valid hex: {e}"
+                ) from e
+            if resp_bytes != expected:
+                raise WalletConfigError(
+                    "forge sign response pubkey does not match the wallet public key"
+                )
         verified = (
             self._public_key.verify_digest(payload, sig)
             if prehashed

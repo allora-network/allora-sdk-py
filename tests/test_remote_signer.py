@@ -276,3 +276,47 @@ def test_redirect_is_not_followed():
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_sign_response_uppercase_pubkey_accepted():
+    # bytes.hex() is lowercase, but a backend / proxy could return uppercase hex; the
+    # pubkey match must compare decoded bytes, not case-sensitive strings, so a valid
+    # signature is not falsely rejected (parity with allora-sdk-go / allora-sdk-ts).
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            req = json.loads(self.rfile.read(length))
+            payload = bytes.fromhex(req["payload"])
+            sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
+            # Return the pubkey in UPPERCASE hex to exercise the case-insensitive compare.
+            self._send({"signature": sig.hex(), "pubkey": pub_hex.upper()})
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+        message = b"cosmos signdoc bytes"
+        sig = wallet.signer().sign(message)
+        assert priv.public_key.verify(message, sig)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
