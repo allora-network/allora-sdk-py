@@ -1,4 +1,6 @@
 import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 import traceback
 import grpc
@@ -29,6 +31,14 @@ from allora_sdk.rpc_client.interfaces import (
 )
 
 logger = logging.getLogger("allora_sdk")
+
+# Delegated (RemoteSigner) signing makes a blocking HTTPS call to the Forge backend, so it
+# runs in a worker thread to avoid freezing the event loop. Use a dedicated pool rather than
+# asyncio's shared default ThreadPoolExecutor, so a stalled backend cannot starve unrelated
+# to_thread work — notably websocket-callback dispatch (run_in_executor(None, ...)) and faucet
+# calls. Module-level: process-lifetime; its daemon threads are reclaimed at interpreter exit.
+_signing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="forge-signer")
+
 
 class PendingTx:
     def __init__(
@@ -454,14 +464,19 @@ class TxManager:
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=granter),
         )
 
-        # Offload to a worker thread: a RemoteSigner signs via a blocking HTTPS call to
-        # the Forge backend, which would otherwise freeze the event loop. (For local
-        # wallets this is fast CPU work; running it in a thread is harmless.)
-        await asyncio.to_thread(
-            tx.sign,
-            signer=self.wallet.signer(),
-            chain_id=self.config.chain_id,
-            account_number=info.account_number,
+        # Offload to the dedicated signing pool: a RemoteSigner signs via a blocking HTTPS
+        # call to the Forge backend, which would otherwise freeze the event loop. The
+        # dedicated pool keeps a stalled backend from starving other to_thread work such as
+        # websocket-callback dispatch. (For local wallets this is fast CPU work; harmless.)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            _signing_executor,
+            functools.partial(
+                tx.sign,
+                signer=self.wallet.signer(),
+                chain_id=self.config.chain_id,
+                account_number=info.account_number,
+            ),
         )
 
         tx.complete()
