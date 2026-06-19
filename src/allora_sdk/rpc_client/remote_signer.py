@@ -19,6 +19,7 @@ Usage::
 """
 
 import json
+import urllib.parse
 from typing import Any, Optional, TypeVar
 
 import requests
@@ -75,6 +76,23 @@ def _validate(model: type[_M], raw: dict[str, Any], what: str) -> _M:
         raise ForgeBackendError(f"unexpected forge {what} response: {e}") from e
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _validate_backend_url(url: str) -> None:
+    """Require https:// for the Forge backend so the long-lived API key is never sent
+    in cleartext. Plain http:// is permitted only for loopback (local development)."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS:
+        return
+    raise ValueError(
+        f"backend_url must use https:// (got {parsed.scheme or 'no'} scheme); "
+        "http:// is only allowed for loopback hosts in local development"
+    )
+
+
 class ForgeBackendClient:
     """HTTP transport for the Forge signing-wallet API.
 
@@ -91,6 +109,7 @@ class ForgeBackendClient:
         timeout: float = DEFAULT_TIMEOUT,
         session: Optional[requests.Session] = None,
     ):
+        _validate_backend_url(backend_url)
         self._base = backend_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout

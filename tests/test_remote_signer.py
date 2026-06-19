@@ -118,6 +118,12 @@ def test_address_mismatch_raises():
         server.shutdown()
 
 
+def test_non_https_backend_url_rejected():
+    # Plain http:// to a non-loopback host would leak the API key in cleartext.
+    with pytest.raises(ValueError, match="https"):
+        make_remote_wallet("http://forge.example.com", "forge_sk_test", WALLET_ID)
+
+
 def test_redirect_is_not_followed():
     # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop;
     # the client disables redirects and treats the 3xx as a backend error.
