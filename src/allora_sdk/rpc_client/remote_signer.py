@@ -19,9 +19,10 @@ Usage::
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, Optional, TypeVar
 
 import requests
+from pydantic import BaseModel, ValidationError
 from cosmpy.aerial.wallet import Wallet
 from cosmpy.crypto.address import Address
 from cosmpy.crypto.interface import Signer
@@ -45,6 +46,35 @@ class WalletConfigError(RemoteSignerError):
     not match the public key, or required fields are inconsistent)."""
 
 
+class SigningWalletInfo(BaseModel):
+    """Non-secret view of a Forge signing wallet, as returned by the backend.
+
+    The wire shape is a cross-repo HTTP contract shared with allora-sdk-go,
+    allora-sdk-ts, and forge-v2.
+    """
+
+    id: str
+    address: str
+    pubkey: str  # hex-encoded 33-byte compressed secp256k1 public key
+
+
+class SignResult(BaseModel):
+    """A signature produced by the Forge backend."""
+
+    signature: str  # hex-encoded 64-byte canonical (low-S) secp256k1 signature
+    pubkey: Optional[str] = None
+
+
+_M = TypeVar("_M", bound=BaseModel)
+
+
+def _validate(model: type[_M], raw: dict[str, Any], what: str) -> _M:
+    try:
+        return model.model_validate(raw)
+    except ValidationError as e:
+        raise ForgeBackendError(f"unexpected forge {what} response: {e}") from e
+
+
 class ForgeBackendClient:
     """HTTP transport for the Forge signing-wallet API.
 
@@ -66,18 +96,20 @@ class ForgeBackendClient:
         self._timeout = timeout
         self._session = session if session is not None else requests.Session()
 
-    def get_wallet_info(self, wallet_id: str) -> dict[str, Any]:
+    def get_wallet_info(self, wallet_id: str) -> SigningWalletInfo:
         """Fetch a signing wallet's public, non-secret info (id, address, pubkey)."""
-        return self._request("GET", f"/api/v1/signing-wallets/{wallet_id}")
+        raw = self._request("GET", f"/api/v1/signing-wallets/{wallet_id}")
+        return _validate(SigningWalletInfo, raw, "wallet-info")
 
-    def sign(self, wallet_id: str, payload: bytes, prehashed: bool) -> dict[str, Any]:
+    def sign(self, wallet_id: str, payload: bytes, prehashed: bool) -> SignResult:
         """Delegate signing of ``payload`` to the backend.
 
         When ``prehashed`` is False the backend SHA-256 hashes the payload (Cosmos
         SignDoc); when True it signs the 32-byte digest as-is.
         """
         body = json.dumps({"payload": payload.hex(), "prehashed": prehashed})
-        return self._request("POST", f"/api/v1/signing-wallets/{wallet_id}/sign", body)
+        raw = self._request("POST", f"/api/v1/signing-wallets/{wallet_id}/sign", body)
+        return _validate(SignResult, raw, "sign")
 
     def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
         headers = {API_KEY_HEADER: self._api_key}
@@ -124,11 +156,10 @@ class RemoteSigner(Signer):
         return self._remote_sign(digest, prehashed=True)
 
     def _remote_sign(self, payload: bytes, prehashed: bool) -> bytes:
-        data = self._client.sign(self._wallet_id, payload, prehashed)
-        signature = data.get("signature")
-        if not signature:
+        result = self._client.sign(self._wallet_id, payload, prehashed)
+        if not result.signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
-        return bytes.fromhex(signature)
+        return bytes.fromhex(result.signature)
 
 
 class RemoteWallet(Wallet):
@@ -157,8 +188,8 @@ class RemoteWallet(Wallet):
         reported_address: Optional[str] = None
         if public_key_hex is None:
             info = self._client.get_wallet_info(wallet_id)
-            public_key_hex = info.get("pubkey")
-            reported_address = info.get("address")
+            public_key_hex = info.pubkey
+            reported_address = info.address
             if not public_key_hex:
                 raise ForgeBackendError("forge wallet-info response missing 'pubkey'")
 
