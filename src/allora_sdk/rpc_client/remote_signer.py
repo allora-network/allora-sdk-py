@@ -300,6 +300,10 @@ class RemoteWallet(Wallet):
             reported_address = info.address
             if not public_key_hex:
                 raise ForgeBackendError("forge wallet-info response missing 'pubkey'")
+            # Fail closed: an empty address would otherwise skip the cross-check below,
+            # leaving the (api_key, wallet_id) <-> keypair binding unverified.
+            if not reported_address:
+                raise ForgeBackendError("forge wallet-info response missing 'address'")
 
         try:
             pubkey_bytes = bytes.fromhex(public_key_hex)
