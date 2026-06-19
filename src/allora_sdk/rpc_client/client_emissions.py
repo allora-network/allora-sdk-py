@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 from typing import Dict, List, Optional
@@ -145,7 +146,10 @@ class EmissionsTxs:
         # sign bundle with pubkey using a 32-byte digest (secp256k1 requirement)
         bundle_bytes = bytes(bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
-        bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
+        # Offload to a worker thread: signer() may be a RemoteSigner whose sign_digest
+        # makes a blocking HTTPS call to the Forge backend, which would otherwise freeze
+        # the event loop (websocket subscriber, other workers, tx monitor).
+        bundle_sig = await asyncio.to_thread(self._txs.wallet.signer().sign_digest, bundle_digest)
 
         worker_data_bundle = InputWorkerDataBundle(
             worker=worker_address,
@@ -275,7 +279,10 @@ class EmissionsTxs:
         # Sign the value bundle
         bundle_bytes = bytes(value_bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
-        bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
+        # Offload to a worker thread: signer() may be a RemoteSigner whose sign_digest
+        # makes a blocking HTTPS call to the Forge backend, which would otherwise freeze
+        # the event loop (websocket subscriber, other workers, tx monitor).
+        bundle_sig = await asyncio.to_thread(self._txs.wallet.signer().sign_digest, bundle_digest)
 
         reputer_value_bundle = InputReputerValueBundle(
             value_bundle=value_bundle,

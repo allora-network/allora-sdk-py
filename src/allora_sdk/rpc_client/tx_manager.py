@@ -454,7 +454,11 @@ class TxManager:
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=granter),
         )
 
-        tx.sign(
+        # Offload to a worker thread: a RemoteSigner signs via a blocking HTTPS call to
+        # the Forge backend, which would otherwise freeze the event loop. (For local
+        # wallets this is fast CPU work; running it in a thread is harmless.)
+        await asyncio.to_thread(
+            tx.sign,
             signer=self.wallet.signer(),
             chain_id=self.config.chain_id,
             account_number=info.account_number,
