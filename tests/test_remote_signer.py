@@ -16,6 +16,7 @@ from cosmpy.crypto.keypairs import PrivateKey
 
 from allora_sdk.rpc_client.remote_signer import (
     ForgeBackendError,
+    SigningWalletInfo,
     WalletConfigError,
     make_remote_wallet,
 )
@@ -246,6 +247,28 @@ def test_non_json_response_raises():
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_signing_wallet_info_models_full_contract():
+    # forge-v2's wallet-info DTO returns evm_address / privy_wallet_id / label / created_at
+    # alongside id/address/pubkey. They are modeled as optional metadata (not silently
+    # dropped); any further unknown field is still tolerated (lenient client).
+    info = SigningWalletInfo.model_validate(
+        {
+            "id": WALLET_ID,
+            "address": "allo1xyz",
+            "pubkey": "ab" * 33,
+            "evm_address": "0xabc",
+            "privy_wallet_id": "privy-123",
+            "label": "my-wallet",
+            "created_at": "2024-01-02T03:04:05Z",
+            "some_future_field": "ignored",
+        }
+    )
+    assert info.evm_address == "0xabc"
+    assert info.privy_wallet_id == "privy-123"
+    assert info.label == "my-wallet"
+    assert info.created_at == "2024-01-02T03:04:05Z"
 
 
 def test_non_https_backend_url_rejected():

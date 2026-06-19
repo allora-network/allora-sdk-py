@@ -54,12 +54,20 @@ class SigningWalletInfo(BaseModel):
     """Non-secret view of a Forge signing wallet, as returned by the backend.
 
     The wire shape is a cross-repo HTTP contract shared with allora-sdk-go,
-    allora-sdk-ts, and forge-v2.
+    allora-sdk-ts, and forge-v2. ``id``/``address``/``pubkey`` are required; the
+    remaining fields are optional metadata forge-v2 returns. They are modeled
+    explicitly (rather than silently dropped) so the contract is documented here.
+    Unknown future fields are still ignored — a lenient client, matching
+    allora-sdk-go's response struct.
     """
 
     id: str
     address: str
     pubkey: str  # hex-encoded 33-byte compressed secp256k1 public key
+    evm_address: Optional[str] = None  # 0x... Privy-reported EVM address (cross-check/debug)
+    privy_wallet_id: Optional[str] = None  # Privy server wallet id
+    label: Optional[str] = None
+    created_at: Optional[str] = None  # RFC 3339 timestamp; kept as a raw string (unused locally)
 
 
 class SignResult(BaseModel):
