@@ -67,6 +67,7 @@ def backend():
         yield priv, url
     finally:
         server.shutdown()
+        thread.join(timeout=2)
 
 
 def test_remote_wallet_address_and_pubkey(backend):
@@ -210,13 +211,15 @@ def test_address_mismatch_raises():
             self.wfile.write(body)
 
     server = HTTPServer(("127.0.0.1", 0), BadHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         with pytest.raises(WalletConfigError, match="does not match"):
             make_remote_wallet(url, API_KEY, WALLET_ID)
     finally:
         server.shutdown()
+        thread.join(timeout=2)
 
 
 def test_non_json_response_raises():
