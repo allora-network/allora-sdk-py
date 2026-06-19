@@ -116,12 +116,16 @@ class ForgeBackendClient:
         if body is not None:
             headers["Content-Type"] = "application/json"
         try:
+            # Never follow redirects: requests re-sends the X-Forge-API-Key header on
+            # cross-host 3xx, so a redirecting/compromised backend could exfiltrate the
+            # key (which authorizes delegated signing). Treat any 3xx as an error below.
             resp = self._session.request(
                 method,
                 self._base + path,
                 data=body,
                 headers=headers,
                 timeout=self._timeout,
+                allow_redirects=False,
             )
         except requests.RequestException as e:
             raise ForgeBackendError(f"failed to reach forge backend: {e}") from e

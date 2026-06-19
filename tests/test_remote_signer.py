@@ -14,7 +14,11 @@ import pytest
 from cosmpy.crypto.address import Address
 from cosmpy.crypto.keypairs import PrivateKey
 
-from allora_sdk.rpc_client.remote_signer import WalletConfigError, make_remote_wallet
+from allora_sdk.rpc_client.remote_signer import (
+    ForgeBackendError,
+    WalletConfigError,
+    make_remote_wallet,
+)
 
 WALLET_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -112,3 +116,27 @@ def test_address_mismatch_raises():
             make_remote_wallet(url, "forge_sk_test", WALLET_ID)
     finally:
         server.shutdown()
+
+
+def test_redirect_is_not_followed():
+    # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop;
+    # the client disables redirects and treats the 3xx as a backend error.
+    class RedirectHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:1/leak")
+            self.end_headers()
+
+    server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(ForgeBackendError):
+            make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
