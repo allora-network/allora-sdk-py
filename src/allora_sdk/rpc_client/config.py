@@ -36,13 +36,18 @@ class AlloraWalletConfig:
         )
 
     def __post_init__(self):
-        if (
-            self.private_key is None and
-            self.mnemonic is None and
-            self.mnemonic_file is None and
-            self.wallet is None
-        ):
+        sources = sum(
+            x is not None
+            for x in (self.private_key, self.mnemonic, self.mnemonic_file, self.wallet)
+        )
+        if sources == 0:
             raise ValueError("No wallet credentials provided")
+        if sources > 1:
+            # Avoid a silent-precedence footgun (e.g. leaving PRIVATE_KEY set while
+            # adding wallet=). Require an unambiguous single credential source.
+            raise ValueError(
+                "Exactly one of private_key, mnemonic, mnemonic_file, or wallet must be provided"
+            )
 
 
 @dataclass
