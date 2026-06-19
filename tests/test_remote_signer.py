@@ -21,6 +21,7 @@ from allora_sdk.rpc_client.remote_signer import (
 )
 
 WALLET_ID = "11111111-1111-1111-1111-111111111111"
+API_KEY = "forge_sk_test"
 
 
 def _make_handler(priv: PrivateKey):
@@ -40,11 +41,12 @@ def _make_handler(priv: PrivateKey):
             self.wfile.write(body)
 
         def do_GET(self):
-            assert self.headers.get("X-Forge-API-Key"), "missing api key header"
+            assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
             self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex})
 
         def do_POST(self):
-            assert self.headers.get("X-Forge-API-Key"), "missing api key header"
+            assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
+            assert self.headers.get("Content-Type") == "application/json", "missing/wrong content-type"
             length = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(length))
             payload = bytes.fromhex(req["payload"])
@@ -69,14 +71,14 @@ def backend():
 
 def test_remote_wallet_address_and_pubkey(backend):
     priv, url = backend
-    wallet = make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
     assert str(wallet.address()) == str(Address(priv.public_key, "allo"))
     assert wallet.public_key().public_key_bytes == priv.public_key.public_key_bytes
 
 
 def test_remote_signer_sign_verifies(backend):
     priv, url = backend
-    wallet = make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
     message = b"cosmos signdoc bytes"
     sig = wallet.signer().sign(message)
     assert priv.public_key.verify(message, sig)
@@ -84,7 +86,7 @@ def test_remote_signer_sign_verifies(backend):
 
 def test_remote_signer_sign_digest_verifies(backend):
     priv, url = backend
-    wallet = make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
     digest = hashlib.sha256(b"worker bundle bytes").digest()
     sig = wallet.signer().sign_digest(digest)
     assert priv.public_key.verify_digest(digest, sig)
@@ -95,7 +97,7 @@ def test_from_env_builds_remote_wallet(backend, monkeypatch):
     from allora_sdk.rpc_client.remote_signer import RemoteWallet
 
     priv, url = backend
-    monkeypatch.setenv("FORGE_API_KEY", "forge_sk_test")
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
     monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
     monkeypatch.setenv("FORGE_BACKEND_URL", url)
 
@@ -108,7 +110,7 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 
     _priv, url = backend
-    monkeypatch.setenv("FORGE_API_KEY", "forge_sk_test")
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
     monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
     monkeypatch.setenv("FORGE_BACKEND_URL", url)
     monkeypatch.setenv("FEE_GRANTER", "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx")
@@ -181,7 +183,7 @@ def test_signature_not_matching_pubkey_rejected():
     thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        wallet = make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+        wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
         with pytest.raises(ForgeBackendError, match="does not verify"):
             wallet.signer().sign(b"cosmos signdoc bytes")
     finally:
@@ -212,7 +214,7 @@ def test_address_mismatch_raises():
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         with pytest.raises(WalletConfigError, match="does not match"):
-            make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+            make_remote_wallet(url, API_KEY, WALLET_ID)
     finally:
         server.shutdown()
 
@@ -237,7 +239,7 @@ def test_non_json_response_raises():
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         with pytest.raises(ForgeBackendError, match="non-JSON"):
-            make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+            make_remote_wallet(url, API_KEY, WALLET_ID)
     finally:
         server.shutdown()
         thread.join(timeout=2)
@@ -246,7 +248,7 @@ def test_non_json_response_raises():
 def test_non_https_backend_url_rejected():
     # Plain http:// to a non-loopback host would leak the API key in cleartext.
     with pytest.raises(ValueError, match="https"):
-        make_remote_wallet("http://forge.example.com", "forge_sk_test", WALLET_ID)
+        make_remote_wallet("http://forge.example.com", API_KEY, WALLET_ID)
 
 
 def test_redirect_is_not_followed():
@@ -267,7 +269,7 @@ def test_redirect_is_not_followed():
     url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         with pytest.raises(ForgeBackendError):
-            make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+            make_remote_wallet(url, API_KEY, WALLET_ID)
     finally:
         server.shutdown()
         thread.join(timeout=2)
