@@ -219,7 +219,17 @@ class RemoteSigner(Signer):
         result = self._client.sign(self._wallet_id, payload, prehashed)
         if not result.signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
-        sig = bytes.fromhex(result.signature)
+        try:
+            sig = bytes.fromhex(result.signature)
+        except ValueError as e:
+            raise ForgeBackendError(f"forge sign response 'signature' is not valid hex: {e}") from e
+        if len(sig) != 64:
+            # Cosmos secp256k1 signatures are exactly 64 raw bytes (r || s). A 65-byte
+            # recoverable form or DER encoding would be rejected on-chain with an opaque
+            # error, so fail fast here instead.
+            raise ForgeBackendError(
+                f"forge sign response signature has wrong length {len(sig)} (expected 64)"
+            )
         self._verify(payload, sig, prehashed, result.pubkey)
         return sig
 
