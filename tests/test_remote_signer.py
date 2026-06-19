@@ -90,6 +90,48 @@ def test_remote_signer_sign_digest_verifies(backend):
     assert priv.public_key.verify_digest(digest, sig)
 
 
+def test_signature_not_matching_pubkey_rejected():
+    # The wallet pins the pubkey from wallet-info; a signature that does not verify
+    # against it (backend bug / MITM) must be rejected locally, not broadcast.
+    good = PrivateKey()
+    bad = PrivateKey()
+    good_pub = good.public_key.public_key_bytes.hex()
+    address = str(Address(good.public_key, "allo"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"id": WALLET_ID, "address": address, "pubkey": good_pub})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            req = json.loads(self.rfile.read(length))
+            payload = bytes.fromhex(req["payload"])
+            sig = bad.sign_digest(payload) if req["prehashed"] else bad.sign(payload)
+            self._send({"signature": sig.hex(), "pubkey": good_pub})
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+        with pytest.raises(ForgeBackendError, match="does not verify"):
+            wallet.signer().sign(b"cosmos signdoc bytes")
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_address_mismatch_raises():
     # A backend that reports an address inconsistent with the pubkey must be rejected.
     priv = PrivateKey()

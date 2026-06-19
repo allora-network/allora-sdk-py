@@ -194,9 +194,17 @@ class RemoteSigner(Signer):
     The private key never leaves Privy/the backend.
     """
 
-    def __init__(self, client: ForgeBackendClient, wallet_id: str):
+    def __init__(
+        self,
+        client: ForgeBackendClient,
+        wallet_id: str,
+        public_key: Optional[PublicKey] = None,
+    ):
         self._client = client
         self._wallet_id = wallet_id
+        # When known, the wallet pubkey is used to verify every returned signature
+        # locally so a backend bug or MITM cannot make the worker broadcast garbage.
+        self._public_key = public_key
 
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
         # The backend hashes the message (SHA-256) before signing, matching cosmpy's
@@ -211,7 +219,28 @@ class RemoteSigner(Signer):
         result = self._client.sign(self._wallet_id, payload, prehashed)
         if not result.signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
-        return bytes.fromhex(result.signature)
+        sig = bytes.fromhex(result.signature)
+        self._verify(payload, sig, prehashed, result.pubkey)
+        return sig
+
+    def _verify(self, payload: bytes, sig: bytes, prehashed: bool, response_pubkey: Optional[str]) -> None:
+        """Verify the backend's signature against the pinned wallet public key."""
+        if self._public_key is None:
+            return
+        expected = self._public_key.public_key_bytes.hex()
+        if response_pubkey and response_pubkey != expected:
+            raise WalletConfigError(
+                "forge sign response pubkey does not match the wallet public key"
+            )
+        verified = (
+            self._public_key.verify_digest(payload, sig)
+            if prehashed
+            else self._public_key.verify(payload, sig)
+        )
+        if not verified:
+            raise ForgeBackendError(
+                "forge backend returned a signature that does not verify against the wallet public key"
+            )
 
 
 class RemoteWallet(Wallet):
@@ -235,7 +264,6 @@ class RemoteWallet(Wallet):
         self._wallet_id = wallet_id
         self._prefix = prefix
         self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
-        self._signer = RemoteSigner(self._client, wallet_id)
 
         reported_address: Optional[str] = None
         if public_key_hex is None:
@@ -254,6 +282,9 @@ class RemoteWallet(Wallet):
             raise WalletConfigError(
                 f"backend address {reported_address} does not match pubkey-derived address {derived}"
             )
+
+        # Pin the pubkey into the signer so it verifies every backend signature locally.
+        self._signer = RemoteSigner(self._client, wallet_id, public_key=self._public_key)
 
     def address(self) -> Address:
         return Address(self._public_key, self._prefix)
