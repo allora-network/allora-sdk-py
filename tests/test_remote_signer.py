@@ -90,6 +90,36 @@ def test_remote_signer_sign_digest_verifies(backend):
     assert priv.public_key.verify_digest(digest, sig)
 
 
+def test_public_key_hex_shortcut_skips_fetch():
+    # With public_key_hex (+ address) the constructor must not contact the backend,
+    # so async callers can build a wallet without a blocking GET.
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+    wallet = make_remote_wallet(
+        "https://forge.invalid",
+        "forge_sk_test",
+        WALLET_ID,
+        public_key_hex=pub_hex,
+        address=address,
+    )
+    assert str(wallet.address()) == address
+    assert wallet.public_key().public_key_bytes == priv.public_key.public_key_bytes
+
+
+def test_public_key_hex_shortcut_address_mismatch_raises():
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    with pytest.raises(WalletConfigError, match="does not match"):
+        make_remote_wallet(
+            "https://forge.invalid",
+            "forge_sk_test",
+            WALLET_ID,
+            public_key_hex=pub_hex,
+            address="allo1wrongaddressxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        )
+
+
 def test_signature_not_matching_pubkey_rejected():
     # The wallet pins the pubkey from wallet-info; a signature that does not verify
     # against it (backend bug / MITM) must be rejected locally, not broadcast.

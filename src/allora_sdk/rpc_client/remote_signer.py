@@ -358,6 +358,8 @@ def make_remote_wallet(
     wallet_id: str,
     prefix: str = "allo",
     timeout: float = DEFAULT_TIMEOUT,
+    public_key_hex: Optional[str] = None,
+    address: Optional[str] = None,
     client: Optional[ForgeBackendClient] = None,
 ) -> RemoteWallet:
     """Construct a backend-backed wallet for the Privy-managed signing path.
@@ -366,7 +368,20 @@ def make_remote_wallet(
     wallet config) to sign through the Forge backend instead of a local key. Inject a
     custom ``client`` (e.g. with a tuned :class:`requests.Session`) to control the HTTP
     transport.
+
+    Pass ``public_key_hex`` to skip the blocking wallet-info fetch (useful in async
+    contexts such as FastAPI startup or async test fixtures). When you do, also pass
+    ``address`` to keep the local pubkey↔address cross-check; note the backend is not
+    contacted until the first signing call, so the ``(api_key, wallet_id)`` binding is
+    not validated at construction time.
     """
     return RemoteWallet(
-        backend_url, api_key, wallet_id, prefix=prefix, timeout=timeout, client=client
+        backend_url,
+        api_key,
+        wallet_id,
+        prefix=prefix,
+        timeout=timeout,
+        public_key_hex=public_key_hex,
+        address=address,
+        client=client,
     )
