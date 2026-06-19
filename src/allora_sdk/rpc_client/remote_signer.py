@@ -209,11 +209,25 @@ class RemoteSigner(Signer):
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
         # The backend hashes the message (SHA-256) before signing, matching cosmpy's
         # local PrivateKey.sign semantics over the SignDoc bytes.
+        self._check_canonicalise(canonicalise)
         return self._remote_sign(message, prehashed=False)
 
     def sign_digest(self, digest: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
         # The digest is already hashed; the backend signs it directly.
+        self._check_canonicalise(canonicalise)
         return self._remote_sign(digest, prehashed=True)
+
+    @staticmethod
+    def _check_canonicalise(canonicalise: bool) -> None:
+        # The backend always returns a canonical (low-S) signature; we cannot honor a
+        # request for a non-canonical one, so reject it rather than silently lie about
+        # the encoding. (deterministic is always RFC 6979 on the backend, which is a
+        # valid signature regardless of the requested value, so it is not rejected.)
+        if not canonicalise:
+            raise ValueError(
+                "RemoteSigner only produces canonical (low-S) signatures; "
+                "canonicalise=False is not supported"
+            )
 
     def _remote_sign(self, payload: bytes, prehashed: bool) -> bytes:
         result = self._client.sign(self._wallet_id, payload, prehashed)
