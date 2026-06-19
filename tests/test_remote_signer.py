@@ -151,6 +151,13 @@ def test_public_key_hex_shortcut_address_mismatch_raises():
         )
 
 
+def test_non_uuid_wallet_id_rejected():
+    # forge-v2 keys signing wallets by Privy UUID; a non-UUID wallet_id is a config typo and
+    # must fail locally (parity with allora-sdk-go's uuid.Parse guard) without a network call.
+    with pytest.raises(WalletConfigError, match="UUID"):
+        make_remote_wallet("https://forge.invalid", API_KEY, "not-a-uuid")
+
+
 def test_signature_not_matching_pubkey_rejected():
     # The wallet pins the pubkey from wallet-info; a signature that does not verify
     # against it (backend bug / MITM) must be rejected locally, not broadcast.

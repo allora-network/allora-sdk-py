@@ -20,6 +20,7 @@ Usage::
 
 import json
 import urllib.parse
+import uuid
 from typing import Any, Optional, TypeVar
 
 import requests
@@ -314,6 +315,15 @@ class RemoteWallet(Wallet):
         address: Optional[str] = None,
         client: Optional[ForgeBackendClient] = None,
     ):
+        # forge-v2 keys signing wallets by Privy UUID, so a non-UUID wallet_id is always a
+        # config bug (e.g. a typo in FORGE_SIGNING_WALLET_ID). Fail locally with a clear error
+        # rather than as an opaque 404 on the first request (parity with allora-sdk-go's
+        # uuid.Parse guard).
+        try:
+            uuid.UUID(wallet_id)
+        except ValueError as e:
+            raise WalletConfigError(f"wallet_id must be a UUID, got {wallet_id!r}: {e}") from e
+
         self._wallet_id = wallet_id
         self._prefix = prefix
         self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
