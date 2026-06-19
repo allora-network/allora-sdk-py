@@ -118,6 +118,32 @@ def test_address_mismatch_raises():
         server.shutdown()
 
 
+def test_non_json_response_raises():
+    # A 200 with a non-JSON body (e.g. a gateway HTML page) must surface as a clear
+    # ForgeBackendError, not a bare JSONDecodeError.
+    class HtmlHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            body = b"<html>gateway error</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), HtmlHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(ForgeBackendError, match="non-JSON"):
+            make_remote_wallet(url, "forge_sk_test", WALLET_ID)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_non_https_backend_url_rejected():
     # Plain http:// to a non-loopback host would leak the API key in cleartext.
     with pytest.raises(ValueError, match="https"):

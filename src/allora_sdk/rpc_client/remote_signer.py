@@ -167,7 +167,19 @@ class ForgeBackendClient:
             raise ForgeBackendError(
                 f"forge backend returned {resp.status_code}: {raw.decode(errors='replace')}"
             )
-        return json.loads(raw.decode())
+
+        try:
+            parsed = json.loads(raw.decode())
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            snippet = raw.decode(errors="replace")[:256]
+            raise ForgeBackendError(
+                f"forge backend returned non-JSON response: {snippet!r}"
+            ) from e
+        if not isinstance(parsed, dict):
+            raise ForgeBackendError(
+                f"forge backend returned non-object JSON ({type(parsed).__name__})"
+            )
+        return parsed
 
 
 class RemoteSigner(Signer):
