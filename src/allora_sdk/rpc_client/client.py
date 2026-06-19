@@ -18,7 +18,7 @@ from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.crypto.keypairs import PrivateKey
 
 import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
@@ -96,7 +96,7 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     tx_manager: Optional[TxManager] = None
 
     def __init__(

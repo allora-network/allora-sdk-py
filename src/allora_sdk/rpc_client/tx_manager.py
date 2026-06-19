@@ -8,7 +8,7 @@ import logging
 from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.crypto.address import Address
@@ -117,7 +117,7 @@ class TxTimeoutError(Exception):
 class TxManager:
     def __init__(
         self,
-        wallet: LocalWallet,
+        wallet: Wallet,
         tx_client: CosmosTxV1Beta1ServiceLike,
         auth_client: CosmosAuthV1Beta1QueryLike,
         bank_client: CosmosBankV1Beta1QueryLike,
