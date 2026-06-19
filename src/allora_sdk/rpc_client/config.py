@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 
 
 @dataclass
@@ -14,33 +14,91 @@ class AlloraWalletConfig:
     - private_key: Hex-encoded private key string.
     - mnemonic: Mnemonic phrase string.
     - mnemonic_file: Path to a file containing the mnemonic phrase.
-    - wallet: An existing LocalWallet instance.
+    - wallet: An existing cosmpy Wallet instance (e.g. a LocalWallet for self-managed
+      signing, or a RemoteWallet from make_remote_wallet() for Privy-managed signing
+      delegated to the Forge backend).
 
     The address prefix can also be specified (default is "allo").
+
+    fee_granter optionally sets the bech32 address of a fee granter (a master/subsidy
+    wallet that has created an on-chain feegrant for this wallet). When set, transactions
+    are broadcast with this granter as the fee payer, so the signing wallet needs no ALLO
+    of its own — this is the recommended pairing for Privy-delegated (RemoteWallet) signing.
     """
     private_key: Optional[str] = None
     mnemonic: Optional[str] = None
     mnemonic_file: Optional[str] = None
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     prefix: str = "allo"
+    fee_granter: Optional[str] = None
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
+        p = env_prefix or ""
+        prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
+        fee_granter = os.getenv(p + "FEE_GRANTER")
+
+        # Privy-delegated signing: if the Forge env vars are present, build a RemoteWallet
+        # so 12-factor deployments can use delegated signing without hand-written wiring.
+        # Note: this performs a blocking wallet-info fetch; async callers that need to avoid
+        # it can build the wallet via make_remote_wallet(..., public_key_hex=...) directly.
+        api_key = os.getenv(p + "FORGE_API_KEY")
+        wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
+        if api_key and wallet_id:
+            # The early return below never reads PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a
+            # stale local-key env var (a common mid-migration state) would be silently
+            # ignored and signing would go through Forge with no log. Mirror __post_init__'s
+            # "exactly one credential source" guard at the env layer and fail loudly instead.
+            conflicting = [
+                name
+                for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
+                if os.getenv(p + name)
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"FORGE_API_KEY and FORGE_SIGNING_WALLET_ID are set alongside "
+                    f"{conflicting}; choose exactly one signing source"
+                )
+
+            from .remote_signer import make_remote_wallet
+
+            backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
+            wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
+            return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
+
         return cls(
-            private_key=os.getenv((env_prefix or "") + "PRIVATE_KEY"),
-            mnemonic=os.getenv((env_prefix or "") + "MNEMONIC"),
-            mnemonic_file=os.getenv((env_prefix or "") + "MNEMONIC_FILE"),
-            prefix=os.getenv((env_prefix or "") + "ADDRESS_PREFIX", "allo"),
+            private_key=os.getenv(p + "PRIVATE_KEY"),
+            mnemonic=os.getenv(p + "MNEMONIC"),
+            mnemonic_file=os.getenv(p + "MNEMONIC_FILE"),
+            prefix=prefix,
+            fee_granter=fee_granter,
         )
 
     def __post_init__(self):
-        if (
-            self.private_key is None and
-            self.mnemonic is None and
-            self.mnemonic_file is None and
-            self.wallet is None
-        ):
+        sources = sum(
+            x is not None
+            for x in (self.private_key, self.mnemonic, self.mnemonic_file, self.wallet)
+        )
+        if sources == 0:
             raise ValueError("No wallet credentials provided")
+        if sources > 1:
+            # Avoid a silent-precedence footgun (e.g. leaving PRIVATE_KEY set while
+            # adding wallet=). Require an unambiguous single credential source.
+            raise ValueError(
+                "Exactly one of private_key, mnemonic, mnemonic_file, or wallet must be provided"
+            )
+
+        if self.wallet is not None:
+            # A pre-built wallet fixes its own bech32 prefix at construction time and
+            # downstream code uses the wallet directly, so `prefix` would otherwise be a
+            # silently-ignored, possibly-misleading value. Align it to the wallet's actual
+            # prefix (e.g. a RemoteWallet built with prefix="cosmos").
+            # No try/except: only wallet.address() can raise here, and a Wallet whose
+            # address() raises is a real bug that should surface, not be swallowed into a
+            # silently wrong prefix that fails far downstream in the broadcast path.
+            hrp = str(self.wallet.address()).split("1", 1)[0]
+            if hrp:
+                self.prefix = hrp
 
 
 @dataclass

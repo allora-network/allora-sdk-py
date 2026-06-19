@@ -2,7 +2,7 @@ from decimal import Decimal
 import logging
 import math
 from typing import List, Optional, Union, Callable, Awaitable
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce, ValueBundle
@@ -52,7 +52,7 @@ class Reputer:
 
     def __init__(
         self,
-        wallet: LocalWallet,
+        wallet: Wallet,
         client: AlloraRPCClient,
         topic_id: int,
         reputer_fn: ReputerFn,

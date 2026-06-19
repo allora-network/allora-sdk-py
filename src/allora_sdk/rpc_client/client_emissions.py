@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 from typing import Dict, List, Optional
@@ -20,7 +21,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError, _signing_executor
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 
@@ -145,7 +146,13 @@ class EmissionsTxs:
         # sign bundle with pubkey using a 32-byte digest (secp256k1 requirement)
         bundle_bytes = bytes(bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
-        bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
+        # Offload to a worker thread: signer() may be a RemoteSigner whose sign_digest
+        # makes a blocking HTTPS call to the Forge backend, which would otherwise freeze
+        # the event loop (websocket subscriber, other workers, tx monitor).
+        loop = asyncio.get_running_loop()
+        bundle_sig = await loop.run_in_executor(
+            _signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
+        )
 
         worker_data_bundle = InputWorkerDataBundle(
             worker=worker_address,
@@ -275,7 +282,13 @@ class EmissionsTxs:
         # Sign the value bundle
         bundle_bytes = bytes(value_bundle)
         bundle_digest = hashlib.sha256(bundle_bytes).digest()
-        bundle_sig = self._txs.wallet.signer().sign_digest(bundle_digest)
+        # Offload to a worker thread: signer() may be a RemoteSigner whose sign_digest
+        # makes a blocking HTTPS call to the Forge backend, which would otherwise freeze
+        # the event loop (websocket subscriber, other workers, tx monitor).
+        loop = asyncio.get_running_loop()
+        bundle_sig = await loop.run_in_executor(
+            _signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
+        )
 
         reputer_value_bundle = InputReputerValueBundle(
             value_bundle=value_bundle,

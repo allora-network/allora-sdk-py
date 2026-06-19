@@ -1,4 +1,6 @@
 import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 import traceback
 import grpc
@@ -8,9 +10,10 @@ import logging
 from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
+from cosmpy.crypto.address import Address
 from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
@@ -28,6 +31,14 @@ from allora_sdk.rpc_client.interfaces import (
 )
 
 logger = logging.getLogger("allora_sdk")
+
+# Delegated (RemoteSigner) signing makes a blocking HTTPS call to the Forge backend, so it
+# runs in a worker thread to avoid freezing the event loop. Use a dedicated pool rather than
+# asyncio's shared default ThreadPoolExecutor, so a stalled backend cannot starve unrelated
+# to_thread work — notably websocket-callback dispatch (run_in_executor(None, ...)) and faucet
+# calls. Module-level: process-lifetime; its daemon threads are reclaimed at interpreter exit.
+_signing_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="forge-signer")
+
 
 class PendingTx:
     def __init__(
@@ -116,7 +127,7 @@ class TxTimeoutError(Exception):
 class TxManager:
     def __init__(
         self,
-        wallet: LocalWallet,
+        wallet: Wallet,
         tx_client: CosmosTxV1Beta1ServiceLike,
         auth_client: CosmosAuthV1Beta1QueryLike,
         bank_client: CosmosBankV1Beta1QueryLike,
@@ -124,6 +135,7 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
+        fee_granter: Optional[str] = None,
     ):
         self.wallet = wallet
         self.tx_client = tx_client
@@ -133,6 +145,9 @@ class TxManager:
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
+        # bech32 address of a feegrant granter (master/subsidy wallet) that pays fees on
+        # behalf of self.wallet; None means the signing wallet pays its own fees.
+        self._fee_granter = fee_granter
         self.parent_tx_id = 0
         self._parent_tx_id_lock = asyncio.Lock()
 
@@ -441,15 +456,27 @@ class TxManager:
         resolved_seq = account_seq if account_seq is not None else info.sequence
         logger.debug(f"Account info: seq={resolved_seq}, num={info.account_number}")
 
+        # When a feegrant granter is configured, set it as the fee payer so the signing
+        # wallet needs no ALLO of its own (the granter must have an on-chain allowance).
+        granter = Address(self._fee_granter) if self._fee_granter else None
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=granter),
         )
 
-        tx.sign(
-            signer=self.wallet.signer(),
-            chain_id=self.config.chain_id,
-            account_number=info.account_number,
+        # Offload to the dedicated signing pool: a RemoteSigner signs via a blocking HTTPS
+        # call to the Forge backend, which would otherwise freeze the event loop. The
+        # dedicated pool keeps a stalled backend from starving other to_thread work such as
+        # websocket-callback dispatch. (For local wallets this is fast CPU work; harmless.)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            _signing_executor,
+            functools.partial(
+                tx.sign,
+                signer=self.wallet.signer(),
+                chain_id=self.config.chain_id,
+                account_number=info.account_number,
+            ),
         )
 
         tx.complete()

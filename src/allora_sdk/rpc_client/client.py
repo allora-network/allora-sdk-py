@@ -18,7 +18,7 @@ from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.crypto.keypairs import PrivateKey
 
 import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
@@ -96,7 +96,7 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     tx_manager: Optional[TxManager] = None
 
     def __init__(
@@ -164,6 +164,7 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
+                fee_granter=self._fee_granter,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
@@ -183,24 +184,25 @@ class AlloraRPCClient:
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
+        self._fee_granter: Optional[str] = wallet.fee_granter if wallet else None
         if not wallet:
             return
 
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                logger.debug("Wallet initialized from LocalWallet")
+                logger.debug(f"Wallet initialized from pre-built {type(wallet.wallet).__name__}")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
-                self.wallet = LocalWallet(pk, prefix="allo")
+                self.wallet = LocalWallet(pk, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
-                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
-                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")

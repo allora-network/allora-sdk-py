@@ -110,7 +110,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            wallet=AlloraWalletConfig(
+                wallet=wallet_initialized,
+                fee_granter=wallet.fee_granter if wallet else None,
+            ),
             network=network,
             debug=debug,
         )
@@ -178,7 +181,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            wallet=AlloraWalletConfig(
+                wallet=wallet_initialized,
+                fee_granter=wallet.fee_granter if wallet else None,
+            ),
             network=network,
             debug=debug,
         )
@@ -243,7 +249,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
+            wallet=AlloraWalletConfig(
+                wallet=wallet_initialized,
+                fee_granter=wallet.fee_granter if wallet else None,
+            ),
             network=network,
             debug=debug,
         )
