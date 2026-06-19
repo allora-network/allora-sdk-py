@@ -192,15 +192,15 @@ class AlloraRPCClient:
                 logger.debug("Wallet initialized from LocalWallet")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
-                self.wallet = LocalWallet(pk, prefix="allo")
+                self.wallet = LocalWallet(pk, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
-                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
-                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix=wallet.prefix)
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")

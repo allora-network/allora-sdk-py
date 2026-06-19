@@ -49,6 +49,18 @@ class AlloraWalletConfig:
                 "Exactly one of private_key, mnemonic, mnemonic_file, or wallet must be provided"
             )
 
+        if self.wallet is not None:
+            # A pre-built wallet fixes its own bech32 prefix at construction time and
+            # downstream code uses the wallet directly, so `prefix` would otherwise be a
+            # silently-ignored, possibly-misleading value. Align it to the wallet's actual
+            # prefix (e.g. a RemoteWallet built with prefix="cosmos").
+            try:
+                hrp = str(self.wallet.address()).split("1", 1)[0]
+            except Exception:
+                hrp = ""
+            if hrp:
+                self.prefix = hrp
+
 
 @dataclass
 class AlloraNetworkConfig:
