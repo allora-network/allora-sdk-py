@@ -147,6 +147,16 @@ class ForgeBackendClient:
         raw = self._request("POST", "/api/v1/signing-wallets", json.dumps(body))
         return _validate(SigningWalletInfo, raw, "provision-wallet")
 
+    def clear_association(self, wallet_id: str) -> None:
+        """Release a managed wallet's topic binding (Forge-side bookkeeping only; does NOT
+        unregister the worker on-chain). Mirrors POST
+        /api/v1/signing-wallets/{id}/clear-association. Raises :class:`ForgeBackendError` on a
+        non-2xx response (e.g. 404 for an unknown / foreign / already-cleared wallet), so the
+        caller decides whether an unbind failure is fatal or best-effort.
+        """
+        wid = urllib.parse.quote(wallet_id, safe="")
+        self._request("POST", f"/api/v1/signing-wallets/{wid}/clear-association")
+
     def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
         headers = {API_KEY_HEADER: self._api_key}
         if body is not None:

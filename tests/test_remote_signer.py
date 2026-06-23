@@ -46,6 +46,10 @@ def _make_handler(priv: PrivateKey):
 
         def do_POST(self):
             assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
+            if self.path.endswith("/clear-association"):
+                # Clear-association carries no request body (and thus no Content-Type).
+                self._send({"message": "association cleared"})
+                return
             assert self.headers.get("Content-Type") == "application/json", "missing/wrong content-type"
             length = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(length))
@@ -122,6 +126,15 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
 
     cfg = AlloraWalletConfig.from_env()
     assert cfg.fee_granter == "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+def test_clear_association(backend):
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    _priv, url = backend
+    client = ForgeBackendClient(url, API_KEY)
+    # A 2xx response returns without raising (the topic binding was released).
+    client.clear_association(WALLET_ID)
 
 
 def test_provision_remote_wallet(backend):
