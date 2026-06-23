@@ -108,7 +108,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as an inferer
         """
-        wallet_initialized = init_worker_wallet(wallet)
+        wallet_initialized = init_worker_wallet(wallet, topic_id)
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,
@@ -179,7 +179,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             UnsupportedLossMethodError: If loss_fn is None and the topic's loss_method
                                         is not supported by the SDK's default implementations.
         """
-        wallet_initialized = init_worker_wallet(wallet)
+        wallet_initialized = init_worker_wallet(wallet, topic_id)
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,
@@ -247,7 +247,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as a forecaster
         """
-        wallet_initialized = init_worker_wallet(wallet)
+        wallet_initialized = init_worker_wallet(wallet, topic_id)
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,

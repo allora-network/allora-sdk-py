@@ -31,6 +31,11 @@ class AlloraWalletConfig:
     wallet: Optional[Wallet] = None
     prefix: str = "allo"
     fee_granter: Optional[str] = None
+    # Managed (Privy) custody without an explicit wallet: when forge_api_key is set and no
+    # wallet/key is provided, the worker provisions a backend-signed wallet bound to its topic
+    # (get-or-create) at startup. forge_backend_url defaults to the public Forge backend.
+    forge_api_key: Optional[str] = None
+    forge_backend_url: Optional[str] = None
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
@@ -44,12 +49,21 @@ class AlloraWalletConfig:
         # it can build the wallet via make_remote_wallet(..., public_key_hex=...) directly.
         api_key = os.getenv(p + "FORGE_API_KEY")
         wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
+        backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
         if api_key and wallet_id:
             from .remote_signer import make_remote_wallet
 
-            backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
             wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
             return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
+        if api_key:
+            # Managed custody, no explicit wallet id: defer to the worker, which provisions a
+            # wallet bound to its topic (one worker = one topic) at startup.
+            return cls(
+                forge_api_key=api_key,
+                forge_backend_url=backend_url,
+                prefix=prefix,
+                fee_granter=fee_granter,
+            )
 
         return cls(
             private_key=os.getenv(p + "PRIVATE_KEY"),
@@ -64,6 +78,10 @@ class AlloraWalletConfig:
             x is not None
             for x in (self.private_key, self.mnemonic, self.mnemonic_file, self.wallet)
         )
+        # Managed (Privy) custody is a valid "deferred" source: the wallet is provisioned later
+        # from forge_api_key + the worker's topic, so no local credential is present here.
+        if sources == 0 and self.forge_api_key:
+            return
         if sources == 0:
             raise ValueError("No wallet credentials provided")
         if sources > 1:

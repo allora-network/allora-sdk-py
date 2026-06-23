@@ -135,6 +135,18 @@ class ForgeBackendClient:
         raw = self._request("POST", f"/api/v1/signing-wallets/{wid}/sign", body)
         return _validate(SignResult, raw, "sign")
 
+    def provision_wallet(self, topic_id: int, label: Optional[str] = None) -> SigningWalletInfo:
+        """Idempotently get-or-create the user's signing wallet bound to ``topic_id`` and return
+        its non-secret info (id, address, pubkey). Rides on POST /api/v1/signing-wallets with a
+        ``topic_id`` body (a static /provision sub-route collides with /:id in the backend router).
+        Safe to call on every worker start: the backend enforces one wallet per (user, topic).
+        """
+        body: dict[str, Any] = {"topic_id": topic_id}
+        if label:
+            body["label"] = label
+        raw = self._request("POST", "/api/v1/signing-wallets", json.dumps(body))
+        return _validate(SigningWalletInfo, raw, "provision-wallet")
+
     def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
         headers = {API_KEY_HEADER: self._api_key}
         if body is not None:
@@ -384,4 +396,33 @@ def make_remote_wallet(
         public_key_hex=public_key_hex,
         address=address,
         client=client,
+    )
+
+
+def provision_remote_wallet(
+    backend_url: str,
+    api_key: str,
+    topic_id: int,
+    label: Optional[str] = None,
+    prefix: str = "allo",
+    timeout: float = DEFAULT_TIMEOUT,
+    client: Optional[ForgeBackendClient] = None,
+) -> RemoteWallet:
+    """Idempotently get-or-create the user's managed wallet bound to ``topic_id`` (one worker =
+    one topic) and return a :class:`RemoteWallet` for it. Safe to call on every worker start.
+
+    The provisioned wallet's pubkey/address are returned by the provision call, so the resulting
+    RemoteWallet is built without a second (blocking) wallet-info fetch.
+    """
+    c = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
+    info = c.provision_wallet(topic_id, label)
+    return RemoteWallet(
+        backend_url,
+        api_key,
+        info.id,
+        prefix=prefix,
+        timeout=timeout,
+        public_key_hex=info.pubkey,
+        address=info.address,
+        client=c,
     )

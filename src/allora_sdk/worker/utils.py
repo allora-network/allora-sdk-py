@@ -17,13 +17,26 @@ from .context import RunContext
 logger = logging.getLogger("allora_sdk")
 
 
-def init_worker_wallet(wallet: AlloraWalletConfig | None) -> Wallet:
+def init_worker_wallet(wallet: AlloraWalletConfig | None, topic_id: int | None = None) -> Wallet:
     wallet_prefix = wallet.prefix if wallet else "allo"
     if wallet:
         # A pre-built Wallet (e.g. a RemoteWallet for Privy-managed signing) takes
         # precedence over key material.
         if wallet.wallet:
             return wallet.wallet
+        # Managed (Privy) custody with no explicit wallet: provision a backend-signed wallet
+        # bound to this worker's topic (get-or-create; one worker = one topic).
+        if wallet.forge_api_key:
+            if topic_id is None:
+                raise ValueError("managed-wallet provisioning requires a topic_id")
+            from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
+
+            return provision_remote_wallet(
+                backend_url=wallet.forge_backend_url or "https://forge.allora.network",
+                api_key=wallet.forge_api_key,
+                topic_id=topic_id,
+                prefix=wallet.prefix,
+            )
         if wallet.private_key:
             return LocalWallet(PrivateKey(bytes.fromhex(wallet.private_key)), prefix=wallet.prefix)
         if wallet.mnemonic:
