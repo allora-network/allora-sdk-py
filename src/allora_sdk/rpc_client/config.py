@@ -93,6 +93,14 @@ class AlloraWalletConfig:
             x is not None
             for x in (self.private_key, self.mnemonic, self.mnemonic_file, self.wallet)
         )
+        # Managed (Privy) custody must be the *sole* credential source. Combined with a local
+        # key/wallet, the worker would silently provision and sign with a newly minted remote
+        # wallet (wrong worker address / custody path), so reject the ambiguous config up front.
+        if self.forge_api_key and sources > 0:
+            raise ValueError(
+                "forge_api_key (managed custody) cannot be combined with a local wallet "
+                "credential (private_key, mnemonic, mnemonic_file, or wallet); choose exactly one"
+            )
         # Managed (Privy) custody is a valid "deferred" source: the wallet is provisioned later
         # from forge_api_key + the worker's topic, so no local credential is present here.
         if sources == 0 and self.forge_api_key:

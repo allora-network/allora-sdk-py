@@ -181,6 +181,16 @@ def test_init_worker_wallet_managed_requires_topic():
         init_worker_wallet(cfg, topic_id=None)
 
 
+def test_forge_api_key_rejects_local_credentials():
+    # Managed (Privy) custody must be the sole credential source. Combined with a local key the
+    # worker would silently provision and sign with a remote wallet (wrong worker address), so the
+    # ambiguous config must be rejected at construction rather than producing a wrong custody path.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        AlloraWalletConfig(forge_api_key=API_KEY, private_key="ab" * 32)
+
+
 def test_from_env_conflicting_credentials_rejected(monkeypatch):
     # Forge env vars set alongside a stale local key (a common mid-migration state) must
     # fail loudly, not silently sign through Forge — mirrors __post_init__'s single-source
