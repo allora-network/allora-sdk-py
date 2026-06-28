@@ -11,13 +11,17 @@ class AlloraWalletConfig:
     """
     Configuration for Allora wallet access.
 
-    At least one of the following must be provided:
+    Exactly one signing-credential source must be provided:
     - private_key: Hex-encoded private key string.
     - mnemonic: Mnemonic phrase string.
     - mnemonic_file: Path to a file containing the mnemonic phrase.
     - wallet: An existing cosmpy Wallet instance (e.g. a LocalWallet for self-managed
       signing, or a RemoteWallet from make_remote_wallet() for Privy-managed signing
       delegated to the Forge backend).
+    - forge_api_key: Managed (Privy) custody without an explicit wallet. When set as the
+      sole credential, the worker provisions a backend-signed wallet bound to its topic
+      (get-or-create) at startup; it must not be combined with any local credential above.
+      forge_backend_url overrides the Forge backend URL (defaults to the public Forge backend).
 
     The address prefix can also be specified (default is "allo").
 
@@ -25,6 +29,7 @@ class AlloraWalletConfig:
     wallet that has created an on-chain feegrant for this wallet). When set, transactions
     are broadcast with this granter as the fee payer, so the signing wallet needs no ALLO
     of its own — this is the recommended pairing for Privy-delegated (RemoteWallet) signing.
+    Its HRP must match the signing wallet's prefix (validated at construction).
     """
     private_key: Optional[str] = None
     mnemonic: Optional[str] = None
@@ -32,14 +37,37 @@ class AlloraWalletConfig:
     wallet: Optional[Wallet] = None
     prefix: str = "allo"
     fee_granter: Optional[str] = None
-    # Managed (Privy) custody without an explicit wallet: when forge_api_key is set and no
-    # wallet/key is provided, the worker provisions a backend-signed wallet bound to its topic
-    # (get-or-create) at startup. forge_backend_url defaults to the public Forge backend.
+    # Managed (Privy) custody fields — see the class docstring for the resolution rules.
     forge_api_key: Optional[str] = None
     forge_backend_url: Optional[str] = None
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
+        """Build an AlloraWalletConfig from environment variables.
+
+        Resolves a single signing-credential source in this precedence order:
+
+        1. Privy-delegated signing — ``FORGE_API_KEY`` + ``FORGE_SIGNING_WALLET_ID``: builds a
+           RemoteWallet. This performs a blocking ``GET /api/v1/signing-wallets/{id}`` to fetch the
+           wallet's pubkey/address; async callers that must avoid it can build the wallet via
+           ``make_remote_wallet(..., public_key_hex=...)`` directly.
+        2. Deferred managed custody — ``FORGE_API_KEY`` only: returns a config the worker
+           provisions into a topic-bound wallet at startup (no wallet built, no network call here).
+        3. Local key — ``PRIVATE_KEY`` / ``MNEMONIC`` / ``MNEMONIC_FILE``.
+
+        ``FORGE_BACKEND_URL`` (default ``https://forge.allora.network``), ``ADDRESS_PREFIX``
+        (default ``allo``), and ``FEE_GRANTER`` are read in all modes.
+
+        Args:
+            env_prefix: Optional prefix applied to every variable name (e.g. ``"ALLORA_"``).
+
+        Returns:
+            A validated AlloraWalletConfig.
+
+        Raises:
+            ValueError: If ``FORGE_API_KEY`` (modes 1-2) is set alongside any local key env var
+                (the signing flow must be unambiguous), or if no credential source is present.
+        """
         p = env_prefix or ""
         prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
         fee_granter = os.getenv(p + "FEE_GRANTER")

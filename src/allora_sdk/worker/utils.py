@@ -18,6 +18,28 @@ logger = logging.getLogger("allora_sdk")
 
 
 def init_worker_wallet(wallet: AlloraWalletConfig | None, topic_id: int | None = None) -> Wallet:
+    """Resolve an AlloraWalletConfig into a concrete cosmpy Wallet for a worker.
+
+    Credential precedence (first match wins):
+
+    1. ``wallet.wallet`` — a pre-built Wallet (e.g. a RemoteWallet for Privy-managed signing).
+    2. ``wallet.forge_api_key`` — managed (Privy) custody: provisions a backend-signed wallet
+       bound to ``topic_id`` (get-or-create; one worker = one topic). Requires ``topic_id`` and
+       performs a blocking HTTPS call to the Forge backend.
+    3. ``wallet.private_key``, then ``wallet.mnemonic``.
+    4. ``wallet.mnemonic_file`` (or ``".allora_key"``): read if present, otherwise prompt for or
+       generate a mnemonic and persist it to that file with 0600 permissions.
+
+    Args:
+        wallet: The wallet configuration, or None to fall back to the ``".allora_key"`` file flow.
+        topic_id: The worker's topic, required only for the managed-custody (forge_api_key) path.
+
+    Returns:
+        A cosmpy Wallet ready to sign and address transactions.
+
+    Raises:
+        ValueError: If managed-custody provisioning is selected but ``topic_id`` is None.
+    """
     wallet_prefix = wallet.prefix if wallet else "allo"
     if wallet:
         # A pre-built Wallet (e.g. a RemoteWallet for Privy-managed signing) takes
