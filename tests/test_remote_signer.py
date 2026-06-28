@@ -102,6 +102,23 @@ def test_remote_signer_sign_digest_verifies(backend):
     assert priv.public_key.verify_digest(digest, sig)
 
 
+def test_caller_supplied_address_mismatch_rejected(backend):
+    # Passing address= without public_key_hex is a "this wallet_id maps to this address"
+    # assertion. If it disagrees with the backend it must fail, not be silently overwritten.
+    _priv, url = backend
+    wrong = str(Address(PrivateKey().public_key, "allo"))
+    with pytest.raises(WalletConfigError, match="does not match caller-supplied address"):
+        make_remote_wallet(url, API_KEY, WALLET_ID, address=wrong)
+
+
+def test_caller_supplied_address_match_accepted(backend):
+    # A correct caller-supplied address passes the cross-check and builds the wallet.
+    priv, url = backend
+    correct = str(Address(priv.public_key, "allo"))
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID, address=correct)
+    assert str(wallet.address()) == correct
+
+
 def test_from_env_builds_remote_wallet(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
     from allora_sdk.rpc_client.remote_signer import RemoteWallet

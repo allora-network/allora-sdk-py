@@ -382,13 +382,21 @@ class RemoteWallet(Wallet):
                     f"forge wallet-info id {info.id} does not match requested wallet_id {wallet_id}"
                 )
             public_key_hex = info.pubkey
-            reported_address = info.address
             if not public_key_hex:
                 raise ForgeBackendError("forge wallet-info response missing 'pubkey'")
             # Fail closed: an empty address would otherwise skip the cross-check below,
             # leaving the (api_key, wallet_id) <-> keypair binding unverified.
-            if not reported_address:
+            if not info.address:
                 raise ForgeBackendError("forge wallet-info response missing 'address'")
+            # Honor a caller-supplied address as a trust-but-verify assertion rather than
+            # silently overwriting it with the backend's value (defense in depth: a caller
+            # passing address='allo1...' is asserting "this wallet_id maps to this address").
+            if reported_address is not None and reported_address != info.address:
+                raise WalletConfigError(
+                    f"backend address {info.address} does not match "
+                    f"caller-supplied address {reported_address}"
+                )
+            reported_address = info.address
 
         try:
             pubkey_bytes = bytes.fromhex(public_key_hex)
