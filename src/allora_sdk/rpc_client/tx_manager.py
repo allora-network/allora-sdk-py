@@ -148,6 +148,9 @@ class TxManager:
         # bech32 address of a feegrant granter (master/subsidy wallet) that pays fees on
         # behalf of self.wallet; None means the signing wallet pays its own fees.
         self._fee_granter = fee_granter
+        # Parse the granter once at construction (validates the bech32) instead of re-parsing it
+        # on every broadcast; AlloraWalletConfig validates the HRP-vs-prefix match at config time.
+        self._granter_address: Optional[Address] = Address(fee_granter) if fee_granter else None
         self.parent_tx_id = 0
         self._parent_tx_id_lock = asyncio.Lock()
 
@@ -458,10 +461,10 @@ class TxManager:
 
         # When a feegrant granter is configured, set it as the fee payer so the signing
         # wallet needs no ALLO of its own (the granter must have an on-chain allowance).
-        granter = Address(self._fee_granter) if self._fee_granter else None
+        # Uses the address parsed once at construction (see __init__).
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=granter),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self._granter_address),
         )
 
         # Offload to the dedicated signing pool: a RemoteSigner signs via a blocking HTTPS

@@ -120,13 +120,32 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 
     _priv, url = backend
+    granter = str(Address(PrivateKey().public_key, "allo"))
     monkeypatch.setenv("FORGE_API_KEY", API_KEY)
     monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
     monkeypatch.setenv("FORGE_BACKEND_URL", url)
-    monkeypatch.setenv("FEE_GRANTER", "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx")
+    monkeypatch.setenv("FEE_GRANTER", granter)
 
     cfg = AlloraWalletConfig.from_env()
-    assert cfg.fee_granter == "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx"
+    assert cfg.fee_granter == granter
+
+
+def test_fee_granter_invalid_bech32_rejected():
+    # A typo'd granter must fail at config time, not per-transaction at broadcast time.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    with pytest.raises(ValueError, match="invalid fee_granter"):
+        AlloraWalletConfig(private_key="ab" * 32, fee_granter="allo1notarealaddress")
+
+
+def test_fee_granter_cross_hrp_rejected():
+    # An allo1 signing wallet paired with a cosmos1 granter passes bech32 parsing but can never
+    # match an on-chain feegrant, so it must be rejected eagerly.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    cosmos_granter = str(Address(PrivateKey().public_key, "cosmos"))
+    with pytest.raises(ValueError, match="HRP"):
+        AlloraWalletConfig(private_key="ab" * 32, fee_granter=cosmos_granter)
 
 
 def test_clear_association(backend):

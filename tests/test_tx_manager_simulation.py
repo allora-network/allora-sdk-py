@@ -44,7 +44,12 @@ def _make_manager(fee_granter: str | None = None) -> TxManager:
 
 def test_fee_granter_is_stored() -> None:
     assert _make_manager()._fee_granter is None
-    assert _make_manager(fee_granter=VALID_GRANTER)._fee_granter == VALID_GRANTER
+    assert _make_manager()._granter_address is None
+
+    mgr = _make_manager(fee_granter=VALID_GRANTER)
+    assert mgr._fee_granter == VALID_GRANTER
+    # The granter is parsed once at construction and reused on every broadcast.
+    assert mgr._granter_address == Address(VALID_GRANTER)
 
 
 @pytest.mark.asyncio

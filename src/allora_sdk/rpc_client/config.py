@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
 from cosmpy.aerial.wallet import Wallet
+from cosmpy.crypto.address import Address
 
 
 @dataclass
@@ -117,6 +118,7 @@ class AlloraWalletConfig:
         # Managed (Privy) custody is a valid "deferred" source: the wallet is provisioned later
         # from forge_api_key + the worker's topic, so no local credential is present here.
         if sources == 0 and self.forge_api_key:
+            self._validate_fee_granter()
             return
         if sources == 0:
             raise ValueError("No wallet credentials provided")
@@ -138,6 +140,33 @@ class AlloraWalletConfig:
             hrp = str(self.wallet.address()).split("1", 1)[0]
             if hrp:
                 self.prefix = hrp
+
+        # Validate fee_granter after the wallet's prefix has been realigned, so the HRP check
+        # compares against the signing wallet's actual prefix.
+        self._validate_fee_granter()
+
+    def _validate_fee_granter(self) -> None:
+        """Validate fee_granter eagerly so a bad granter fails at startup, not per-broadcast.
+
+        Parsing it here (rather than for the first time deep inside
+        ``TxManager._build_and_broadcast``) surfaces a typo at config time and rejects a
+        cross-HRP pairing — e.g. a ``cosmos1`` granter with an ``allo1`` signing wallet — which
+        the chain would otherwise reject on-chain with an opaque "feegrant not found" error,
+        because the chain-side lookup cannot match a different-HRP granter to the grantee.
+        """
+        if self.fee_granter is None:
+            return
+        try:
+            Address(self.fee_granter)
+        except Exception as e:
+            raise ValueError(f"invalid fee_granter address {self.fee_granter!r}: {e}") from e
+        # bech32 has a single '1' separator; everything before it is the human-readable prefix.
+        hrp = self.fee_granter.split("1", 1)[0]
+        if hrp != self.prefix:
+            raise ValueError(
+                f"fee_granter HRP {hrp!r} does not match the signing wallet prefix "
+                f"{self.prefix!r}; the chain cannot match a cross-HRP feegrant"
+            )
 
 
 @dataclass
