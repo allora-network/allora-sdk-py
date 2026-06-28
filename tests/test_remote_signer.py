@@ -119,6 +119,44 @@ def test_caller_supplied_address_match_accepted(backend):
     assert str(wallet.address()) == correct
 
 
+def test_forge_backend_retries_transient_5xx():
+    # A transient 503 must be retried (the call is idempotent), not fail the wallet build outright.
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+    state = {"calls": 0}
+
+    class FlakyHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps({"id": WALLET_ID, "address": address, "pubkey": pub_hex}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), FlakyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+        assert str(wallet.address()) == address
+        assert state["calls"] == 2  # first 503 retried, second 200 succeeded
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_from_env_builds_remote_wallet(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
     from allora_sdk.rpc_client.remote_signer import RemoteWallet

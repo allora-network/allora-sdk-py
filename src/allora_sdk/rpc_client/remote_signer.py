@@ -24,6 +24,8 @@ import uuid
 from typing import Any, Optional, TypeVar
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from pydantic import BaseModel, ValidationError
 from cosmpy.aerial.wallet import Wallet
 from cosmpy.crypto.address import Address
@@ -131,7 +133,28 @@ class ForgeBackendClient:
         self._base = backend_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
-        self._session = session if session is not None else requests.Session()
+        if session is not None:
+            self._session = session
+            return
+        self._session = requests.Session()
+        # Retry transient backend failures so a momentary 5xx/connection blip does not lose a
+        # nonce. Signing is idempotent (the pinned pubkey verifies every response), so re-sending
+        # is safe. redirect=0 preserves the no-redirect security property (the X-Forge-API-Key is
+        # never re-sent on a 3xx); raise_on_status=False lets the final non-2xx response flow into
+        # _request's normal error handling instead of raising a urllib3 MaxRetryError.
+        retry = Retry(
+            total=2,
+            connect=2,
+            read=2,
+            redirect=0,
+            backoff_factor=0.5,
+            status_forcelist=(502, 503, 504),
+            allowed_methods=("GET", "POST"),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     def get_wallet_info(self, wallet_id: str) -> SigningWalletInfo:
         """Fetch a signing wallet's public, non-secret info (id, address, pubkey)."""
