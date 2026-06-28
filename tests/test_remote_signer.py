@@ -138,6 +138,30 @@ def test_clear_association(backend):
     client.clear_association(WALLET_ID)
 
 
+def test_clear_association_accepts_204_no_content():
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    # A successful unbind may legitimately return 204 No Content (empty body). _request must
+    # treat an empty 2xx body as success rather than failing the JSON-object parse.
+    class NoContentHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            self.send_response(204)
+            self.end_headers()
+
+    server = HTTPServer(("127.0.0.1", 0), NoContentHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        ForgeBackendClient(url, API_KEY).clear_association(WALLET_ID)  # must not raise
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_provision_remote_wallet(backend):
     from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
 

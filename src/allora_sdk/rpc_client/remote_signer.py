@@ -200,6 +200,13 @@ class ForgeBackendClient:
             detail = raw.decode(errors="replace")[:512]
             raise ForgeBackendError(f"forge backend returned {resp.status_code}: {detail}")
 
+        if not raw:
+            # A 2xx with an empty body (e.g. 204 No Content from clear-association) is a
+            # success with no JSON payload. Return an empty mapping rather than failing the
+            # JSON parse; callers that need fields validate them separately and would still
+            # surface a clear "unexpected response" error if the body were wrongly empty.
+            return {}
+
         try:
             parsed = json.loads(raw.decode())
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
