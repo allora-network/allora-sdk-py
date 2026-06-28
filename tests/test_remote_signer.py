@@ -303,6 +303,39 @@ def test_address_mismatch_raises():
         thread.join(timeout=2)
 
 
+def test_empty_wallet_id_fails_closed():
+    # A wallet-info response with an empty id must fail closed: it cannot bind the
+    # response to the requested wallet, so a mis-routed / cache-poisoned response that
+    # is otherwise internally consistent is not silently accepted (parity with
+    # allora-sdk-go and allora-sdk-ts).
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+
+    class EmptyIdHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"id": "", "address": address, "pubkey": pub_hex}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), EmptyIdHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(WalletConfigError, match="missing 'id'"):
+            make_remote_wallet(url, API_KEY, WALLET_ID)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_non_json_response_raises():
     # A 200 with a non-JSON body (e.g. a gateway HTML page) must surface as a clear
     # ForgeBackendError, not a bare JSONDecodeError.

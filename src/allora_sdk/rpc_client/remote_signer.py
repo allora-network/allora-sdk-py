@@ -355,7 +355,16 @@ class RemoteWallet(Wallet):
         if public_key_hex is None:
             info = self._client.get_wallet_info(wallet_id)
             # Guard against a proxy misroute / cache bug returning a different wallet.
-            if info.id and info.id != wallet_id:
+            # Fail closed on an empty id: a backend that omits it cannot be trusted to have
+            # bound the response to the requested wallet, and the pubkey<->address cross-check
+            # below would not catch a mis-routed-but-internally-consistent response (parity with
+            # allora-sdk-go's `info.ID == ""` guard and allora-sdk-ts).
+            if not info.id:
+                raise WalletConfigError(
+                    f"forge wallet-info response for {wallet_id} missing 'id'; cannot verify "
+                    "the backend bound the response to the requested wallet"
+                )
+            if info.id != wallet_id:
                 raise WalletConfigError(
                     f"forge wallet-info id {info.id} does not match requested wallet_id {wallet_id}"
                 )
