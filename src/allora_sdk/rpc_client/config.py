@@ -71,6 +71,19 @@ class AlloraWalletConfig:
             wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
             return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
         if api_key:
+            # Same single-source guard as the branch above: without it a stale local-key env
+            # var (a common mid-migration state) would be silently ignored while signing
+            # switched to managed Forge custody — fail loudly instead of changing the flow.
+            conflicting = [
+                name
+                for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
+                if os.getenv(p + name)
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"FORGE_API_KEY is set alongside {conflicting}; "
+                    f"choose exactly one signing source"
+                )
             # Managed custody, no explicit wallet id: defer to the worker, which provisions a
             # wallet bound to its topic (one worker = one topic) at startup.
             return cls(

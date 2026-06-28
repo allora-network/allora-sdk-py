@@ -228,6 +228,19 @@ def test_from_env_conflicting_credentials_rejected(monkeypatch):
         AlloraWalletConfig.from_env()
 
 
+def test_from_env_deferred_managed_conflicting_credentials_rejected(monkeypatch):
+    # The FORGE_API_KEY-only (deferred-provisioning) path must apply the same single-source
+    # guard as the wallet-id path, otherwise a stale PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE would be
+    # silently ignored while signing switched to managed Forge custody.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.delenv("FORGE_SIGNING_WALLET_ID", raising=False)
+    monkeypatch.setenv("MNEMONIC", "test test test")
+    with pytest.raises(ValueError, match="exactly one signing source"):
+        AlloraWalletConfig.from_env()
+
+
 def test_public_key_hex_shortcut_skips_fetch():
     # With public_key_hex (+ address) the constructor must not contact the backend,
     # so async callers can build a wallet without a blocking GET.
