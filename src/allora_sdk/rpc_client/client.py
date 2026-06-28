@@ -188,6 +188,20 @@ class AlloraRPCClient:
         if not wallet:
             return
 
+        # A forge_api_key-only config defers wallet provisioning to a worker's topic, which
+        # AlloraRPCClient cannot supply on its own. Without this guard every branch below is
+        # skipped, self.wallet stays None, and tx_manager is silently never built — so a later
+        # signing attempt fails far from the config site with a confusing "No wallet configured".
+        if wallet.forge_api_key and not (
+            wallet.wallet or wallet.private_key or wallet.mnemonic or wallet.mnemonic_file
+        ):
+            raise ValueError(
+                "AlloraWalletConfig(forge_api_key=...) defers wallet provisioning to a worker "
+                "topic, which AlloraRPCClient cannot supply. Use AlloraWorker.inferer/reputer/"
+                "forecaster (they provision a wallet bound to the worker's topic), or pass an "
+                "explicit wallet=/private_key=/mnemonic=."
+            )
+
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
