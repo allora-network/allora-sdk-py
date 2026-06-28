@@ -60,14 +60,20 @@ class SigningWalletInfo(BaseModel):
     explicitly (rather than silently dropped) so the contract is documented here.
     Unknown future fields are still ignored — a lenient client, matching
     allora-sdk-go's response struct.
+
+    forge-v2's ``service.SigningWalletInfo`` tags ``PrivyWalletID`` with ``json:"-"``, so the
+    Privy server-wallet id is never serialized on the wire — it is intentionally not modeled
+    here (it would always be ``None``). ``topic_id``/``worker_label`` are the bound-topic
+    metadata the server actually returns (omitempty) for a managed wallet.
     """
 
     id: str
     address: str
     pubkey: str  # hex-encoded 33-byte compressed secp256k1 public key
     evm_address: Optional[str] = None  # 0x... Privy-reported EVM address (cross-check/debug)
-    privy_wallet_id: Optional[str] = None  # Privy server wallet id
     label: Optional[str] = None
+    topic_id: Optional[int] = None  # bound topic for a managed wallet; None when unassigned
+    worker_label: Optional[str] = None  # display-only worker hint
     created_at: Optional[str] = None  # RFC 3339 timestamp; kept as a raw string (unused locally)
 
 

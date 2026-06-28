@@ -429,25 +429,30 @@ def test_non_json_response_raises():
 
 
 def test_signing_wallet_info_models_full_contract():
-    # forge-v2's wallet-info DTO returns evm_address / privy_wallet_id / label / created_at
-    # alongside id/address/pubkey. They are modeled as optional metadata (not silently
-    # dropped); any further unknown field is still tolerated (lenient client).
+    # forge-v2's wallet-info DTO returns evm_address / label / topic_id / worker_label /
+    # created_at alongside id/address/pubkey. privy_wallet_id is tagged json:"-" server-side
+    # (never on the wire), so it is intentionally not modeled; any unknown field is tolerated.
     info = SigningWalletInfo.model_validate(
         {
             "id": WALLET_ID,
             "address": "allo1xyz",
             "pubkey": "ab" * 33,
             "evm_address": "0xabc",
-            "privy_wallet_id": "privy-123",
             "label": "my-wallet",
+            "topic_id": 7,
+            "worker_label": "btc-inferer",
             "created_at": "2024-01-02T03:04:05Z",
+            "privy_wallet_id": "ignored-never-on-wire",
             "some_future_field": "ignored",
         }
     )
     assert info.evm_address == "0xabc"
-    assert info.privy_wallet_id == "privy-123"
     assert info.label == "my-wallet"
+    assert info.topic_id == 7
+    assert info.worker_label == "btc-inferer"
     assert info.created_at == "2024-01-02T03:04:05Z"
+    # privy_wallet_id is no longer modeled (server never emits it).
+    assert not hasattr(info, "privy_wallet_id")
 
 
 def test_non_https_backend_url_rejected():
