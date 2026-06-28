@@ -609,3 +609,14 @@ def test_sign_response_uppercase_pubkey_accepted():
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_wallet_id_normalized_to_canonical(backend):
+    # A non-canonical UUID (braced form) must be normalized to the canonical dashed form so it
+    # matches the backend's canonical id and is URL-encoded canonically. Before normalization the
+    # braced form spuriously failed the wallet-info id cross-check.
+    priv, url = backend
+    wallet = make_remote_wallet(url, API_KEY, "{" + WALLET_ID + "}")
+    assert str(wallet.address()) == str(Address(priv.public_key, "allo"))
+    # The signer carries the canonical (dashed, unbraced) wallet_id.
+    assert wallet.signer()._wallet_id == WALLET_ID

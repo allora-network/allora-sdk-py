@@ -376,9 +376,11 @@ class RemoteWallet(Wallet):
         # forge-v2 keys signing wallets by Privy UUID, so a non-UUID wallet_id is always a
         # config bug (e.g. a typo in FORGE_SIGNING_WALLET_ID). Fail locally with a clear error
         # rather than as an opaque 404 on the first request (parity with allora-sdk-go's
-        # uuid.Parse guard).
+        # uuid.Parse guard). Normalize to the canonical dashed form so non-canonical input
+        # (bare hex, urn:uuid:..., {braced}) is not URL-encoded into the backend path verbatim,
+        # and so the id cross-check below compares against the backend's canonical id.
         try:
-            uuid.UUID(wallet_id)
+            wallet_id = str(uuid.UUID(wallet_id))
         except ValueError as e:
             raise WalletConfigError(f"wallet_id must be a UUID, got {wallet_id!r}: {e}") from e
 
