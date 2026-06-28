@@ -16,6 +16,7 @@ from cosmpy.crypto.keypairs import PrivateKey
 
 from allora_sdk.rpc_client.remote_signer import (
     ForgeBackendError,
+    SigningWalletInfo,
     WalletConfigError,
     make_remote_wallet,
 )
@@ -180,6 +181,19 @@ def test_init_worker_wallet_managed_requires_topic():
         init_worker_wallet(cfg, topic_id=None)
 
 
+def test_from_env_conflicting_credentials_rejected(monkeypatch):
+    # Forge env vars set alongside a stale local key (a common mid-migration state) must
+    # fail loudly, not silently sign through Forge — mirrors __post_init__'s single-source
+    # guard. The check fires before any backend contact.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("PRIVATE_KEY", "deadbeef")
+    with pytest.raises(ValueError, match="exactly one signing source"):
+        AlloraWalletConfig.from_env()
+
+
 def test_public_key_hex_shortcut_skips_fetch():
     # With public_key_hex (+ address) the constructor must not contact the backend,
     # so async callers can build a wallet without a blocking GET.
@@ -208,6 +222,13 @@ def test_public_key_hex_shortcut_address_mismatch_raises():
             public_key_hex=pub_hex,
             address="allo1wrongaddressxxxxxxxxxxxxxxxxxxxxxxxxxx",
         )
+
+
+def test_non_uuid_wallet_id_rejected():
+    # forge-v2 keys signing wallets by Privy UUID; a non-UUID wallet_id is a config typo and
+    # must fail locally (parity with allora-sdk-go's uuid.Parse guard) without a network call.
+    with pytest.raises(WalletConfigError, match="UUID"):
+        make_remote_wallet("https://forge.invalid", API_KEY, "not-a-uuid")
 
 
 def test_signature_not_matching_pubkey_rejected():
@@ -308,6 +329,28 @@ def test_non_json_response_raises():
         thread.join(timeout=2)
 
 
+def test_signing_wallet_info_models_full_contract():
+    # forge-v2's wallet-info DTO returns evm_address / privy_wallet_id / label / created_at
+    # alongside id/address/pubkey. They are modeled as optional metadata (not silently
+    # dropped); any further unknown field is still tolerated (lenient client).
+    info = SigningWalletInfo.model_validate(
+        {
+            "id": WALLET_ID,
+            "address": "allo1xyz",
+            "pubkey": "ab" * 33,
+            "evm_address": "0xabc",
+            "privy_wallet_id": "privy-123",
+            "label": "my-wallet",
+            "created_at": "2024-01-02T03:04:05Z",
+            "some_future_field": "ignored",
+        }
+    )
+    assert info.evm_address == "0xabc"
+    assert info.privy_wallet_id == "privy-123"
+    assert info.label == "my-wallet"
+    assert info.created_at == "2024-01-02T03:04:05Z"
+
+
 def test_non_https_backend_url_rejected():
     # Plain http:// to a non-loopback host would leak the API key in cleartext.
     with pytest.raises(ValueError, match="https"):
@@ -315,15 +358,36 @@ def test_non_https_backend_url_rejected():
 
 
 def test_redirect_is_not_followed():
-    # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop;
-    # the client disables redirects and treats the 3xx as a backend error.
+    # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop. Point
+    # the redirect at a second "leak" server and assert it is never contacted, so a future
+    # change that re-enables redirects (which would forward the key) fails this test — not
+    # just that the 3xx surfaces as an error.
+    leak_requests: list[str] = []
+
+    class LeakHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            # Record the API-key header (if any) so a leak is observable, then 200.
+            leak_requests.append(self.headers.get("X-Forge-API-Key", "<none>"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+    leak_server = HTTPServer(("127.0.0.1", 0), LeakHandler)
+    leak_thread = threading.Thread(target=leak_server.serve_forever, daemon=True)
+    leak_thread.start()
+    leak_url = f"http://127.0.0.1:{leak_server.server_address[1]}/leak"
+
     class RedirectHandler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_GET(self):
             self.send_response(302)
-            self.send_header("Location", "http://127.0.0.1:1/leak")
+            self.send_header("Location", leak_url)
             self.end_headers()
 
     server = HTTPServer(("127.0.0.1", 0), RedirectHandler)
@@ -333,6 +397,56 @@ def test_redirect_is_not_followed():
     try:
         with pytest.raises(ForgeBackendError):
             make_remote_wallet(url, API_KEY, WALLET_ID)
+        # The redirect target must never be contacted, so the X-Forge-API-Key was not re-sent.
+        assert leak_requests == [], (
+            f"client followed the redirect and leaked headers to the target: {leak_requests}"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        leak_server.shutdown()
+        leak_thread.join(timeout=2)
+
+
+def test_sign_response_uppercase_pubkey_accepted():
+    # bytes.hex() is lowercase, but a backend / proxy could return uppercase hex; the
+    # pubkey match must compare decoded bytes, not case-sensitive strings, so a valid
+    # signature is not falsely rejected (parity with allora-sdk-go / allora-sdk-ts).
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            req = json.loads(self.rfile.read(length))
+            payload = bytes.fromhex(req["payload"])
+            sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
+            # Return the pubkey in UPPERCASE hex to exercise the case-insensitive compare.
+            self._send({"signature": sig.hex(), "pubkey": pub_hex.upper()})
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+        message = b"cosmos signdoc bytes"
+        sig = wallet.signer().sign(message)
+        assert priv.public_key.verify(message, sig)
     finally:
         server.shutdown()
         thread.join(timeout=2)

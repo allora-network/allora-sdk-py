@@ -51,6 +51,21 @@ class AlloraWalletConfig:
         wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
         backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
         if api_key and wallet_id:
+            # The early return below never reads PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a
+            # stale local-key env var (a common mid-migration state) would be silently
+            # ignored and signing would go through Forge with no log. Mirror __post_init__'s
+            # "exactly one credential source" guard at the env layer and fail loudly instead.
+            conflicting = [
+                name
+                for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
+                if os.getenv(p + name)
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"FORGE_API_KEY and FORGE_SIGNING_WALLET_ID are set alongside "
+                    f"{conflicting}; choose exactly one signing source"
+                )
+
             from .remote_signer import make_remote_wallet
 
             wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
@@ -96,10 +111,10 @@ class AlloraWalletConfig:
             # downstream code uses the wallet directly, so `prefix` would otherwise be a
             # silently-ignored, possibly-misleading value. Align it to the wallet's actual
             # prefix (e.g. a RemoteWallet built with prefix="cosmos").
-            try:
-                hrp = str(self.wallet.address()).split("1", 1)[0]
-            except Exception:
-                hrp = ""
+            # No try/except: only wallet.address() can raise here, and a Wallet whose
+            # address() raises is a real bug that should surface, not be swallowed into a
+            # silently wrong prefix that fails far downstream in the broadcast path.
+            hrp = str(self.wallet.address()).split("1", 1)[0]
             if hrp:
                 self.prefix = hrp
 

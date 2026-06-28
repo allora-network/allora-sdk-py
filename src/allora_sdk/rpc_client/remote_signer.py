@@ -20,6 +20,7 @@ Usage::
 
 import json
 import urllib.parse
+import uuid
 from typing import Any, Optional, TypeVar
 
 import requests
@@ -54,12 +55,20 @@ class SigningWalletInfo(BaseModel):
     """Non-secret view of a Forge signing wallet, as returned by the backend.
 
     The wire shape is a cross-repo HTTP contract shared with allora-sdk-go,
-    allora-sdk-ts, and forge-v2.
+    allora-sdk-ts, and forge-v2. ``id``/``address``/``pubkey`` are required; the
+    remaining fields are optional metadata forge-v2 returns. They are modeled
+    explicitly (rather than silently dropped) so the contract is documented here.
+    Unknown future fields are still ignored — a lenient client, matching
+    allora-sdk-go's response struct.
     """
 
     id: str
     address: str
     pubkey: str  # hex-encoded 33-byte compressed secp256k1 public key
+    evm_address: Optional[str] = None  # 0x... Privy-reported EVM address (cross-check/debug)
+    privy_wallet_id: Optional[str] = None  # Privy server wallet id
+    label: Optional[str] = None
+    created_at: Optional[str] = None  # RFC 3339 timestamp; kept as a raw string (unused locally)
 
 
 class SignResult(BaseModel):
@@ -220,12 +229,13 @@ class RemoteSigner(Signer):
         self,
         client: ForgeBackendClient,
         wallet_id: str,
-        public_key: Optional[PublicKey] = None,
+        public_key: PublicKey,
     ):
         self._client = client
         self._wallet_id = wallet_id
-        # When known, the wallet pubkey is used to verify every returned signature
-        # locally so a backend bug or MITM cannot make the worker broadcast garbage.
+        # The wallet pubkey verifies every returned signature locally so a backend bug or
+        # MITM cannot make the worker broadcast garbage. Required (not optional) so a signer
+        # constructed directly can never silently skip verification; RemoteWallet supplies it.
         self._public_key = public_key
 
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
@@ -275,13 +285,21 @@ class RemoteSigner(Signer):
 
     def _verify(self, payload: bytes, sig: bytes, prehashed: bool, response_pubkey: Optional[str]) -> None:
         """Verify the backend's signature against the pinned wallet public key."""
-        if self._public_key is None:
-            return
-        expected = self._public_key.public_key_bytes.hex()
-        if response_pubkey and response_pubkey != expected:
-            raise WalletConfigError(
-                "forge sign response pubkey does not match the wallet public key"
-            )
+        # Compare decoded bytes, not hex strings: bytes.hex() is lowercase but a future
+        # backend / proxy could return uppercase hex for an otherwise-valid signature.
+        # (Go decodes both sides to bytes; allora-sdk-ts lower-cases defensively.)
+        expected = self._public_key.public_key_bytes
+        if response_pubkey:
+            try:
+                resp_bytes = bytes.fromhex(response_pubkey)
+            except ValueError as e:
+                raise ForgeBackendError(
+                    f"forge sign response pubkey is not valid hex: {e}"
+                ) from e
+            if resp_bytes != expected:
+                raise WalletConfigError(
+                    "forge sign response pubkey does not match the wallet public key"
+                )
         verified = (
             self._public_key.verify_digest(payload, sig)
             if prehashed
@@ -319,6 +337,15 @@ class RemoteWallet(Wallet):
         address: Optional[str] = None,
         client: Optional[ForgeBackendClient] = None,
     ):
+        # forge-v2 keys signing wallets by Privy UUID, so a non-UUID wallet_id is always a
+        # config bug (e.g. a typo in FORGE_SIGNING_WALLET_ID). Fail locally with a clear error
+        # rather than as an opaque 404 on the first request (parity with allora-sdk-go's
+        # uuid.Parse guard).
+        try:
+            uuid.UUID(wallet_id)
+        except ValueError as e:
+            raise WalletConfigError(f"wallet_id must be a UUID, got {wallet_id!r}: {e}") from e
+
         self._wallet_id = wallet_id
         self._prefix = prefix
         self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
