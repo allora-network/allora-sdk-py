@@ -47,9 +47,17 @@ def _make_handler(priv: PrivateKey):
 
         def do_POST(self):
             assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
+            if self.path.endswith("/clear-association"):
+                # Clear-association carries no request body (and thus no Content-Type).
+                self._send({"message": "association cleared"})
+                return
             assert self.headers.get("Content-Type") == "application/json", "missing/wrong content-type"
             length = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(length))
+            if not self.path.endswith("/sign"):
+                # Provision (POST /api/v1/signing-wallets with topic_id): get-or-create wallet.
+                self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex, "topic_id": req.get("topic_id")})
+                return
             payload = bytes.fromhex(req["payload"])
             sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
             self._send({"signature": sig.hex(), "pubkey": pub_hex})
@@ -119,6 +127,58 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
 
     cfg = AlloraWalletConfig.from_env()
     assert cfg.fee_granter == "allo1granteraddrxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+def test_clear_association(backend):
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    _priv, url = backend
+    client = ForgeBackendClient(url, API_KEY)
+    # A 2xx response returns without raising (the topic binding was released).
+    client.clear_association(WALLET_ID)
+
+
+def test_provision_remote_wallet(backend):
+    from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
+
+    priv, url = backend
+    wallet = provision_remote_wallet(url, API_KEY, topic_id=42)
+    assert str(wallet.address()) == str(Address(priv.public_key, "allo"))
+    # The provisioned wallet signs through the same backend.
+    sig = wallet.signer().sign(b"signdoc bytes")
+    assert priv.public_key.verify(b"signdoc bytes", sig)
+
+
+def test_from_env_defers_managed_provision(monkeypatch):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    # API key but no wallet id: from_env defers provisioning (no wallet built, no network call).
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.delenv("FORGE_SIGNING_WALLET_ID", raising=False)
+    monkeypatch.setenv("FORGE_BACKEND_URL", "https://forge.invalid")
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.wallet is None
+    assert cfg.forge_api_key == API_KEY
+
+
+def test_init_worker_wallet_provisions_for_topic(backend):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from allora_sdk.worker.utils import init_worker_wallet
+
+    priv, url = backend
+    cfg = AlloraWalletConfig(forge_api_key=API_KEY, forge_backend_url=url)
+    wallet = init_worker_wallet(cfg, topic_id=7)
+    assert str(wallet.address()) == str(Address(priv.public_key, "allo"))
+
+
+def test_init_worker_wallet_managed_requires_topic():
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from allora_sdk.worker.utils import init_worker_wallet
+
+    cfg = AlloraWalletConfig(forge_api_key=API_KEY, forge_backend_url="https://forge.invalid")
+    with pytest.raises(ValueError, match="topic_id"):
+        init_worker_wallet(cfg, topic_id=None)
 
 
 def test_from_env_conflicting_credentials_rejected(monkeypatch):
