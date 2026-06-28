@@ -338,7 +338,7 @@ For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds t
 wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
 (`FORGE_BACKEND_URL` defaults to `https://forge.allora.network`), alongside the existing
 `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FEE_GRANTER` to enable the
-feegrant subsidy described below.
+feegrant subsidy described above.
 
 ## Allora API Client
 
