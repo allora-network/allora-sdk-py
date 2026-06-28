@@ -783,6 +783,13 @@ class TxManager:
         if not self.wallet:
             raise Exception("No wallet configured")
 
+        # With a feegrant granter configured, the granter pays all fees and the signing
+        # wallet is expected to hold zero ALLO (ENGN-8456), so a balance check here would
+        # wrongly reject it with InsufficientBalanceError. The granter's on-chain allowance
+        # is enforced by the chain at broadcast time, not pre-flight.
+        if self._fee_granter:
+            return
+
         try:
             # Check if account exists
             _ = await self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
