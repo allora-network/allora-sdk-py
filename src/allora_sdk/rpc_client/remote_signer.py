@@ -422,17 +422,23 @@ class RemoteSigner(Signer):
         # backend / proxy could return uppercase hex for an otherwise-valid signature.
         # (Go decodes both sides to bytes; allora-sdk-ts lower-cases defensively.)
         expected = self._public_key.public_key_bytes
-        if response_pubkey:
-            try:
-                resp_bytes = bytes.fromhex(response_pubkey)
-            except ValueError as e:
-                raise ForgeBackendError(
-                    f"forge sign response pubkey is not valid hex: {e}"
-                ) from e
-            if resp_bytes != expected:
-                raise WalletConfigError(
-                    "forge sign response pubkey does not match the wallet public key"
-                )
+        # Fail closed when the echo is absent: a truthy `if response_pubkey:` guard would let
+        # a backend skip this rotation/mis-route check by simply dropping the field. Parity
+        # with allora-sdk-ts (the fail-closed reference); forge-v2 always returns it today.
+        if not response_pubkey:
+            raise ForgeBackendError(
+                "forge sign response omitted the pubkey echo; cannot verify the backend signed with the expected wallet"
+            )
+        try:
+            resp_bytes = bytes.fromhex(response_pubkey)
+        except ValueError as e:
+            raise ForgeBackendError(
+                f"forge sign response pubkey is not valid hex: {e}"
+            ) from e
+        if resp_bytes != expected:
+            raise WalletConfigError(
+                "forge sign response pubkey does not match the wallet public key"
+            )
         verified = (
             self._public_key.verify_digest(payload, sig)
             if prehashed
