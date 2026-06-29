@@ -698,8 +698,10 @@ class RemoteWallet(Wallet):
                     f"backend master_granter {discovered_granter!r} is not a "
                     "20-byte account address"
                 )
-            granter_hrp = discovered_granter.rsplit("1", 1)[0]
-            if granter_hrp != self._prefix:
+            # Compare HRPs case-insensitively: per BIP 173 an all-lowercase and an all-uppercase
+            # bech32 string encode the same address (parity with allora-sdk-ts).
+            granter_hrp = discovered_granter.rsplit("1", 1)[0].lower()
+            if granter_hrp != self._prefix.lower():
                 raise WalletConfigError(
                     f"backend master_granter HRP {granter_hrp!r} does not match "
                     f"wallet prefix {self._prefix!r}"

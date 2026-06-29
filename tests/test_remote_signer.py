@@ -402,6 +402,16 @@ def test_fee_granter_cross_hrp_rejected():
         AlloraWalletConfig(private_key="ab" * 32, fee_granter=cosmos_granter)
 
 
+def test_fee_granter_uppercase_bech32_accepted():
+    # BIP-173 bech32 is case-insensitive: an all-uppercase ALLO1... granter encodes the same address
+    # as its lowercase form, so the HRP check must accept it (it must not be rejected as cross-HRP).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    granter = str(Address(PrivateKey().public_key, "allo")).upper()
+    cfg = AlloraWalletConfig(private_key="ab" * 32, fee_granter=granter)
+    assert cfg.fee_granter == granter
+
+
 def test_forge_client_close_respects_session_ownership():
     # A self-created session is closed by close() (idempotently); a caller-injected session
     # is left open because the caller owns its lifecycle.

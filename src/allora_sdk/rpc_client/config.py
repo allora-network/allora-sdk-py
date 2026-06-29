@@ -285,9 +285,12 @@ class AlloraWalletConfig:
                 f"invalid fee_granter address {self.fee_granter!r}: expected a 20-byte "
                 f"account address, got {len(bytes(parsed))} bytes"
             )
-        # bech32's separator is the LAST '1' (BIP 173); everything before it is the HRP.
-        hrp = self.fee_granter.rsplit("1", 1)[0]
-        if hrp != self.prefix:
+        # bech32's separator is the LAST '1' (BIP 173); everything before it is the HRP. Compare
+        # case-insensitively: per BIP 173 an all-lowercase and an all-uppercase bech32 string encode
+        # the same address, so an uppercase ALLO1... granter must not be rejected (parity with
+        # allora-sdk-ts).
+        hrp = self.fee_granter.rsplit("1", 1)[0].lower()
+        if hrp != self.prefix.lower():
             raise ValueError(
                 f"fee_granter HRP {hrp!r} does not match the signing wallet prefix "
                 f"{self.prefix!r}; the chain cannot match a cross-HRP feegrant"
