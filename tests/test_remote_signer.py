@@ -550,6 +550,26 @@ def test_non_https_backend_url_rejected():
         make_remote_wallet("http://forge.example.com", API_KEY, WALLET_ID)
 
 
+def test_backend_url_with_userinfo_rejected():
+    # Embedded user:password@host is sent as a Basic auth header alongside the API key.
+    with pytest.raises(ValueError, match="userinfo"):
+        make_remote_wallet("https://user:pass@forge.example.com", API_KEY, WALLET_ID)
+
+
+def test_backend_url_with_query_or_fragment_rejected():
+    # A query string / fragment is URL-encoded into every request path.
+    with pytest.raises(ValueError, match="query string or fragment"):
+        make_remote_wallet("https://forge.example.com?x=1", API_KEY, WALLET_ID)
+    with pytest.raises(ValueError, match="query string or fragment"):
+        make_remote_wallet("https://forge.example.com#frag", API_KEY, WALLET_ID)
+
+
+def test_backend_url_without_hostname_rejected():
+    # A scheme-only URL would otherwise fail with an opaque ConnectionError at first use.
+    with pytest.raises(ValueError, match="hostname"):
+        make_remote_wallet("https://", API_KEY, WALLET_ID)
+
+
 def test_redirect_is_not_followed():
     # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop. Point
     # the redirect at a second "leak" server and assert it is never contacted, so a future

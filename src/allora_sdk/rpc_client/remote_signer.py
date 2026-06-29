@@ -101,8 +101,26 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 def _validate_backend_url(url: str) -> None:
     """Require https:// for the Forge backend so the long-lived API key is never sent
-    in cleartext. Plain http:// is permitted only for loopback (local development)."""
+    in cleartext. Plain http:// is permitted only for loopback (local development).
+
+    Also reject malformed URLs that would otherwise weaken the boundary: embedded
+    userinfo (``user:password@host`` is sent as a Basic auth header alongside the API
+    key on every request), a missing hostname (otherwise an opaque ConnectionError at
+    first use), or a query string / fragment (URL-encoded into every request path).
+    Mirrors the tightened allora-sdk-go boundary.
+    """
     parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"backend_url must have a hostname, got: {url!r}")
+    if parsed.username or parsed.password:
+        raise ValueError(
+            "backend_url must not contain userinfo (user:password@host); those "
+            "credentials would be sent alongside the API key on every request"
+        )
+    if parsed.query or parsed.fragment:
+        raise ValueError(
+            f"backend_url must not contain a query string or fragment, got: {url!r}"
+        )
     if parsed.scheme == "https":
         return
     if parsed.scheme == "http" and parsed.hostname in _LOOPBACK_HOSTS:
