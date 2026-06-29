@@ -69,6 +69,31 @@ async def test_faucet_request_omits_api_key_header_when_unset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_faucet_skipped_when_fee_granter_set() -> None:
+    # A fee-granted worker's signer is expected to hold zero ALLO (the granter pays fees), so the
+    # faucet top-up must be skipped entirely — no balance query, no faucet POST, even on testnet
+    # with a faucet_url configured. Mirrors TxManager._pre_flight_checks' fee_granter skip.
+    client = _make_worker_client()
+    worker = AlloraWorker(
+        use_case=_make_use_case(),
+        client=client,
+        address="allo1worker",
+        api_key=None,
+        topic_id=69,
+        fee_granter="allo1granter",
+        show_banner=False,
+    )
+    worker._initialized = True
+    worker._chain_id = "allora-testnet-1"
+
+    with patch("allora_sdk.worker.worker.requests.post") as post:
+        await worker._maybe_faucet_request()
+
+    post.assert_not_called()
+    client.bank.query.balance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_make_reputer_function_uses_single_entry_topic_nonce_cache() -> None:
     calls: list[tuple[int, int]] = []
 
