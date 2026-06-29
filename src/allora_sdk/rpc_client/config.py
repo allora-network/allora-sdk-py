@@ -197,9 +197,18 @@ class AlloraWalletConfig:
         if self.fee_granter is None:
             return
         try:
-            Address(self.fee_granter)
+            parsed = Address(self.fee_granter)
         except Exception as e:
             raise ValueError(f"invalid fee_granter address {self.fee_granter!r}: {e}") from e
+        # cosmpy's Address(str) validates only the bech32 checksum, not the decoded payload
+        # length, so a checksum-valid string with the wrong number of data bytes slips
+        # through. Cosmos account addresses are 20 bytes (ripemd160(sha256(pubkey))); reject
+        # any other length here rather than letting it fail opaquely on-chain at broadcast.
+        if len(bytes(parsed)) != 20:
+            raise ValueError(
+                f"invalid fee_granter address {self.fee_granter!r}: expected a 20-byte "
+                f"account address, got {len(bytes(parsed))} bytes"
+            )
         # bech32's separator is the LAST '1' (BIP 173); everything before it is the HRP.
         hrp = self.fee_granter.rsplit("1", 1)[0]
         if hrp != self.prefix:

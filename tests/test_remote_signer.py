@@ -193,6 +193,18 @@ def test_fee_granter_invalid_bech32_rejected():
         AlloraWalletConfig(private_key="ab" * 32, fee_granter="allo1notarealaddress")
 
 
+def test_fee_granter_wrong_payload_length_rejected():
+    # A bech32 string with a valid checksum but the wrong decoded payload length (not the
+    # 20 bytes of a cosmos account address) must be rejected. cosmpy's Address(str) only
+    # verifies the checksum, so without an explicit length check this would slip through.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from cosmpy.crypto.address import _to_bech32
+
+    short = _to_bech32("allo", bytes(10))  # checksum-valid, 10-byte payload (not 20)
+    with pytest.raises(ValueError, match="20-byte"):
+        AlloraWalletConfig(private_key="ab" * 32, fee_granter=short)
+
+
 def test_fee_granter_cross_hrp_rejected():
     # An allo1 signing wallet paired with a cosmos1 granter passes bech32 parsing but can never
     # match an on-chain feegrant, so it must be rejected eagerly.
