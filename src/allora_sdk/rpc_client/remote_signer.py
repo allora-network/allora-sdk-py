@@ -804,18 +804,20 @@ def _provision_with_retry(
     ``provision_wallet`` is a get-or-create (idempotent), so a transient 5xx or a connection
     blip during worker startup is safe to retry — unlike ``clear_association``, which is why
     the shared session retries only GETs. Retries connection/read errors (``status_code`` None)
-    and 5xx; a permanent 4xx (e.g. a bad API key) fails fast. Backoff mirrors the session's
-    GET retry policy.
+    and 5xx; a permanent 4xx (e.g. a bad API key) fails fast. Linear backoff (0.5s, 1.0s, ...)
+    between attempts.
     """
-    for attempt in range(_PROVISION_MAX_ATTEMPTS - 1):
+    for attempt in range(_PROVISION_MAX_ATTEMPTS):
         try:
             return client.provision_wallet(topic_id, label)
         except ForgeBackendError as e:
-            if e.status_code is not None and e.status_code < 500:
-                raise  # permanent client error — retrying won't help
+            # Stop on a permanent client error (4xx, retrying won't help), or once the final
+            # attempt has also failed — otherwise sleep (linear backoff) and retry.
+            permanent = e.status_code is not None and e.status_code < 500
+            if permanent or attempt == _PROVISION_MAX_ATTEMPTS - 1:
+                raise
             time.sleep(0.5 * (attempt + 1))
-    # Final attempt: let any error (transient or not) propagate to the caller.
-    return client.provision_wallet(topic_id, label)
+    raise AssertionError("unreachable: the final attempt always returns or raises")
 
 
 def provision_remote_wallet(
