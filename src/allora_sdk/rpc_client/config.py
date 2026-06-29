@@ -1,6 +1,6 @@
 import os
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
 from cosmpy.aerial.wallet import Wallet
@@ -55,14 +55,17 @@ class AlloraWalletConfig:
     of its own — this is the recommended pairing for Privy-delegated (RemoteWallet) signing.
     Its HRP must match the signing wallet's prefix (validated at construction).
     """
-    private_key: Optional[str] = None
-    mnemonic: Optional[str] = None
+    # Secrets are excluded from the auto-generated repr so a stray log/traceback (Sentry et al.
+    # capture locals via repr) or `print(cfg)` can't leak signing credentials. mnemonic_file is a
+    # path (not the secret itself) and stays visible to aid debugging.
+    private_key: Optional[str] = field(default=None, repr=False)
+    mnemonic: Optional[str] = field(default=None, repr=False)
     mnemonic_file: Optional[str] = None
     wallet: Optional[Wallet] = None
     prefix: str = "allo"
     fee_granter: Optional[str] = None
     # Managed (Privy) custody fields — see the class docstring for the resolution rules.
-    forge_api_key: Optional[str] = None
+    forge_api_key: Optional[str] = field(default=None, repr=False)
     forge_backend_url: Optional[str] = None
 
     @classmethod

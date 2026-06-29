@@ -856,3 +856,13 @@ def test_wallet_id_normalized_to_canonical(backend):
     assert str(wallet.address()) == str(Address(priv.public_key, "allo"))
     # The signer carries the canonical (dashed, unbraced) wallet_id.
     assert wallet.signer()._wallet_id == WALLET_ID
+
+
+def test_wallet_config_repr_hides_secrets():
+    # The auto-generated dataclass repr must not leak signing credentials (logs/tracebacks).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    api_key_repr = repr(AlloraWalletConfig(forge_api_key="forge_sk_SECRET"))
+    assert "forge_sk_SECRET" not in api_key_repr
+    assert "ab" * 32 not in repr(AlloraWalletConfig(private_key="ab" * 32))
+    assert "abandon" not in repr(AlloraWalletConfig(mnemonic="abandon " * 12))
