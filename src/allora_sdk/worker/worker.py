@@ -110,11 +110,15 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet, topic_id)
         fee_granter = resolve_fee_granter(wallet, wallet_initialized)
+        wallet_config = AlloraWalletConfig(
+            wallet=wallet_initialized, fee_granter=fee_granter
+        )
+        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
+        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
+        # leave a caller's wallet for the caller to manage.
+        wallet_config._sdk_owned = not (wallet and wallet.wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(
-                wallet=wallet_initialized,
-                fee_granter=fee_granter,
-            ),
+            wallet=wallet_config,
             network=network,
             debug=debug,
         )
@@ -182,11 +186,15 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet, topic_id)
         fee_granter = resolve_fee_granter(wallet, wallet_initialized)
+        wallet_config = AlloraWalletConfig(
+            wallet=wallet_initialized, fee_granter=fee_granter
+        )
+        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
+        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
+        # leave a caller's wallet for the caller to manage.
+        wallet_config._sdk_owned = not (wallet and wallet.wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(
-                wallet=wallet_initialized,
-                fee_granter=fee_granter,
-            ),
+            wallet=wallet_config,
             network=network,
             debug=debug,
         )
@@ -251,11 +259,15 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         """
         wallet_initialized = init_worker_wallet(wallet, topic_id)
         fee_granter = resolve_fee_granter(wallet, wallet_initialized)
+        wallet_config = AlloraWalletConfig(
+            wallet=wallet_initialized, fee_granter=fee_granter
+        )
+        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
+        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
+        # leave a caller's wallet for the caller to manage.
+        wallet_config._sdk_owned = not (wallet and wallet.wallet)
         client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(
-                wallet=wallet_initialized,
-                fee_granter=fee_granter,
-            ),
+            wallet=wallet_config,
             network=network,
             debug=debug,
         )

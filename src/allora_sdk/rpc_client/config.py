@@ -67,6 +67,11 @@ class AlloraWalletConfig:
     # Managed (Privy) custody fields — see the class docstring for the resolution rules.
     forge_api_key: Optional[str] = field(default=None, repr=False)
     forge_backend_url: Optional[str] = None
+    # True when the SDK built `wallet` itself (from_env's RemoteWallet path, or a worker factory
+    # that provisioned one) and the caller never sees it — so AlloraRPCClient should close that
+    # wallet's resources. A caller-supplied pre-built wallet leaves this False: the caller owns
+    # its lifecycle and may share it across clients. Not a credential; excluded from __post_init__.
+    _sdk_owned: bool = field(default=False, repr=False)
 
     @classmethod
     def from_env(cls, env_prefix: str | None = None) -> 'AlloraWalletConfig':
@@ -145,7 +150,11 @@ class AlloraWalletConfig:
                 from .remote_signer import make_remote_wallet
 
                 wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
-                return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
+                cfg = cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
+                # The SDK built this RemoteWallet (the caller only ever receives the config, not
+                # the wallet), so the client owns it and must close its Forge HTTP session.
+                cfg._sdk_owned = True
+                return cfg
             # Managed custody, no explicit wallet id: defer to the worker, which provisions a
             # wallet bound to its topic (one worker = one topic) at startup.
             return cls(

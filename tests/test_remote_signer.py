@@ -204,6 +204,19 @@ def test_from_env_builds_remote_wallet(backend, monkeypatch):
     cfg = AlloraWalletConfig.from_env()
     assert isinstance(cfg.wallet, RemoteWallet)
     assert str(cfg.wallet.address()) == str(Address(priv.public_key, "allo"))
+    # The SDK built this RemoteWallet, so it is client-owned and its backend session is
+    # released by AlloraRPCClient.close() (not leaked until process exit).
+    assert cfg._sdk_owned is True
+
+
+def test_caller_supplied_wallet_is_not_sdk_owned(backend):
+    # A caller-supplied pre-built wallet stays caller-owned (the client must not close it).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    _priv, url = backend
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+    cfg = AlloraWalletConfig(wallet=wallet)
+    assert cfg._sdk_owned is False
 
 
 def test_from_env_rejects_empty_address_prefix(monkeypatch):

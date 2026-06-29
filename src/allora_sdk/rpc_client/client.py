@@ -209,8 +209,11 @@ class AlloraRPCClient:
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                # A pre-built wallet's lifecycle belongs to the caller.
-                self._owns_wallet = False
+                # A caller-supplied pre-built wallet belongs to the caller (and may be shared
+                # across clients), so we do not close it. But a wallet the SDK built itself
+                # (from_env's RemoteWallet path, or a worker factory that provisioned one) is
+                # client-owned — close() must release its Forge HTTP session, or it leaks.
+                self._owns_wallet = wallet._sdk_owned
                 logger.debug("Wallet initialized from pre-built %s", type(wallet.wallet).__name__)
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
