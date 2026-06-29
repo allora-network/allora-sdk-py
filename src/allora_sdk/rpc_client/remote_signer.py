@@ -507,6 +507,29 @@ class RemoteWallet(Wallet):
             else ForgeBackendClient(backend_url, api_key, timeout)
         )
 
+        # Build the keypair/signer and resolve the fee-granter from the backend (or the supplied
+        # values). If any step fails — wallet-info fetch, or hex/length/address validation — close
+        # the HTTP session we opened so a mid-construction error doesn't leak the connection pool.
+        # A caller-injected client is left open for the caller to manage.
+        try:
+            self._init_from_backend(wallet_id, public_key_hex, address, fee_granter)
+        except Exception:
+            if client is None:
+                self._client.close()
+            raise
+
+    def _init_from_backend(
+        self,
+        wallet_id: str,
+        public_key_hex: Optional[str],
+        address: Optional[str],
+        fee_granter: Optional[str],
+    ) -> None:
+        """Resolve the keypair, signer, and fee-granter from the backend (or supplied values).
+
+        Split out of ``__init__`` so an owned ``ForgeBackendClient`` can be closed if any step
+        here raises, rather than leaking its HTTP session.
+        """
         # For the public_key_hex shortcut, cross-check against a caller-supplied address.
         reported_address: Optional[str] = address
         # The managed master granter (feegrant fee payer) the backend reports for this wallet.
@@ -659,15 +682,22 @@ def provision_remote_wallet(
         if client is not None
         else ForgeBackendClient(backend_url, api_key, timeout)
     )
-    info = c.provision_wallet(topic_id, label)
-    return RemoteWallet(
-        backend_url,
-        api_key,
-        info.id,
-        prefix=prefix,
-        timeout=timeout,
-        public_key_hex=info.pubkey,
-        address=info.address,
-        client=c,
-        fee_granter=info.master_granter,
-    )
+    try:
+        info = c.provision_wallet(topic_id, label)
+        return RemoteWallet(
+            backend_url,
+            api_key,
+            info.id,
+            prefix=prefix,
+            timeout=timeout,
+            public_key_hex=info.pubkey,
+            address=info.address,
+            client=c,
+            fee_granter=info.master_granter,
+        )
+    except Exception:
+        # Close the client we created if provisioning or wallet construction fails, so the owned
+        # HTTP session isn't leaked. A caller-injected client is left for the caller to manage.
+        if client is None:
+            c.close()
+        raise
