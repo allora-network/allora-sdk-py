@@ -17,6 +17,7 @@ from typing import Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from cosmpy.aerial.wallet import Wallet
 import async_timeout
 
 from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
@@ -59,6 +60,40 @@ WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES = 10
+
+
+def _build_worker_client(
+    wallet: Optional[AlloraWalletConfig],
+    topic_id: int,
+    network: AlloraNetworkConfig,
+    debug: bool,
+) -> tuple[Wallet, AlloraRPCClient]:
+    """Resolve a worker's wallet + fee-granter and build its AlloraRPCClient.
+
+    Shared by the inferer/reputer/forecaster factories so their identical wallet wiring lives in
+    one place. ``_sdk_owned`` is set from whether the SDK built the wallet (init_worker_wallet
+    provisioned a RemoteWallet) vs. the caller supplying a pre-built one, and passed through the
+    constructor rather than mutated afterward, so AlloraRPCClient.close() releases only SDK-built
+    wallets' resources.
+
+    Args:
+        wallet: The worker's wallet configuration, or None for the default key-file flow.
+        topic_id: The worker's topic (used to provision a managed wallet when applicable).
+        network: The Allora network configuration.
+        debug: Whether to enable debug logging on the client.
+
+    Returns:
+        The resolved concrete Wallet and the AlloraRPCClient built around it.
+    """
+    wallet_initialized = init_worker_wallet(wallet, topic_id)
+    fee_granter = resolve_fee_granter(wallet, wallet_initialized)
+    wallet_config = AlloraWalletConfig(
+        wallet=wallet_initialized,
+        fee_granter=fee_granter,
+        _sdk_owned=not (wallet and wallet.wallet),
+    )
+    client = AlloraRPCClient(wallet=wallet_config, network=network, debug=debug)
+    return wallet_initialized, client
 
 
 class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
@@ -108,20 +143,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as an inferer
         """
-        wallet_initialized = init_worker_wallet(wallet, topic_id)
-        fee_granter = resolve_fee_granter(wallet, wallet_initialized)
-        wallet_config = AlloraWalletConfig(
-            wallet=wallet_initialized, fee_granter=fee_granter
-        )
-        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
-        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
-        # leave a caller's wallet for the caller to manage.
-        wallet_config._sdk_owned = not (wallet and wallet.wallet)
-        client = AlloraRPCClient(
-            wallet=wallet_config,
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
                 topic_id=topic_id,
@@ -184,20 +206,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             UnsupportedLossMethodError: If loss_fn is None and the topic's loss_method
                                         is not supported by the SDK's default implementations.
         """
-        wallet_initialized = init_worker_wallet(wallet, topic_id)
-        fee_granter = resolve_fee_granter(wallet, wallet_initialized)
-        wallet_config = AlloraWalletConfig(
-            wallet=wallet_initialized, fee_granter=fee_granter
-        )
-        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
-        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
-        # leave a caller's wallet for the caller to manage.
-        wallet_config._sdk_owned = not (wallet and wallet.wallet)
-        client = AlloraRPCClient(
-            wallet=wallet_config,
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
                 reputer_fn=reputer_fn,
@@ -257,20 +266,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as a forecaster
         """
-        wallet_initialized = init_worker_wallet(wallet, topic_id)
-        fee_granter = resolve_fee_granter(wallet, wallet_initialized)
-        wallet_config = AlloraWalletConfig(
-            wallet=wallet_initialized, fee_granter=fee_granter
-        )
-        # init_worker_wallet built the wallet (e.g. a provisioned RemoteWallet) unless the caller
-        # supplied a pre-built one; mark SDK-built wallets so the client owns and closes them, and
-        # leave a caller's wallet for the caller to manage.
-        wallet_config._sdk_owned = not (wallet and wallet.wallet)
-        client = AlloraRPCClient(
-            wallet=wallet_config,
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
             use_case=Forecaster(
                 topic_id=topic_id,
