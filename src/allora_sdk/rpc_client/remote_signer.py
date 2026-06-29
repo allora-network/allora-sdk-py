@@ -354,10 +354,11 @@ class ForgeBackendClient:
             )
 
         if not raw:
-            # A 2xx with an empty body (e.g. 204 No Content from clear-association) is a
-            # success with no JSON payload. Return an empty mapping rather than failing the
-            # JSON parse; callers that need fields validate them separately and would still
-            # surface a clear "unexpected response" error if the body were wrongly empty.
+            # Defensive fallback for a 2xx with a genuinely empty body. forge-v2 today returns
+            # 200 + {"message": "..."} for clear-association / revoke (not 204), but a future 204
+            # No Content (or any empty 2xx) is still a success with no JSON payload, so return an
+            # empty mapping rather than failing the JSON parse; callers that need fields validate
+            # them separately and would surface a clear "unexpected response" error if wrongly empty.
             return {}
 
         # Verify the backend actually returned JSON before parsing. A captive portal, auth
