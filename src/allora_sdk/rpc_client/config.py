@@ -1,9 +1,33 @@
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
 from cosmpy.aerial.wallet import Wallet
 from cosmpy.crypto.address import Address
+
+
+def _read_fee_granter(prefix: str) -> Optional[str]:
+    """Read the fee-granter address, honoring the canonical name and deprecated alias.
+
+    ``FORGE_MASTER_GRANTER_ADDRESS`` is the canonical name shared across the Allora SDKs
+    (allora-sdk-py / allora-sdk-ts / allora-sdk-go). The former ``FEE_GRANTER`` is still
+    accepted for one release (with a ``DeprecationWarning``) so existing 12-factor
+    deployments keep working through the rename.
+    """
+    granter = os.getenv(prefix + "FORGE_MASTER_GRANTER_ADDRESS")
+    if granter is not None:
+        return granter
+    legacy = os.getenv(prefix + "FEE_GRANTER")
+    if legacy is not None:
+        warnings.warn(
+            f"{prefix}FEE_GRANTER is deprecated; rename it to "
+            f"{prefix}FORGE_MASTER_GRANTER_ADDRESS (the canonical fee-granter env var "
+            "shared across the Allora SDKs). FEE_GRANTER will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+    return legacy
 
 
 @dataclass
@@ -56,7 +80,9 @@ class AlloraWalletConfig:
         3. Local key — ``PRIVATE_KEY`` / ``MNEMONIC`` / ``MNEMONIC_FILE``.
 
         ``FORGE_BACKEND_URL`` (default ``https://forge.allora.network``), ``ADDRESS_PREFIX``
-        (default ``allo``), and ``FEE_GRANTER`` are read in all modes.
+        (default ``allo``), and the fee-granter address (``FORGE_MASTER_GRANTER_ADDRESS``,
+        the canonical name shared across the Allora SDKs, or the deprecated ``FEE_GRANTER``)
+        are read in all modes.
 
         Args:
             env_prefix: Optional prefix applied to every variable name (e.g. ``"ALLORA_"``).
@@ -70,7 +96,7 @@ class AlloraWalletConfig:
         """
         p = env_prefix or ""
         prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
-        fee_granter = os.getenv(p + "FEE_GRANTER")
+        fee_granter = _read_fee_granter(p)
 
         # Privy-delegated signing: if the Forge env vars are present, build a RemoteWallet
         # so 12-factor deployments can use delegated signing without hand-written wiring.

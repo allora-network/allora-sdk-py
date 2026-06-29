@@ -184,7 +184,7 @@ def test_from_env_builds_remote_wallet(backend, monkeypatch):
     assert str(cfg.wallet.address()) == str(Address(priv.public_key, "allo"))
 
 
-def test_from_env_reads_fee_granter(backend, monkeypatch):
+def test_from_env_reads_fee_granter_canonical(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 
     _priv, url = backend
@@ -192,10 +192,42 @@ def test_from_env_reads_fee_granter(backend, monkeypatch):
     monkeypatch.setenv("FORGE_API_KEY", API_KEY)
     monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
     monkeypatch.setenv("FORGE_BACKEND_URL", url)
-    monkeypatch.setenv("FEE_GRANTER", granter)
+    monkeypatch.setenv("FORGE_MASTER_GRANTER_ADDRESS", granter)
 
     cfg = AlloraWalletConfig.from_env()
     assert cfg.fee_granter == granter
+
+
+def test_from_env_reads_fee_granter_legacy_alias_warns(backend, monkeypatch):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    _priv, url = backend
+    granter = str(Address(PrivateKey().public_key, "allo"))
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("FORGE_BACKEND_URL", url)
+    monkeypatch.delenv("FORGE_MASTER_GRANTER_ADDRESS", raising=False)
+    monkeypatch.setenv("FEE_GRANTER", granter)  # deprecated alias, still honored
+
+    with pytest.warns(DeprecationWarning, match="FORGE_MASTER_GRANTER_ADDRESS"):
+        cfg = AlloraWalletConfig.from_env()
+    assert cfg.fee_granter == granter
+
+
+def test_from_env_fee_granter_canonical_takes_precedence(backend, monkeypatch):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    _priv, url = backend
+    canonical = str(Address(PrivateKey().public_key, "allo"))
+    legacy = str(Address(PrivateKey().public_key, "allo"))
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("FORGE_BACKEND_URL", url)
+    monkeypatch.setenv("FORGE_MASTER_GRANTER_ADDRESS", canonical)
+    monkeypatch.setenv("FEE_GRANTER", legacy)
+
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.fee_granter == canonical
 
 
 def test_fee_granter_invalid_bech32_rejected():

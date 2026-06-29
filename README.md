@@ -323,7 +323,7 @@ worker = AlloraWorker.inferer(
     wallet=AlloraWalletConfig(
         wallet=remote,
         # Subsidize gas from a master wallet via feegrant (optional).
-        fee_granter=os.environ.get("FEE_GRANTER"),
+        fee_granter=os.environ.get("FORGE_MASTER_GRANTER_ADDRESS"),
     ),
     run=run_model,
 )
@@ -337,8 +337,10 @@ no ALLO of its own. Leave `fee_granter` unset to have the signing wallet pay its
 For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds the remote
 wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
 (`FORGE_BACKEND_URL` defaults to `https://forge.allora.network`), alongside the existing
-`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FEE_GRANTER` to enable the
-feegrant subsidy described above.
+`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FORGE_MASTER_GRANTER_ADDRESS`
+(the canonical fee-granter env var shared across the Allora SDKs) to enable the feegrant
+subsidy described above. The former name `FEE_GRANTER` is still accepted for one release
+with a deprecation warning.
 
 > **Migration note:** `AlloraWalletConfig` now requires *exactly one* signing-credential
 > source. Configuring more than one of `private_key` / `mnemonic` / `mnemonic_file` / `wallet`
