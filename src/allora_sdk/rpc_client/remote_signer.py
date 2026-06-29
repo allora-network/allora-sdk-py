@@ -222,10 +222,12 @@ class ForgeBackendClient:
     def provision_wallet(
         self, topic_id: int, label: Optional[str] = None
     ) -> SigningWalletInfo:
-        """Idempotently get-or-create the user's signing wallet bound to ``topic_id`` and return
-        its non-secret info (id, address, pubkey). Rides on POST /api/v1/signing-wallets with a
-        ``topic_id`` body (a static /provision sub-route collides with /:id in the backend router).
-        Safe to call on every worker start: the backend enforces one wallet per (user, topic).
+        """Idempotently get-or-create the user's signing wallet bound to ``topic_id``.
+
+        Returns its non-secret info (id, address, pubkey). Rides on POST /api/v1/signing-wallets
+        with a ``topic_id`` body (a static /provision sub-route collides with /:id in the backend
+        router). Safe to call on every worker start: the backend enforces one wallet per
+        (user, topic).
         """
         body: dict[str, Any] = {"topic_id": topic_id}
         if label:
@@ -234,8 +236,9 @@ class ForgeBackendClient:
         return _validate(SigningWalletInfo, raw, "provision-wallet")
 
     def clear_association(self, wallet_id: str) -> None:
-        """Release a managed wallet's topic binding (Forge-side bookkeeping only; does NOT
-        unregister the worker on-chain). Mirrors POST
+        """Release a managed wallet's topic binding (Forge-side bookkeeping only).
+
+        Does NOT unregister the worker on-chain. Mirrors POST
         /api/v1/signing-wallets/{id}/clear-association. Raises :class:`ForgeBackendError` on a
         non-2xx response (e.g. 404 for an unknown / foreign / already-cleared wallet), so the
         caller decides whether an unbind failure is fatal or best-effort.
@@ -244,13 +247,14 @@ class ForgeBackendClient:
         self._request("POST", f"/api/v1/signing-wallets/{wid}/clear-association")
 
     def revoke_wallet(self, wallet_id: str) -> None:
-        """Permanently revoke (delete) a managed signing wallet via DELETE
-        /api/v1/signing-wallets/{id}. Unlike :meth:`clear_association` (which only releases the
-        topic binding), this deletes the wallet itself; it does NOT unregister the worker
-        on-chain. ``wallet_id`` is validated as a UUID locally (forge-v2 keys signing wallets by
-        Privy UUID) so a typo fails fast as a :class:`WalletConfigError` rather than as an opaque
-        404 after a destructive call is issued. Like clear_association the DELETE is not auto-
-        retried (the session retries only idempotent GETs), and a non-2xx response raises
+        """Permanently revoke (delete) a managed signing wallet.
+
+        Issues DELETE /api/v1/signing-wallets/{id}. Unlike :meth:`clear_association` (which only
+        releases the topic binding), this deletes the wallet itself; it does NOT unregister the
+        worker on-chain. ``wallet_id`` is validated as a UUID locally (forge-v2 keys signing
+        wallets by Privy UUID) so a typo fails fast as a :class:`WalletConfigError` rather than as
+        an opaque 404 after a destructive call is issued. Like clear_association the DELETE is not
+        auto-retried (the session retries only idempotent GETs), and a non-2xx response raises
         :class:`ForgeBackendError` (e.g. 404 for an unknown / foreign / already-revoked wallet),
         so the caller decides whether a revoke failure is fatal or best-effort.
         """
@@ -700,6 +704,20 @@ def make_remote_wallet(
     ``address`` to keep the local pubkey↔address cross-check; note the backend is not
     contacted until the first signing call, so the ``(api_key, wallet_id)`` binding is
     not validated at construction time.
+
+    Args:
+        backend_url: Base URL of the Forge backend (https://, or http:// for loopback).
+        api_key: The Forge API key authorizing delegated signing.
+        wallet_id: The signing wallet's UUID (normalized to canonical form).
+        prefix: Bech32 address prefix for the derived address (default ``"allo"``).
+        timeout: Per-request HTTP timeout in seconds.
+        public_key_hex: Optional 33-byte compressed pubkey hex; when given, skips the
+            blocking wallet-info fetch.
+        address: Optional expected bech32 address, cross-checked against the pubkey.
+        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session).
+
+    Returns:
+        A :class:`RemoteWallet` that signs via the Forge backend.
     """
     return RemoteWallet(
         backend_url,
@@ -722,14 +740,29 @@ def provision_remote_wallet(
     timeout: float = DEFAULT_TIMEOUT,
     client: Optional[ForgeBackendClient] = None,
 ) -> RemoteWallet:
-    """Idempotently get-or-create the user's managed wallet bound to ``topic_id`` (one worker =
-    one topic) and return a :class:`RemoteWallet` for it. Safe to call on every worker start.
+    """Idempotently get-or-create the user's managed wallet bound to ``topic_id``.
 
-    The provisioned wallet's pubkey/address are returned by the provision call, so the resulting
-    RemoteWallet is built without a second (blocking) wallet-info fetch. If the provision response
-    carries a ``master_granter`` (the backend-configured feegrant fee payer), it is captured on
-    the wallet as ``fee_granter`` so a worker can subsidize gas without explicit config; an
-    explicit fee_granter / ``FORGE_MASTER_GRANTER_ADDRESS`` overrides it at the worker layer.
+    One worker = one topic. Safe to call on every worker start. The provisioned wallet's
+    pubkey/address are returned by the provision call, so the resulting RemoteWallet is built
+    without a second (blocking) wallet-info fetch. If the provision response carries a
+    ``master_granter`` (the backend-configured feegrant fee payer), it is captured on the wallet
+    as ``fee_granter`` so a worker can subsidize gas without explicit config; an explicit
+    fee_granter / ``FORGE_MASTER_GRANTER_ADDRESS`` overrides it at the worker layer.
+
+    Args:
+        backend_url: Base URL of the Forge backend (https://, or http:// for loopback).
+        api_key: The Forge API key authorizing delegated signing.
+        topic_id: The worker's topic the wallet is bound to. Must be positive.
+        label: Optional display-only label stored against the wallet.
+        prefix: Bech32 address prefix for the derived address (default ``"allo"``).
+        timeout: Per-request HTTP timeout in seconds.
+        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session).
+
+    Returns:
+        A :class:`RemoteWallet` bound to ``topic_id`` that signs via the Forge backend.
+
+    Raises:
+        ValueError: If ``topic_id`` is not positive.
     """
     if topic_id <= 0:
         # forge-v2 keys signing wallets by (user, topic_id); a sentinel 0/negative would bind a
