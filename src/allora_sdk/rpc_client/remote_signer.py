@@ -735,13 +735,13 @@ def provision_remote_wallet(
         # forge-v2 keys signing wallets by (user, topic_id); a sentinel 0/negative would bind a
         # wallet to a non-existent on-chain topic or silently collide two workers on one wallet.
         raise ValueError(f"provision requires a positive topic_id, got {topic_id}")
-    c = (
+    forge_client = (
         client
         if client is not None
         else ForgeBackendClient(backend_url, api_key, timeout)
     )
     try:
-        info = c.provision_wallet(topic_id, label)
+        info = forge_client.provision_wallet(topic_id, label)
         return RemoteWallet(
             backend_url,
             api_key,
@@ -750,12 +750,12 @@ def provision_remote_wallet(
             timeout=timeout,
             public_key_hex=info.pubkey,
             address=info.address,
-            client=c,
+            client=forge_client,
             fee_granter=info.master_granter,
         )
     except Exception:
         # Close the client we created if provisioning or wallet construction fails, so the owned
         # HTTP session isn't leaked. A caller-injected client is left for the caller to manage.
         if client is None:
-            c.close()
+            forge_client.close()
         raise
