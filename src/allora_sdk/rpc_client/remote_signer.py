@@ -506,7 +506,8 @@ class RemoteSigner(Signer):
         # with allora-sdk-ts (the fail-closed reference); forge-v2 always returns it today.
         if not response_pubkey:
             raise ForgeBackendError(
-                "forge sign response omitted the pubkey echo; cannot verify the backend signed with the expected wallet"
+                "forge sign response omitted the pubkey echo; "
+                "cannot verify the backend signed with the expected wallet"
             )
         try:
             resp_bytes = bytes.fromhex(response_pubkey)
