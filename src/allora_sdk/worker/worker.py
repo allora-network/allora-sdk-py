@@ -17,6 +17,7 @@ from typing import Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
+from cosmpy.aerial.wallet import Wallet
 import async_timeout
 
 from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
@@ -48,7 +49,7 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet
+from allora_sdk.worker.utils import init_worker_wallet, resolve_fee_granter
 
 logger = logging.getLogger("allora_sdk")
 
@@ -59,6 +60,40 @@ WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES = 10
+
+
+def _build_worker_client(
+    wallet: Optional[AlloraWalletConfig],
+    topic_id: int,
+    network: AlloraNetworkConfig,
+    debug: bool,
+) -> tuple[Wallet, AlloraRPCClient]:
+    """Resolve a worker's wallet + fee-granter and build its AlloraRPCClient.
+
+    Shared by the inferer/reputer/forecaster factories so their identical wallet wiring lives in
+    one place. ``_sdk_owned`` is set from whether the SDK built the wallet (init_worker_wallet
+    provisioned a RemoteWallet) vs. the caller supplying a pre-built one, and passed through the
+    constructor rather than mutated afterward, so AlloraRPCClient.close() releases only SDK-built
+    wallets' resources.
+
+    Args:
+        wallet: The worker's wallet configuration, or None for the default key-file flow.
+        topic_id: The worker's topic (used to provision a managed wallet when applicable).
+        network: The Allora network configuration.
+        debug: Whether to enable debug logging on the client.
+
+    Returns:
+        The resolved concrete Wallet and the AlloraRPCClient built around it.
+    """
+    wallet_initialized = init_worker_wallet(wallet, topic_id)
+    fee_granter = resolve_fee_granter(wallet, wallet_initialized)
+    wallet_config = AlloraWalletConfig(
+        wallet=wallet_initialized,
+        fee_granter=fee_granter,
+        _sdk_owned=not (wallet and wallet.wallet),
+    )
+    client = AlloraRPCClient(wallet=wallet_config, network=network, debug=debug)
+    return wallet_initialized, client
 
 
 class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
@@ -108,12 +143,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as an inferer
         """
-        wallet_initialized = init_worker_wallet(wallet)
-        client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
                 topic_id=topic_id,
@@ -176,12 +206,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             UnsupportedLossMethodError: If loss_fn is None and the topic's loss_method
                                         is not supported by the SDK's default implementations.
         """
-        wallet_initialized = init_worker_wallet(wallet)
-        client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
                 reputer_fn=reputer_fn,
@@ -241,12 +266,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         Returns:
             An instance of AlloraWorker configured as a forecaster
         """
-        wallet_initialized = init_worker_wallet(wallet)
-        client = AlloraRPCClient(
-            wallet=AlloraWalletConfig(wallet=wallet_initialized),
-            network=network,
-            debug=debug,
-        )
+        wallet_initialized, client = _build_worker_client(wallet, topic_id, network, debug)
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
             use_case=Forecaster(
                 topic_id=topic_id,
@@ -361,6 +381,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _log_balance(self):
         await self._ensure_initialized()
 
+        # A fee-granted signing wallet holds zero ALLO by design (the granter pays the fees), so a
+        # balance line here is misleading noise — and the account may not exist on-chain yet. Gate
+        # on the same client.fee_granter the faucet pre-flight uses (the value TxManager broadcasts).
+        if self.client.fee_granter:
+            return
+
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
             logger.error(f"Could not check balance for {self.address}")
@@ -373,6 +399,15 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
     async def _maybe_faucet_request(self):
         await self._ensure_initialized()
+
+        # With a feegrant granter configured, the granter pays tx fees and the signing wallet is
+        # expected to hold zero ALLO (ENGN-8456), so funding it is unnecessary: skip the faucet
+        # top-up entirely. This avoids wasting testnet faucet quota on a wallet that never needs
+        # funds — and a 429 here would otherwise sys.exit the worker. Read the granter from the
+        # client (the single source of truth the TxManager broadcasts with) so this pre-flight
+        # and TxManager._pre_flight_checks always gate on the same value.
+        if self.client.fee_granter:
+            return
 
         if self._chain_id != "allora-testnet-1":
             return
@@ -728,10 +763,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     logger.info(f"     - View on explorer: {explorer_url}")
                     self.submitted_nonces.add(nonce)
 
-                resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
-                if resp.balance is None:
-                    logger.error(f"❌ Could not check balance for {self.address}")
-                    return
+                # Under managed custody (fee_granter set) the signing wallet may have no on-chain
+                # account yet, so resp.balance is legitimately None — don't treat that as an error
+                # or skip the post-broadcast bookkeeping below. Same gate as the faucet pre-flight.
+                if not self.client.fee_granter:
+                    resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
+                    if resp.balance is None:
+                        logger.error(f"❌ Could not check balance for {self.address}")
+                        return
 
                 await self._log_balance()
                 await self._maybe_faucet_request()

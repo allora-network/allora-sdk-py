@@ -25,6 +25,9 @@ def _make_worker_client() -> Mock:
     client.events = Mock()
     client.events.subscribe_new_block_events_typed = AsyncMock(return_value="sub-id")
     client.events.unsubscribe = AsyncMock()
+    # Default to no fee granter; a Mock attribute would otherwise auto-vivify to a truthy value
+    # and wrongly trip the worker's faucet skip (which reads client.fee_granter).
+    client.fee_granter = None
     return client
 
 
@@ -66,6 +69,54 @@ async def test_faucet_request_omits_api_key_header_when_unset() -> None:
         await worker._maybe_faucet_request()
 
     assert post.call_args.kwargs["headers"] == {"x-api-key": "None"}
+
+
+@pytest.mark.asyncio
+async def test_faucet_skipped_when_fee_granter_set() -> None:
+    # A fee-granted worker's signer is expected to hold zero ALLO (the granter pays fees), so the
+    # faucet top-up must be skipped entirely — no balance query, no faucet POST, even on testnet
+    # with a faucet_url configured. The granter is read from the client (single source of truth),
+    # mirroring TxManager._pre_flight_checks' fee_granter skip.
+    client = _make_worker_client()
+    client.fee_granter = "allo1granter"
+    worker = AlloraWorker(
+        use_case=_make_use_case(),
+        client=client,
+        address="allo1worker",
+        api_key=None,
+        topic_id=69,
+        show_banner=False,
+    )
+    worker._initialized = True
+    worker._chain_id = "allora-testnet-1"
+
+    with patch("allora_sdk.worker.worker.requests.post") as post:
+        await worker._maybe_faucet_request()
+
+    post.assert_not_called()
+    client.bank.query.balance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_log_balance_skipped_when_fee_granter_set() -> None:
+    # A fee-granted signing wallet holds zero ALLO by design, so _log_balance must not query or log
+    # a (misleading) balance — same client.fee_granter gate as the faucet pre-flight.
+    client = _make_worker_client()
+    client.fee_granter = "allo1granter"
+    worker = AlloraWorker(
+        use_case=_make_use_case(),
+        client=client,
+        address="allo1worker",
+        api_key=None,
+        topic_id=69,
+        show_banner=False,
+    )
+    worker._initialized = True
+    worker._chain_id = "allora-testnet-1"
+
+    await worker._log_balance()
+
+    client.bank.query.balance.assert_not_called()
 
 
 @pytest.mark.asyncio

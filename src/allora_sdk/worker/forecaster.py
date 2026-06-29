@@ -1,6 +1,6 @@
 import logging
 from typing import Dict
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     CanSubmitWorkerPayloadRequest,
@@ -34,7 +34,7 @@ class Forecaster:
 
     def __init__(
         self,
-        wallet: LocalWallet,
+        wallet: Wallet,
         client: AlloraRPCClient,
         topic_id: int,
         run: TForecasterRunFn,

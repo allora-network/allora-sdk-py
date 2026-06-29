@@ -2,6 +2,28 @@
 
 # CHANGELOG
 
+## Unreleased
+
+### Added
+
+- Privy-delegated (managed-custody) signing: the worker can sign through the Forge backend
+  with no local private key via `make_remote_wallet` / `provision_remote_wallet` /
+  `RemoteWallet`, or the `FORGE_API_KEY` (+ optional `FORGE_SIGNING_WALLET_ID`) environment
+  variables in `AlloraWalletConfig.from_env`. See the README's "Privy-Managed (Delegated)
+  Signing" section.
+
+### Breaking changes
+
+- `AlloraWalletConfig` now requires **exactly one** signing-credential source. Previously, if
+  more than one of `private_key` / `mnemonic` / `mnemonic_file` / `wallet` was set (or more than
+  one of the `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` env vars), the config silently picked
+  one by a fixed precedence. It now raises `ValueError` at construction (and from
+  `AlloraWalletConfig.from_env`). Setting `FORGE_API_KEY` alongside any local credential is
+  rejected for the same reason.
+  **Migration:** before upgrading, ensure only one credential source is configured — remove any
+  stale `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` env vars (a common mid-migration state) so
+  startup does not fail with "Exactly one of ... must be provided".
+
 ## v1.1.0
 
 - `AlloraWorker`

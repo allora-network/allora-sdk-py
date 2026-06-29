@@ -1,4 +1,5 @@
 import asyncio
+import functools
 from enum import Enum
 import traceback
 import grpc
@@ -8,12 +9,14 @@ import logging
 from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
+from cosmpy.crypto.address import Address
 from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
+from allora_sdk.rpc_client._executors import signing_executor
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -28,6 +31,7 @@ from allora_sdk.rpc_client.interfaces import (
 )
 
 logger = logging.getLogger("allora_sdk")
+
 
 class PendingTx:
     def __init__(
@@ -116,7 +120,7 @@ class TxTimeoutError(Exception):
 class TxManager:
     def __init__(
         self,
-        wallet: LocalWallet,
+        wallet: Wallet,
         tx_client: CosmosTxV1Beta1ServiceLike,
         auth_client: CosmosAuthV1Beta1QueryLike,
         bank_client: CosmosBankV1Beta1QueryLike,
@@ -124,6 +128,7 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
+        fee_granter: Optional[str] = None,
     ):
         self.wallet = wallet
         self.tx_client = tx_client
@@ -133,6 +138,12 @@ class TxManager:
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
+        # bech32 address of a feegrant granter (master/subsidy wallet) that pays fees on
+        # behalf of self.wallet; None means the signing wallet pays its own fees.
+        self._fee_granter = fee_granter
+        # Parse the granter once at construction (validates the bech32) instead of re-parsing it
+        # on every broadcast; AlloraWalletConfig validates the HRP-vs-prefix match at config time.
+        self._granter_address: Optional[Address] = Address(fee_granter) if fee_granter else None
         self.parent_tx_id = 0
         self._parent_tx_id_lock = asyncio.Lock()
 
@@ -441,15 +452,27 @@ class TxManager:
         resolved_seq = account_seq if account_seq is not None else info.sequence
         logger.debug(f"Account info: seq={resolved_seq}, num={info.account_number}")
 
+        # When a feegrant granter is configured, set it as the fee payer so the signing
+        # wallet needs no ALLO of its own (the granter must have an on-chain allowance).
+        # Uses the address parsed once at construction (see __init__).
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self._granter_address),
         )
 
-        tx.sign(
-            signer=self.wallet.signer(),
-            chain_id=self.config.chain_id,
-            account_number=info.account_number,
+        # Offload to the dedicated signing pool: a RemoteSigner signs via a blocking HTTPS
+        # call to the Forge backend, which would otherwise freeze the event loop. The
+        # dedicated pool keeps a stalled backend from starving other to_thread work such as
+        # websocket-callback dispatch. (For local wallets this is fast CPU work; harmless.)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            signing_executor,
+            functools.partial(
+                tx.sign,
+                signer=self.wallet.signer(),
+                chain_id=self.config.chain_id,
+                account_number=info.account_number,
+            ),
         )
 
         tx.complete()
@@ -755,6 +778,13 @@ class TxManager:
     async def _pre_flight_checks(self):
         if not self.wallet:
             raise Exception("No wallet configured")
+
+        # With a feegrant granter configured, the granter pays all fees and the signing
+        # wallet is expected to hold zero ALLO (ENGN-8456), so a balance check here would
+        # wrongly reject it with InsufficientBalanceError. The granter's on-chain allowance
+        # is enforced by the chain at broadcast time, not pre-flight.
+        if self._fee_granter:
+            return
 
         try:
             # Check if account exists

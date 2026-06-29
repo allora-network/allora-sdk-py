@@ -1,5 +1,19 @@
 from .worker import AlloraWorker
-from .rpc_client import AlloraRPCClient, AlloraNetworkConfig, AlloraWalletConfig, TxManager, FeeTier
+from .rpc_client import (
+    AlloraRPCClient,
+    AlloraNetworkConfig,
+    AlloraWalletConfig,
+    TxManager,
+    FeeTier,
+    RemoteSigner,
+    RemoteWallet,
+    make_remote_wallet,
+    provision_remote_wallet,
+    RemoteSignerError,
+    ForgeBackendError,
+    WalletConfigError,
+    ForgeBackendClient,
+)
 from .rpc_client.protos.emissions.v3 import ValueBundle
 from .api_client import AlloraAPIClient
 from .logging_config import setup_sdk_logging
@@ -24,6 +38,14 @@ __all__ = [
     "setup_sdk_logging",
     "LocalWallet",
     "PrivateKey",
+    "RemoteSigner",
+    "RemoteWallet",
+    "make_remote_wallet",
+    "provision_remote_wallet",
+    "RemoteSignerError",
+    "ForgeBackendError",
+    "WalletConfigError",
+    "ForgeBackendClient",
     # Loss methods
     "get_default_loss_fn",
     "is_supported_loss_method",

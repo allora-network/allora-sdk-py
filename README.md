@@ -296,6 +296,64 @@ Wire protocol is determined by the RPC url string passed to the config construct
 - **Multi-chain**: Testnet and mainnet support come with batteries included, but there is maximal configurability.  Can be used with other Cosmos SDK chains.
 - **Type safety**: Full protobuf type and service definitions, codegen clients
 
+### Privy-Managed (Delegated) Signing
+
+By default the worker signs with a local key (mnemonic / private key / `.allora_key`).
+Alternatively, you can delegate signing to the Forge backend, which signs with a
+Privy-managed server wallet — the worker holds no private key. `make_remote_wallet()`
+returns a cosmpy `Wallet` you pass via `AlloraWalletConfig(wallet=...)`; the worker loop
+and both tx + bundle signing work unchanged.
+
+```python
+import os
+from allora_sdk import (
+    AlloraWorker, AlloraNetworkConfig, AlloraWalletConfig, make_remote_wallet,
+)
+
+# wallet_id + api_key are minted in the Forge web app.
+remote = make_remote_wallet(
+    backend_url="https://forge.allora.network",
+    api_key=os.environ["FORGE_API_KEY"],
+    wallet_id=os.environ["FORGE_SIGNING_WALLET_ID"],
+)
+
+worker = AlloraWorker.inferer(
+    topic_id=69,
+    network=AlloraNetworkConfig.testnet(),
+    wallet=AlloraWalletConfig(
+        wallet=remote,
+        # Subsidize gas from a master wallet via feegrant (optional).
+        fee_granter=os.environ.get("FORGE_MASTER_GRANTER_ADDRESS"),
+    ),
+    run=run_model,
+)
+```
+
+Worker gas can be subsidized by a master-wallet feegrant: set `fee_granter` to the master
+wallet address (which must hold an on-chain feegrant allowance for the signing wallet) and
+transactions are broadcast with that granter as the fee payer, so the signing wallet needs
+no ALLO of its own. Leave `fee_granter` unset to have the signing wallet pay its own fees.
+When it is unset, a worker on the managed (Privy) custody path will use the master granter the
+Forge backend reports for the wallet — returned on provision and wallet-info responses as
+`master_granter` — so a server-configured feegrant is discovered and applied automatically at
+runtime. An explicit `fee_granter` (or the `FORGE_MASTER_GRANTER_ADDRESS` env var) always
+overrides the discovered value.
+
+For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds the remote
+wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
+(`FORGE_BACKEND_URL` defaults to `https://forge.allora.network`), alongside the existing
+`PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FORGE_MASTER_GRANTER_ADDRESS`
+(the canonical fee-granter env var shared across the Allora SDKs) to enable the feegrant
+subsidy described above. The former name `FEE_GRANTER` is still accepted for one release
+with a deprecation warning.
+
+> **Migration note:** `AlloraWalletConfig` now requires *exactly one* signing-credential
+> source. Configuring more than one of `private_key` / `mnemonic` / `mnemonic_file` / `wallet`
+> (or more than one of the `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` env vars), or
+> combining `FORGE_API_KEY` with any local credential, now raises `ValueError` at startup
+> instead of silently picking one by precedence. Remove any stale credential env vars before
+> upgrading. See the CHANGELOG for details.
+
 ## Allora API Client
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.

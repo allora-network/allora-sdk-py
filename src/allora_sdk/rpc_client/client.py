@@ -18,7 +18,7 @@ from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.crypto.keypairs import PrivateKey
 
 import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
@@ -96,7 +96,7 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     tx_manager: Optional[TxManager] = None
 
     def __init__(
@@ -164,6 +164,7 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
+                fee_granter=self._fee_granter,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
@@ -183,28 +184,60 @@ class AlloraRPCClient:
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
+        self._fee_granter: Optional[str] = wallet.fee_granter if wallet else None
+        # Whether this client built (and therefore should close) the wallet. A pre-built wallet
+        # passed via AlloraWalletConfig(wallet=...) is caller-owned and may be shared across
+        # clients, so close() must not tear down its (possibly shared) HTTP session.
+        self._owns_wallet: bool = False
         if not wallet:
             return
+
+        # A forge_api_key-only config defers wallet provisioning to a worker's topic, which
+        # AlloraRPCClient cannot supply on its own. Without this guard every branch below is
+        # skipped, self.wallet stays None, and tx_manager is silently never built — so a later
+        # signing attempt fails far from the config site with a confusing "No wallet configured".
+        if wallet.forge_api_key and not (
+            wallet.wallet or wallet.private_key or wallet.mnemonic or wallet.mnemonic_file
+        ):
+            raise ValueError(
+                "AlloraWalletConfig(forge_api_key=...) defers wallet provisioning to a worker "
+                "topic, which AlloraRPCClient cannot supply. Use AlloraWorker.inferer/reputer/"
+                "forecaster (they provision a wallet bound to the worker's topic), or pass an "
+                "explicit wallet=/private_key=/mnemonic=."
+            )
 
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
-                logger.debug("Wallet initialized from LocalWallet")
+                # A caller-supplied pre-built wallet belongs to the caller (and may be shared
+                # across clients), so we do not close it. But a wallet the SDK built itself
+                # (from_env's RemoteWallet path, or a worker factory that provisioned one) is
+                # client-owned — close() must release its Forge HTTP session, or it leaks.
+                self._owns_wallet = wallet._sdk_owned
+                # Ownership moves once: the SDK-built wallet has a single instance, so hand it to
+                # the first client and clear the flag. Otherwise a second client built from the same
+                # (reused) config would also claim ownership and its close() would tear down a
+                # RemoteWallet still in use by the first client.
+                wallet._sdk_owned = False
+                logger.debug("Wallet initialized from pre-built %s", type(wallet.wallet).__name__)
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
-                self.wallet = LocalWallet(pk, prefix="allo")
+                self.wallet = LocalWallet(pk, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
-                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
-                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix="allo")
+                self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
-            logger.error(f"Failed to initialize wallet: {e}")
-            raise ValueError(f"Invalid wallet credentials: {e}")
+            logger.error("Failed to initialize wallet: %s", e)
+            raise ValueError(f"Invalid wallet credentials: {e}") from e
     
 
     async def raise_for_chain_id_mismatch(self):
@@ -231,6 +264,17 @@ class AlloraRPCClient:
         if self.wallet:
             return self.wallet.public_key().public_key_hex
         return None
+
+
+    @property
+    def fee_granter(self) -> Optional[str]:
+        """The configured feegrant master/subsidy wallet (the fee payer), or None.
+
+        This is the single source of truth for the resolved fee-granter: it is the value the
+        TxManager uses to set the granter on every broadcast, so callers (e.g. AlloraWorker's
+        faucet pre-flight) can gate on it without holding a separate copy.
+        """
+        return self._fee_granter
     
 
     async def close(self):
@@ -240,6 +284,13 @@ class AlloraRPCClient:
             await self.events.stop()
         if hasattr(self, "grpc_client") and self.grpc_client:
             self.grpc_client.close()
+        # Release resources only for a wallet this client built (e.g. a RemoteWallet's Forge
+        # backend HTTP session). A pre-built wallet passed in by the caller is left untouched: the
+        # caller owns its lifecycle and may share it across clients (the documented multi-worker
+        # shared-wallet pattern), so closing it here would break still-running siblings. Duck-typed
+        # on close() rather than isinstance(RemoteWallet) so any future wallet type is handled.
+        if self._owns_wallet and hasattr(self.wallet, "close"):
+            self.wallet.close()
 
 
     @classmethod
