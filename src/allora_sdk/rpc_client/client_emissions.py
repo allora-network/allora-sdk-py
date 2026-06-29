@@ -21,7 +21,8 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputForecast,
     RegisterRequest,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError, _signing_executor
+from allora_sdk.rpc_client._executors import signing_executor
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError
 from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 
@@ -151,7 +152,7 @@ class EmissionsTxs:
         # the event loop (websocket subscriber, other workers, tx monitor).
         loop = asyncio.get_running_loop()
         bundle_sig = await loop.run_in_executor(
-            _signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
+            signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
         )
 
         worker_data_bundle = InputWorkerDataBundle(
@@ -287,7 +288,7 @@ class EmissionsTxs:
         # the event loop (websocket subscriber, other workers, tx monitor).
         loop = asyncio.get_running_loop()
         bundle_sig = await loop.run_in_executor(
-            _signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
+            signing_executor, self._txs.wallet.signer().sign_digest, bundle_digest
         )
 
         reputer_value_bundle = InputReputerValueBundle(

@@ -1,7 +1,5 @@
 import asyncio
 import functools
-import os
-from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 import traceback
 import grpc
@@ -18,6 +16,7 @@ from cosmpy.crypto.address import Address
 from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
+from allora_sdk.rpc_client._executors import signing_executor
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -32,49 +31,6 @@ from allora_sdk.rpc_client.interfaces import (
 )
 
 logger = logging.getLogger("allora_sdk")
-
-# Delegated (RemoteSigner) signing makes a blocking HTTPS call to the Forge backend, so it
-# runs in a worker thread to avoid freezing the event loop. Use a dedicated pool rather than
-# asyncio's shared default ThreadPoolExecutor, so a stalled backend cannot starve unrelated
-# to_thread work — notably websocket-callback dispatch (run_in_executor(None, ...)) and faucet
-# calls. Module-level: process-lifetime; its daemon threads are reclaimed at interpreter exit.
-DEFAULT_SIGNING_POOL_SIZE = 8
-
-
-def _signing_pool_size() -> int:
-    """Resolve the delegated-signing thread-pool size from ALLORA_SIGNING_POOL_SIZE.
-
-    The pool is shared process-wide across all workers, and each nonce consumes two slots
-    (bundle signature + tx signature), so deployments running many concurrent workers against a
-    slow Forge backend can raise this. Invalid or non-positive values fall back to the default
-    with a warning.
-
-    Returns:
-        The configured pool size, or DEFAULT_SIGNING_POOL_SIZE if unset/invalid.
-    """
-    raw = os.getenv("ALLORA_SIGNING_POOL_SIZE")
-    if not raw:
-        return DEFAULT_SIGNING_POOL_SIZE
-    try:
-        size = int(raw)
-    except ValueError:
-        logger.warning(
-            "invalid ALLORA_SIGNING_POOL_SIZE=%r; using default %d", raw, DEFAULT_SIGNING_POOL_SIZE
-        )
-        return DEFAULT_SIGNING_POOL_SIZE
-    if size < 1:
-        logger.warning(
-            "ALLORA_SIGNING_POOL_SIZE must be >= 1, got %d; using default %d",
-            size,
-            DEFAULT_SIGNING_POOL_SIZE,
-        )
-        return DEFAULT_SIGNING_POOL_SIZE
-    return size
-
-
-_signing_executor = ThreadPoolExecutor(
-    max_workers=_signing_pool_size(), thread_name_prefix="forge-signer"
-)
 
 
 class PendingTx:
@@ -510,7 +466,7 @@ class TxManager:
         # websocket-callback dispatch. (For local wallets this is fast CPU work; harmless.)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            _signing_executor,
+            signing_executor,
             functools.partial(
                 tx.sign,
                 signer=self.wallet.signer(),

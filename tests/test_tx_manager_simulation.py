@@ -145,21 +145,21 @@ async def test_submit_transaction_uses_simulated_gas_when_available(monkeypatch:
 
 
 def test_signing_pool_size_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    from allora_sdk.rpc_client.tx_manager import DEFAULT_SIGNING_POOL_SIZE, _signing_pool_size
+    from allora_sdk.rpc_client._executors import DEFAULT_SIGNING_POOL_SIZE, _signing_pool_size
 
     monkeypatch.delenv("ALLORA_SIGNING_POOL_SIZE", raising=False)
     assert _signing_pool_size() == DEFAULT_SIGNING_POOL_SIZE
 
 
 def test_signing_pool_size_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from allora_sdk.rpc_client.tx_manager import _signing_pool_size
+    from allora_sdk.rpc_client._executors import _signing_pool_size
 
     monkeypatch.setenv("ALLORA_SIGNING_POOL_SIZE", "16")
     assert _signing_pool_size() == 16
 
 
 def test_signing_pool_size_invalid_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    from allora_sdk.rpc_client.tx_manager import DEFAULT_SIGNING_POOL_SIZE, _signing_pool_size
+    from allora_sdk.rpc_client._executors import DEFAULT_SIGNING_POOL_SIZE, _signing_pool_size
 
     monkeypatch.setenv("ALLORA_SIGNING_POOL_SIZE", "not-a-number")
     assert _signing_pool_size() == DEFAULT_SIGNING_POOL_SIZE
