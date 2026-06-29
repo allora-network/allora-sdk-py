@@ -229,7 +229,7 @@ class AlloraRPCClient:
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
-            raise ValueError(f"Invalid wallet credentials: {e}")
+            raise ValueError(f"Invalid wallet credentials: {e}") from e
     
 
     async def raise_for_chain_id_mismatch(self):
