@@ -396,6 +396,16 @@ class RemoteWallet(Wallet):
     first ``sign`` call.** Pass ``address`` alongside ``public_key_hex`` to keep the local
     pubkey↔address cross-check; a wrong ``wallet_id`` will then only surface as a 404/403
     on the first signing request.
+
+    Latency note: every worker nonce makes two sequential, blocking HTTPS round-trips to
+    the Forge backend — the bundle signature (``sign_digest``) and the transaction
+    signature (``sign``) — so per-nonce wall time is roughly ``2 × backend_RTT`` (e.g.
+    ~400ms at a 200ms RTT, versus microseconds for local signing). The two calls are
+    inherently sequential: the bundle signature is embedded in the request before the tx
+    is built. Operators on the RemoteWallet path should size ``max_unfulfilled_nonces``
+    and their round windows accordingly — the defaults were calibrated for fast local
+    signing. The signing HTTP timeout is the ``timeout`` argument (default
+    ``DEFAULT_TIMEOUT`` = 30s), shared with the wallet-info fetch.
     """
 
     def __init__(
