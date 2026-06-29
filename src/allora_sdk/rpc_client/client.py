@@ -41,7 +41,6 @@ from .client_emissions import EmissionsClient
 from .client_mint import MintClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
-from .remote_signer import RemoteWallet
 from .tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
@@ -186,6 +185,10 @@ class AlloraRPCClient:
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
         self._fee_granter: Optional[str] = wallet.fee_granter if wallet else None
+        # Whether this client built (and therefore should close) the wallet. A pre-built wallet
+        # passed via AlloraWalletConfig(wallet=...) is caller-owned and may be shared across
+        # clients, so close() must not tear down its (possibly shared) HTTP session.
+        self._owns_wallet: bool = False
         if not wallet:
             return
 
@@ -206,18 +209,23 @@ class AlloraRPCClient:
         try:
             if wallet.wallet:
                 self.wallet = wallet.wallet
+                # A pre-built wallet's lifecycle belongs to the caller.
+                self._owns_wallet = False
                 logger.debug(f"Wallet initialized from pre-built {type(wallet.wallet).__name__}")
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from private key")
             elif wallet.mnemonic:
                 self.wallet = LocalWallet.from_mnemonic(wallet.mnemonic, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from mnemonic")
             elif wallet.mnemonic_file:
                 with open(wallet.mnemonic_file) as f:
                     mnemonic = f.read()
                 self.wallet = LocalWallet.from_mnemonic(mnemonic, prefix=wallet.prefix)
+                self._owns_wallet = True
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
@@ -268,9 +276,12 @@ class AlloraRPCClient:
             await self.events.stop()
         if hasattr(self, "grpc_client") and self.grpc_client:
             self.grpc_client.close()
-        # A RemoteWallet owns a Forge backend HTTP session; release it so short-lived or
-        # test clients do not leak sockets. LocalWallet has no resources to free.
-        if isinstance(self.wallet, RemoteWallet):
+        # Release resources only for a wallet this client built (e.g. a RemoteWallet's Forge
+        # backend HTTP session). A pre-built wallet passed in by the caller is left untouched: the
+        # caller owns its lifecycle and may share it across clients (the documented multi-worker
+        # shared-wallet pattern), so closing it here would break still-running siblings. Duck-typed
+        # on close() rather than isinstance(RemoteWallet) so any future wallet type is handled.
+        if self._owns_wallet and hasattr(self.wallet, "close"):
             self.wallet.close()
 
 
