@@ -307,6 +307,11 @@ class ForgeBackendClient:
     def _request(
         self, method: str, path: str, body: Optional[str] = None
     ) -> dict[str, Any]:
+        """Send an authenticated request to the Forge backend, returning the parsed JSON object.
+
+        Raises ForgeBackendError on any network, non-2xx status, oversized-body, redirect,
+        Content-Type, or JSON-parse failure. An empty 2xx body returns an empty mapping.
+        """
         headers = {API_KEY_HEADER: self._api_key, "Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
