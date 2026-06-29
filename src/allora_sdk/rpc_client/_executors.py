@@ -53,8 +53,9 @@ def _signing_pool_size() -> int:
 
 # Dedicated pool (not asyncio's shared default ThreadPoolExecutor) so a stalled backend cannot
 # starve unrelated to_thread work — notably websocket-callback dispatch (run_in_executor(None,
-# ...)) and faucet calls. Module-level: process-lifetime; its daemon threads are reclaimed at
-# interpreter exit.
+# ...)) and faucet calls. Module-level: process-lifetime; the ThreadPoolExecutor atexit handler
+# waits for in-flight signing calls at interpreter exit (bounded by the configured timeout,
+# default 30s), so a stalled Forge backend can delay clean process shutdown.
 signing_executor = ThreadPoolExecutor(
     max_workers=_signing_pool_size(), thread_name_prefix="forge-signer"
 )
