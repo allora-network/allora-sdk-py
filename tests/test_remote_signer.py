@@ -203,6 +203,28 @@ def test_fee_granter_cross_hrp_rejected():
         AlloraWalletConfig(private_key="ab" * 32, fee_granter=cosmos_granter)
 
 
+def test_wallet_prefix_conflict_rejected():
+    # An explicit, non-default prefix that disagrees with the pre-built wallet's actual HRP
+    # must raise, not be silently overwritten (which would mask a real misconfiguration).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from cosmpy.aerial.wallet import LocalWallet
+
+    allo_wallet = LocalWallet(PrivateKey(), prefix="allo")
+    with pytest.raises(ValueError, match="disagrees"):
+        AlloraWalletConfig(wallet=allo_wallet, prefix="cosmos")
+
+
+def test_wallet_default_prefix_aligns_to_wallet_hrp():
+    # With prefix left at the default the caller expressed no opinion, so the config
+    # silently adopts the wallet's actual HRP rather than forcing "allo".
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from cosmpy.aerial.wallet import LocalWallet
+
+    cosmos_wallet = LocalWallet(PrivateKey(), prefix="cosmos")
+    cfg = AlloraWalletConfig(wallet=cosmos_wallet)
+    assert cfg.prefix == "cosmos"
+
+
 def test_clear_association(backend):
     from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
 

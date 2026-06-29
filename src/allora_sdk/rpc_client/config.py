@@ -158,15 +158,27 @@ class AlloraWalletConfig:
             )
 
         if self.wallet is not None:
-            # A pre-built wallet fixes its own bech32 prefix at construction time and
-            # downstream code uses the wallet directly, so `prefix` would otherwise be a
-            # silently-ignored, possibly-misleading value. Align it to the wallet's actual
-            # prefix (e.g. a RemoteWallet built with prefix="cosmos").
+            # A pre-built wallet fixes its own bech32 prefix at construction time, so a
+            # caller-supplied `prefix` is either redundant or contradictory. Derive the
+            # wallet's actual HRP and reconcile it with `prefix`:
+            #   - prefix left at the default ("allo"): the caller expressed no opinion, so
+            #     silently align it to the wallet's HRP (e.g. a RemoteWallet built with
+            #     prefix="cosmos").
+            #   - prefix explicitly set to a value that disagrees: raise rather than
+            #     silently overwrite the caller's stated intent. A silent overwrite hides a
+            #     real misconfiguration — e.g. a fee_granter the caller sized to the prefix
+            #     they passed would then fail the HRP check below for a confusing reason.
             # No try/except: only wallet.address() can raise here, and a Wallet whose
             # address() raises is a real bug that should surface, not be swallowed into a
             # silently wrong prefix that fails far downstream in the broadcast path.
             hrp = str(self.wallet.address()).rsplit("1", 1)[0]
-            if hrp:
+            if hrp and hrp != self.prefix:
+                # "allo" is the dataclass default; any other value is an explicit choice.
+                if self.prefix != "allo":
+                    raise ValueError(
+                        f"prefix={self.prefix!r} disagrees with the provided wallet's HRP "
+                        f"{hrp!r}; omit prefix or pass prefix={hrp!r}"
+                    )
                 self.prefix = hrp
 
         # Validate fee_granter after the wallet's prefix has been realigned, so the HRP check
