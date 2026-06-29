@@ -782,7 +782,10 @@ def make_remote_wallet(
         public_key_hex: Optional 33-byte compressed pubkey hex; when given, skips the
             blocking wallet-info fetch.
         address: Optional expected bech32 address, cross-checked against the pubkey.
-        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session).
+        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session). To run many
+            wallets in a single process against one backend, build one ForgeBackendClient and pass
+            it here for every call so they share its connection pool; otherwise each wallet opens
+            its own session (and idle keep-alive connections multiply).
 
     Returns:
         A :class:`RemoteWallet` that signs via the Forge backend.
@@ -851,7 +854,10 @@ def provision_remote_wallet(
         label: Optional display-only label stored against the wallet.
         prefix: Bech32 address prefix for the derived address (default ``"allo"``).
         timeout: Per-request HTTP timeout in seconds.
-        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session).
+        client: Optional pre-built :class:`ForgeBackendClient` (e.g. a tuned session). To run many
+            wallets in a single process against one backend, build one ForgeBackendClient and pass
+            it here for every call so they share its connection pool; otherwise each wallet opens
+            its own session (and idle keep-alive connections multiply).
 
     Returns:
         A :class:`RemoteWallet` bound to ``topic_id`` that signs via the Forge backend.
