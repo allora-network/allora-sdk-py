@@ -90,7 +90,7 @@ async def test_faucet_skipped_when_fee_granter_set() -> None:
         await worker._maybe_faucet_request()
 
     post.assert_not_called()
-    client.bank.query.balance.assert_not_awaited()
+    client.bank.query.balance.assert_not_called()
 
 
 @pytest.mark.asyncio
