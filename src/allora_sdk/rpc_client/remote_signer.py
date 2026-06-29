@@ -402,6 +402,14 @@ class RemoteSigner(Signer):
             # The backend binds `payload` with gin's `binding:"required"`, which treats
             # an empty string as missing and returns a 400; fail locally with a clear error.
             raise ValueError("cannot sign an empty payload")
+        if prehashed and len(payload) != 32:
+            # A prehashed payload is a SHA-256 digest; verify_digest expects exactly 32 bytes,
+            # so a wrong-length digest would otherwise fail with an obscure cosmpy error after a
+            # needless backend round-trip. Reject at the boundary (symmetric with the 64-byte
+            # signature-length check below).
+            raise ValueError(
+                f"prehashed digest must be exactly 32 bytes, got {len(payload)}"
+            )
         result = self._client.sign(self._wallet_id, payload, prehashed)
         if not result.signature:
             raise ForgeBackendError("forge sign response missing 'signature'")
