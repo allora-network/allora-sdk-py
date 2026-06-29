@@ -8,6 +8,7 @@ from .remote_signer import (
     RemoteWallet,
     WalletConfigError,
     make_remote_wallet,
+    provision_remote_wallet,
 )
 from .tx_manager import FeeTier, TxManager
 
@@ -21,6 +22,7 @@ __all__ = [
     "RemoteSigner",
     "RemoteWallet",
     "make_remote_wallet",
+    "provision_remote_wallet",
     "RemoteSignerError",
     "ForgeBackendError",
     "WalletConfigError",
