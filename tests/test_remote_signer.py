@@ -413,6 +413,80 @@ def test_provision_remote_wallet(backend):
     assert priv.public_key.verify(b"signdoc bytes", sig)
 
 
+def test_provision_retries_transient_5xx(monkeypatch):
+    # provision_wallet is idempotent (get-or-create), so a transient 503 during worker startup
+    # must be retried rather than failing the worker (clear_association stays non-retried).
+    from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
+
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+    state = {"posts": 0}
+
+    class FlakyHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            state["posts"] += 1
+            if state["posts"] == 1:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            body = json.dumps({"id": WALLET_ID, "address": address, "pubkey": pub_hex}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    monkeypatch.setattr("allora_sdk.rpc_client.remote_signer.time.sleep", lambda *_: None)
+    server = HTTPServer(("127.0.0.1", 0), FlakyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = provision_remote_wallet(url, API_KEY, topic_id=42)
+        assert str(wallet.address()) == address
+        assert state["posts"] == 2  # first 503 retried, second 200 succeeded
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_provision_does_not_retry_4xx(monkeypatch):
+    # A permanent client error (e.g. bad api key -> 403) must fail fast, not retry.
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendError, provision_remote_wallet
+
+    state = {"posts": 0}
+
+    class ForbiddenHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            state["posts"] += 1
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    monkeypatch.setattr("allora_sdk.rpc_client.remote_signer.time.sleep", lambda *_: None)
+    server = HTTPServer(("127.0.0.1", 0), ForbiddenHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(ForgeBackendError, match="403"):
+            provision_remote_wallet(url, API_KEY, topic_id=42)
+        assert state["posts"] == 1  # 4xx fails fast, no retry
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_from_env_defers_managed_provision(monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 

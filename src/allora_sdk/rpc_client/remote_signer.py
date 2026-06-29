@@ -19,6 +19,7 @@ Usage::
 """
 
 import json
+import time
 import urllib.parse
 import uuid
 from typing import Any, Optional, TypeVar
@@ -46,7 +47,16 @@ class RemoteSignerError(Exception):
 
 class ForgeBackendError(RemoteSignerError):
     """The Forge backend returned an HTTP error, was unreachable, or sent a
-    malformed/unexpected response."""
+    malformed/unexpected response.
+
+    ``status_code`` is the HTTP status when the error came from a non-2xx response; it lets
+    callers distinguish a transient server error (5xx) from a permanent client error (4xx).
+    It is ``None`` for connection / body-read / parse failures that never produced a status.
+    """
+
+    def __init__(self, *args: object, status_code: Optional[int] = None):
+        super().__init__(*args)
+        self.status_code = status_code
 
 
 class WalletConfigError(RemoteSignerError):
@@ -331,7 +341,8 @@ class ForgeBackendClient:
             # this message bubbles up to operator logs.
             detail = raw.decode(errors="replace")[:512]
             raise ForgeBackendError(
-                f"forge backend returned {resp.status_code}: {detail}"
+                f"forge backend returned {resp.status_code}: {detail}",
+                status_code=resp.status_code,
             )
 
         if not raw:
@@ -771,6 +782,31 @@ def make_remote_wallet(
     )
 
 
+_PROVISION_MAX_ATTEMPTS = 3
+
+
+def _provision_with_retry(
+    client: ForgeBackendClient, topic_id: int, label: Optional[str]
+) -> SigningWalletInfo:
+    """Call the idempotent provision POST, retrying transient backend failures at startup.
+
+    ``provision_wallet`` is a get-or-create (idempotent), so a transient 5xx or a connection
+    blip during worker startup is safe to retry — unlike ``clear_association``, which is why
+    the shared session retries only GETs. Retries connection/read errors (``status_code`` None)
+    and 5xx; a permanent 4xx (e.g. a bad API key) fails fast. Backoff mirrors the session's
+    GET retry policy.
+    """
+    for attempt in range(_PROVISION_MAX_ATTEMPTS - 1):
+        try:
+            return client.provision_wallet(topic_id, label)
+        except ForgeBackendError as e:
+            if e.status_code is not None and e.status_code < 500:
+                raise  # permanent client error — retrying won't help
+            time.sleep(0.5 * (attempt + 1))
+    # Final attempt: let any error (transient or not) propagate to the caller.
+    return client.provision_wallet(topic_id, label)
+
+
 def provision_remote_wallet(
     backend_url: str,
     api_key: str,
@@ -814,7 +850,7 @@ def provision_remote_wallet(
         else ForgeBackendClient(backend_url, api_key, timeout)
     )
     try:
-        info = forge_client.provision_wallet(topic_id, label)
+        info = _provision_with_retry(forge_client, topic_id, label)
         return RemoteWallet(
             backend_url,
             api_key,
