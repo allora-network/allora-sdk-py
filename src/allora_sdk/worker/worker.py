@@ -136,7 +136,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
-            fee_granter=fee_granter,
             debug=debug,
             show_banner=show_banner,
         )
@@ -208,7 +207,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
-            fee_granter=fee_granter,
             debug=debug,
             show_banner=show_banner,
         )
@@ -278,7 +276,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval=polling_interval,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
-            fee_granter=fee_granter,
             debug=debug,
             show_banner=show_banner,
         )
@@ -295,7 +292,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         polling_interval: int = 120,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
-        fee_granter: Optional[str] = None,
         debug: bool = False,
         show_banner: bool = True,
     ) -> None:
@@ -312,7 +308,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval: Interval in seconds to poll for new submission windows
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
-            fee_granter: bech32 address of the feegrant master/subsidy wallet paying this worker's fees, or None. When set, the signing wallet is expected to hold no ALLO, so the worker's faucet top-up is skipped (the granter pays, mirroring TxManager's pre-flight skip).
             debug: Enable debug logging
         """
         if use_case is None:
@@ -329,7 +324,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.fee_tier = fee_tier
         self.polling_interval = polling_interval
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
-        self.fee_granter = fee_granter
         self.show_banner = show_banner
 
         self.submitted_nonces = TimestampOrderedSet()
@@ -395,9 +389,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         # With a feegrant granter configured, the granter pays tx fees and the signing wallet is
         # expected to hold zero ALLO (ENGN-8456), so funding it is unnecessary: skip the faucet
         # top-up entirely. This avoids wasting testnet faucet quota on a wallet that never needs
-        # funds — and a 429 here would otherwise sys.exit the worker. Mirrors the fee_granter skip
-        # in TxManager._pre_flight_checks so both pre-flights gate on the same condition.
-        if self.fee_granter:
+        # funds — and a 429 here would otherwise sys.exit the worker. Read the granter from the
+        # client (the single source of truth the TxManager broadcasts with) so this pre-flight
+        # and TxManager._pre_flight_checks always gate on the same value.
+        if self.client.fee_granter:
             return
 
         if self._chain_id != "allora-testnet-1":

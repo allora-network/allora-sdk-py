@@ -25,6 +25,9 @@ def _make_worker_client() -> Mock:
     client.events = Mock()
     client.events.subscribe_new_block_events_typed = AsyncMock(return_value="sub-id")
     client.events.unsubscribe = AsyncMock()
+    # Default to no fee granter; a Mock attribute would otherwise auto-vivify to a truthy value
+    # and wrongly trip the worker's faucet skip (which reads client.fee_granter).
+    client.fee_granter = None
     return client
 
 
@@ -72,15 +75,16 @@ async def test_faucet_request_omits_api_key_header_when_unset() -> None:
 async def test_faucet_skipped_when_fee_granter_set() -> None:
     # A fee-granted worker's signer is expected to hold zero ALLO (the granter pays fees), so the
     # faucet top-up must be skipped entirely — no balance query, no faucet POST, even on testnet
-    # with a faucet_url configured. Mirrors TxManager._pre_flight_checks' fee_granter skip.
+    # with a faucet_url configured. The granter is read from the client (single source of truth),
+    # mirroring TxManager._pre_flight_checks' fee_granter skip.
     client = _make_worker_client()
+    client.fee_granter = "allo1granter"
     worker = AlloraWorker(
         use_case=_make_use_case(),
         client=client,
         address="allo1worker",
         api_key=None,
         topic_id=69,
-        fee_granter="allo1granter",
         show_banner=False,
     )
     worker._initialized = True

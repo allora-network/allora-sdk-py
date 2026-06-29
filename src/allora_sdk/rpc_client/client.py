@@ -248,6 +248,17 @@ class AlloraRPCClient:
         if self.wallet:
             return self.wallet.public_key().public_key_hex
         return None
+
+
+    @property
+    def fee_granter(self) -> Optional[str]:
+        """The configured feegrant master/subsidy wallet (the fee payer), or None.
+
+        This is the single source of truth for the resolved fee-granter: it is the value the
+        TxManager uses to set the granter on every broadcast, so callers (e.g. AlloraWorker's
+        faucet pre-flight) can gate on it without holding a separate copy.
+        """
+        return self._fee_granter
     
 
     async def close(self):
