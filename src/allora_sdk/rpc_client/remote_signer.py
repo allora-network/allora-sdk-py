@@ -242,6 +242,26 @@ class ForgeBackendClient:
         wid = urllib.parse.quote(wallet_id, safe="")
         self._request("POST", f"/api/v1/signing-wallets/{wid}/clear-association")
 
+    def revoke_wallet(self, wallet_id: str) -> None:
+        """Permanently revoke (delete) a managed signing wallet via DELETE
+        /api/v1/signing-wallets/{id}. Unlike :meth:`clear_association` (which only releases the
+        topic binding), this deletes the wallet itself; it does NOT unregister the worker
+        on-chain. ``wallet_id`` is validated as a UUID locally (forge-v2 keys signing wallets by
+        Privy UUID) so a typo fails fast as a :class:`WalletConfigError` rather than as an opaque
+        404 after a destructive call is issued. Like clear_association the DELETE is not auto-
+        retried (the session retries only idempotent GETs), and a non-2xx response raises
+        :class:`ForgeBackendError` (e.g. 404 for an unknown / foreign / already-revoked wallet),
+        so the caller decides whether a revoke failure is fatal or best-effort.
+        """
+        try:
+            wallet_id = str(uuid.UUID(wallet_id))
+        except ValueError as e:
+            raise WalletConfigError(
+                f"wallet_id must be a UUID, got {wallet_id!r}: {e}"
+            ) from e
+        wid = urllib.parse.quote(wallet_id, safe="")
+        self._request("DELETE", f"/api/v1/signing-wallets/{wid}")
+
     def _request(
         self, method: str, path: str, body: Optional[str] = None
     ) -> dict[str, Any]:

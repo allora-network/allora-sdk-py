@@ -79,6 +79,11 @@ def _make_handler(priv: PrivateKey):
             sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
             self._send({"signature": sig.hex(), "pubkey": pub_hex})
 
+        def do_DELETE(self):
+            assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
+            # DELETE /api/v1/signing-wallets/:id — revoke (delete) the signing wallet.
+            self._send({"message": "wallet revoked"})
+
     return Handler
 
 
@@ -359,6 +364,25 @@ def test_clear_association_accepts_204_no_content():
     finally:
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_revoke_wallet(backend):
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    _priv, url = backend
+    client = ForgeBackendClient(url, API_KEY)
+    # A 2xx response to DELETE /api/v1/signing-wallets/:id returns without raising.
+    client.revoke_wallet(WALLET_ID)
+
+
+def test_revoke_wallet_rejects_non_uuid():
+    # revoke is destructive (DELETE), so a non-UUID wallet_id fails fast locally (parity with
+    # RemoteWallet's uuid guard) rather than issuing a DELETE that 404s.
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    client = ForgeBackendClient("https://forge.invalid", API_KEY)
+    with pytest.raises(WalletConfigError, match="UUID"):
+        client.revoke_wallet("not-a-uuid")
 
 
 def test_provision_remote_wallet(backend):
