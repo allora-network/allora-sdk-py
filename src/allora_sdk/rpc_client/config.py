@@ -87,6 +87,13 @@ class AlloraWalletConfig:
         the canonical name shared across the Allora SDKs, or the deprecated ``FEE_GRANTER``)
         are read in all modes.
 
+        **Warning — mode 1 performs blocking network I/O.** Building a RemoteWallet issues a
+        synchronous ``GET /api/v1/signing-wallets/{id}``, so calling ``from_env()`` from inside a
+        running event loop (e.g. a FastAPI lifespan handler) blocks the loop for a backend
+        round-trip. For async startup, build the wallet ahead of time with
+        ``make_remote_wallet(..., public_key_hex=..., address=...)`` and pass it via
+        ``AlloraWalletConfig(wallet=...)``.
+
         Args:
             env_prefix: Optional prefix applied to every variable name (e.g. ``"ALLORA_"``).
 
