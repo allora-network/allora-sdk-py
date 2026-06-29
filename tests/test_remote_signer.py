@@ -553,6 +553,21 @@ def test_provision_remote_wallet(backend):
     assert priv.public_key.verify(b"signdoc bytes", sig)
 
 
+def test_provision_wallet_rejects_overlong_label():
+    # Mirror allora-sdk-go's 128-rune cap: an oversized label must fail fast as a clear
+    # WalletConfigError before any POST (forge-v2 binds the label with max=128).
+    import requests
+    from unittest.mock import MagicMock
+
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient, WalletConfigError
+
+    session = MagicMock(spec=requests.Session)
+    client = ForgeBackendClient("https://forge.invalid", API_KEY, session=session)
+    with pytest.raises(WalletConfigError, match="128"):
+        client.provision_wallet(topic_id=42, label="x" * 129)
+    session.request.assert_not_called()
+
+
 def test_provision_retries_transient_5xx(monkeypatch):
     # provision_wallet is idempotent (get-or-create), so a transient 503 during worker startup
     # must be retried rather than failing the worker (clear_association stays non-retried).

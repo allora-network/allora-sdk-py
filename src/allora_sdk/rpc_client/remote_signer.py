@@ -39,6 +39,10 @@ DEFAULT_TIMEOUT = 30.0
 # Legitimate responses (hex signature + pubkey, wallet-info object) are well under 1 KiB.
 # Cap reads so a misbehaving or hostile backend cannot drive the worker to OOM.
 MAX_RESPONSE_BYTES = 64 * 1024
+# forge-v2's CreateSigningWallet binds the label with `max=128` (a rune count). Cap it client-side
+# (parity with allora-sdk-go) so an oversized label fails fast as a clear WalletConfigError instead
+# of an opaque 4xx after a wasted round-trip.
+MAX_LABEL_LENGTH = 128
 
 
 class RemoteSignerError(Exception):
@@ -258,6 +262,10 @@ class ForgeBackendClient:
         router). Safe to call on every worker start: the backend enforces one wallet per
         (user, topic).
         """
+        if label is not None and len(label) > MAX_LABEL_LENGTH:
+            raise WalletConfigError(
+                f"label must be at most {MAX_LABEL_LENGTH} characters, got {len(label)}"
+            )
         body: dict[str, Any] = {"topic_id": topic_id}
         if label:
             body["label"] = label
