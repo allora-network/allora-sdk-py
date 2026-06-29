@@ -34,6 +34,8 @@ from cosmpy.crypto.address import Address
 from cosmpy.crypto.interface import Signer
 from cosmpy.crypto.keypairs import PublicKey
 
+from allora_sdk.rpc_client._executors import _signing_pool_size
+
 API_KEY_HEADER = "X-Forge-API-Key"
 DEFAULT_TIMEOUT = 30.0
 # Legitimate responses (hex signature + pubkey, wallet-info object) are well under 1 KiB.
@@ -210,8 +212,6 @@ class ForgeBackendClient:
         # connections below a raised ALLORA_SIGNING_POOL_SIZE — signing threads would
         # fan out but then serialize on the connection pool. Use max(10, pool_size) so
         # the default stays 10 and an operator who raises the pool size actually gets it.
-        from allora_sdk.rpc_client._executors import _signing_pool_size
-
         pool_size = max(10, _signing_pool_size())
         adapter = HTTPAdapter(
             max_retries=retry,

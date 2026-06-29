@@ -9,6 +9,7 @@ from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
 from allora_sdk.rpc_client.protos.emissions.v9 import GetNetworkInferencesAtBlockRequest
 from allora_sdk.rpc_client.protos.emissions.v3 import ValueBundle
@@ -53,8 +54,6 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None, topic_id: int | None =
                 raise ValueError(
                     "managed-wallet provisioning requires a positive topic_id"
                 )
-            from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
-
             return provision_remote_wallet(
                 backend_url=wallet.forge_backend_url or "https://forge.allora.network",
                 api_key=wallet.forge_api_key,

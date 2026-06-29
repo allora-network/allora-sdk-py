@@ -6,6 +6,8 @@ from cosmpy.aerial.config import NetworkConfig
 from cosmpy.aerial.wallet import Wallet
 from cosmpy.crypto.address import Address
 
+from .remote_signer import _validate_backend_url, make_remote_wallet
+
 
 def _read_fee_granter(prefix: str) -> Optional[str]:
     """Read the fee-granter address, honoring the canonical name and deprecated alias.
@@ -157,8 +159,6 @@ class AlloraWalletConfig:
                 # delegated signing without hand-written wiring. Note: this performs a blocking
                 # wallet-info fetch; async callers that need to avoid it can build the wallet via
                 # make_remote_wallet(..., public_key_hex=...) directly.
-                from .remote_signer import make_remote_wallet
-
                 wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
                 # The SDK built this RemoteWallet (the caller only ever receives the config, not the
                 # wallet), so the client owns it and must close its Forge HTTP session — mark it via
@@ -214,8 +214,6 @@ class AlloraWalletConfig:
                 # FORGE_BACKEND_URL fails at config time rather than later inside
                 # init_worker_wallet -> provision_remote_wallet.
                 if self.forge_backend_url is not None:
-                    from .remote_signer import _validate_backend_url
-
                     _validate_backend_url(self.forge_backend_url)
                 self._validate_fee_granter()
                 return
