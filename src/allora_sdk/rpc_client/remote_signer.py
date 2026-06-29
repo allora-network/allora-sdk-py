@@ -72,11 +72,11 @@ class SigningWalletInfo(BaseModel):
     id: str
     address: str
     pubkey: str  # hex-encoded 33-byte compressed secp256k1 public key
-    evm_address: Optional[str] = None  # 0x... Privy-reported EVM address (cross-check/debug)
+    evm_address: Optional[str] = None  # 0x... Privy EVM address (cross-check)
     label: Optional[str] = None
-    topic_id: Optional[int] = None  # bound topic for a managed wallet; None when unassigned
+    topic_id: Optional[int] = None  # bound topic id (None when unassigned)
     worker_label: Optional[str] = None  # display-only worker hint
-    created_at: Optional[str] = None  # RFC 3339 timestamp; kept as a raw string (unused locally)
+    created_at: Optional[str] = None  # RFC 3339 timestamp, raw string (unused)
 
 
 class SignResult(BaseModel):
@@ -212,7 +212,9 @@ class ForgeBackendClient:
         raw = self._request("POST", f"/api/v1/signing-wallets/{wid}/sign", body)
         return _validate(SignResult, raw, "sign")
 
-    def provision_wallet(self, topic_id: int, label: Optional[str] = None) -> SigningWalletInfo:
+    def provision_wallet(
+        self, topic_id: int, label: Optional[str] = None
+    ) -> SigningWalletInfo:
         """Idempotently get-or-create the user's signing wallet bound to ``topic_id`` and return
         its non-secret info (id, address, pubkey). Rides on POST /api/v1/signing-wallets with a
         ``topic_id`` body (a static /provision sub-route collides with /:id in the backend router).
@@ -234,7 +236,9 @@ class ForgeBackendClient:
         wid = urllib.parse.quote(wallet_id, safe="")
         self._request("POST", f"/api/v1/signing-wallets/{wid}/clear-association")
 
-    def _request(self, method: str, path: str, body: Optional[str] = None) -> dict[str, Any]:
+    def _request(
+        self, method: str, path: str, body: Optional[str] = None
+    ) -> dict[str, Any]:
         headers = {API_KEY_HEADER: self._api_key}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -266,7 +270,9 @@ class ForgeBackendClient:
             # Truncate: backend 4xx bodies can reflect request fields / wallet ids, and
             # this message bubbles up to operator logs.
             detail = raw.decode(errors="replace")[:512]
-            raise ForgeBackendError(f"forge backend returned {resp.status_code}: {detail}")
+            raise ForgeBackendError(
+                f"forge backend returned {resp.status_code}: {detail}"
+            )
 
         if not raw:
             # A 2xx with an empty body (e.g. 204 No Content from clear-association) is a
@@ -313,7 +319,9 @@ class RemoteSigner(Signer):
         # constructed directly can never silently skip verification; RemoteWallet supplies it.
         self._public_key = public_key
 
-    def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
+    def sign(
+        self, message: bytes, deterministic: bool = False, canonicalise: bool = True
+    ) -> bytes:
         """Sign Cosmos SignDoc bytes via the Forge backend (the backend SHA-256 hashes the
         message before signing, matching cosmpy's local ``PrivateKey.sign``).
 
@@ -328,7 +336,9 @@ class RemoteSigner(Signer):
         self._check_canonicalise(canonicalise)
         return self._remote_sign(message, prehashed=False)
 
-    def sign_digest(self, digest: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
+    def sign_digest(
+        self, digest: bytes, deterministic: bool = False, canonicalise: bool = True
+    ) -> bytes:
         """Sign a pre-hashed 32-byte digest via the Forge backend (used for bundle
         signatures; the backend signs the digest as-is).
 
@@ -361,7 +371,9 @@ class RemoteSigner(Signer):
         try:
             sig = bytes.fromhex(result.signature)
         except ValueError as e:
-            raise ForgeBackendError(f"forge sign response 'signature' is not valid hex: {e}") from e
+            raise ForgeBackendError(
+                f"forge sign response 'signature' is not valid hex: {e}"
+            ) from e
         if len(sig) != 64:
             # Cosmos secp256k1 signatures are exactly 64 raw bytes (r || s). A 65-byte
             # recoverable form or DER encoding would be rejected on-chain with an opaque
@@ -372,7 +384,13 @@ class RemoteSigner(Signer):
         self._verify(payload, sig, prehashed, result.pubkey)
         return sig
 
-    def _verify(self, payload: bytes, sig: bytes, prehashed: bool, response_pubkey: Optional[str]) -> None:
+    def _verify(
+        self,
+        payload: bytes,
+        sig: bytes,
+        prehashed: bool,
+        response_pubkey: Optional[str],
+    ) -> None:
         """Verify the backend's signature against the pinned wallet public key."""
         # Compare decoded bytes, not hex strings: bytes.hex() is lowercase but a future
         # backend / proxy could return uppercase hex for an otherwise-valid signature.
@@ -445,11 +463,17 @@ class RemoteWallet(Wallet):
         try:
             wallet_id = str(uuid.UUID(wallet_id))
         except ValueError as e:
-            raise WalletConfigError(f"wallet_id must be a UUID, got {wallet_id!r}: {e}") from e
+            raise WalletConfigError(
+                f"wallet_id must be a UUID, got {wallet_id!r}: {e}"
+            ) from e
 
         self._wallet_id = wallet_id
         self._prefix = prefix
-        self._client = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
+        self._client = (
+            client
+            if client is not None
+            else ForgeBackendClient(backend_url, api_key, timeout)
+        )
 
         # For the public_key_hex shortcut, cross-check against a caller-supplied address.
         reported_address: Optional[str] = address
@@ -507,7 +531,9 @@ class RemoteWallet(Wallet):
             )
 
         # Pin the pubkey into the signer so it verifies every backend signature locally.
-        self._signer = RemoteSigner(self._client, wallet_id, public_key=self._public_key)
+        self._signer = RemoteSigner(
+            self._client, wallet_id, public_key=self._public_key
+        )
 
     def address(self) -> Address:
         return Address(self._public_key, self._prefix)
@@ -583,7 +609,11 @@ def provision_remote_wallet(
     The provisioned wallet's pubkey/address are returned by the provision call, so the resulting
     RemoteWallet is built without a second (blocking) wallet-info fetch.
     """
-    c = client if client is not None else ForgeBackendClient(backend_url, api_key, timeout)
+    c = (
+        client
+        if client is not None
+        else ForgeBackendClient(backend_url, api_key, timeout)
+    )
     info = c.provision_wallet(topic_id, label)
     return RemoteWallet(
         backend_url,
