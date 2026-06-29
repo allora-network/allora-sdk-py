@@ -5,6 +5,10 @@ must run in a worker thread to avoid freezing the event loop. Both the transacti
 path (``tx_manager``) and the bundle-signing path (``client_emissions``) offload onto the
 same dedicated pool, so it lives here — a small shared module both import — rather than as a
 module-private symbol of one reaching across the boundary into the other.
+
+The pool size is read from ``ALLORA_SIGNING_POOL_SIZE`` once, when this module is first
+imported; set it in the process environment before the first ``import allora_sdk`` — setting it
+afterward has no effect (a 12-factor process-start convention).
 """
 
 import logging
