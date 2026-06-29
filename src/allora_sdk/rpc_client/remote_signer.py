@@ -631,8 +631,11 @@ class RemoteWallet(Wallet):
 
         # Cross-check the backend's reported address against the pubkey-derived one so a
         # misconfigured wallet fails here rather than producing rejected transactions.
+        # Gate on `is not None` (not truthiness) so a caller-supplied address="" on the
+        # public_key_hex shortcut is still cross-checked — an empty string is a provided
+        # (mismatching) address, not "absent". Symmetric with the wallet-info path above.
         derived = str(Address(self._public_key, self._prefix))
-        if reported_address and reported_address != derived:
+        if reported_address is not None and reported_address != derived:
             raise WalletConfigError(
                 f"backend address {reported_address} does not match pubkey-derived address {derived}"
             )

@@ -559,6 +559,22 @@ def test_public_key_hex_shortcut_address_mismatch_raises():
         )
 
 
+def test_public_key_hex_shortcut_empty_address_still_cross_checked():
+    # A caller-supplied address="" on the public_key_hex shortcut must not silently skip the
+    # pubkey<->address cross-check (the docstring promises the check when address is passed).
+    # An empty string is a provided (mismatching) address, not "absent".
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    with pytest.raises(WalletConfigError, match="does not match"):
+        make_remote_wallet(
+            "https://forge.invalid",
+            "forge_sk_test",
+            WALLET_ID,
+            public_key_hex=pub_hex,
+            address="",
+        )
+
+
 def test_non_uuid_wallet_id_rejected():
     # forge-v2 keys signing wallets by Privy UUID; a non-UUID wallet_id is a config typo and
     # must fail locally (parity with allora-sdk-go's uuid.Parse guard) without a network call.
