@@ -101,37 +101,15 @@ class AlloraWalletConfig:
         prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
         fee_granter = _read_fee_granter(p)
 
-        # Privy-delegated signing: if the Forge env vars are present, build a RemoteWallet
-        # so 12-factor deployments can use delegated signing without hand-written wiring.
-        # Note: this performs a blocking wallet-info fetch; async callers that need to avoid
-        # it can build the wallet via make_remote_wallet(..., public_key_hex=...) directly.
         api_key = os.getenv(p + "FORGE_API_KEY")
         wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
         backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
-        if api_key and wallet_id:
-            # The early return below never reads PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a
-            # stale local-key env var (a common mid-migration state) would be silently
-            # ignored and signing would go through Forge with no log. Mirror __post_init__'s
-            # "exactly one credential source" guard at the env layer and fail loudly instead.
-            conflicting = [
-                name
-                for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
-                if os.getenv(p + name)
-            ]
-            if conflicting:
-                raise ValueError(
-                    f"FORGE_API_KEY and FORGE_SIGNING_WALLET_ID are set alongside "
-                    f"{conflicting}; choose exactly one signing source"
-                )
-
-            from .remote_signer import make_remote_wallet
-
-            wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
-            return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
         if api_key:
-            # Same single-source guard as the branch above: without it a stale local-key env
-            # var (a common mid-migration state) would be silently ignored while signing
-            # switched to managed Forge custody — fail loudly instead of changing the flow.
+            # Managed (Privy) custody must be the *sole* signing source. The returns below never
+            # read PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a stale local-key env var (a common
+            # mid-migration state) would be silently ignored while signing went through Forge.
+            # Mirror __post_init__'s "exactly one credential source" guard at the env layer and
+            # fail loudly. Checked once here for both the wallet-id and deferred paths.
             conflicting = [
                 name
                 for name in ("PRIVATE_KEY", "MNEMONIC", "MNEMONIC_FILE")
@@ -142,6 +120,15 @@ class AlloraWalletConfig:
                     f"FORGE_API_KEY is set alongside {conflicting}; "
                     f"choose exactly one signing source"
                 )
+            if wallet_id:
+                # Privy-delegated signing: build a RemoteWallet so 12-factor deployments can use
+                # delegated signing without hand-written wiring. Note: this performs a blocking
+                # wallet-info fetch; async callers that need to avoid it can build the wallet via
+                # make_remote_wallet(..., public_key_hex=...) directly.
+                from .remote_signer import make_remote_wallet
+
+                wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
+                return cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
             # Managed custody, no explicit wallet id: defer to the worker, which provisions a
             # wallet bound to its topic (one worker = one topic) at startup.
             return cls(
