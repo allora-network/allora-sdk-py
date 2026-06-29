@@ -207,6 +207,15 @@ class AlloraWalletConfig:
                     )
                 self.prefix = hrp
 
+            # Inherit a RemoteWallet's backend-discovered master_granter (exposed as its
+            # `fee_granter` attribute) when the caller did not set one explicitly, so the direct
+            # AlloraRPCClient(wallet=AlloraWalletConfig(wallet=remote)) path gets the same gas
+            # subsidy the worker factories resolve via resolve_fee_granter — otherwise the signing
+            # wallet (0 ALLO under managed custody) hits InsufficientBalanceError on first use. An
+            # explicit fee_granter (or FORGE_MASTER_GRANTER_ADDRESS) still wins. Validated below.
+            if self.fee_granter is None:
+                self.fee_granter = getattr(self.wallet, "fee_granter", None)
+
         # Validate fee_granter after the wallet's prefix has been realigned, so the HRP check
         # compares against the signing wallet's actual prefix.
         self._validate_fee_granter()
