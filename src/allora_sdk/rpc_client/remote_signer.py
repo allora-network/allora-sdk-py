@@ -25,6 +25,7 @@ from typing import Any, Optional, TypeVar
 
 import requests
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
 from urllib3.util.retry import Retry
 from pydantic import BaseModel, ValidationError
 from cosmpy.aerial.wallet import Wallet
@@ -285,8 +286,18 @@ class ForgeBackendClient:
         except requests.RequestException as e:
             raise ForgeBackendError(f"failed to reach forge backend: {e}") from e
 
-        with resp:
-            raw = resp.raw.read(MAX_RESPONSE_BYTES + 1, decode_content=True)
+        # The body read is a second failure point: a connection dropped mid-body, a corrupt
+        # gzip/deflate stream (decode_content=True), or a read timeout raises a urllib3
+        # HTTPError (ProtocolError/DecodeError/ReadTimeoutError) or a raw socket OSError —
+        # none of which subclass requests.RequestException, so they would otherwise escape the
+        # ForgeBackendError contract that callers (_remote_sign, wallet-info, provisioning) rely on.
+        try:
+            with resp:
+                raw = resp.raw.read(MAX_RESPONSE_BYTES + 1, decode_content=True)
+        except (requests.RequestException, Urllib3HTTPError, OSError) as e:
+            raise ForgeBackendError(
+                f"failed to read forge backend response: {e}"
+            ) from e
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ForgeBackendError(
                 f"forge backend response exceeded {MAX_RESPONSE_BYTES} bytes"
