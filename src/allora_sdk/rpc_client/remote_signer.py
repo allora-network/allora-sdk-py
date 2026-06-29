@@ -297,13 +297,27 @@ class RemoteSigner(Signer):
         self._public_key = public_key
 
     def sign(self, message: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
-        # The backend hashes the message (SHA-256) before signing, matching cosmpy's
-        # local PrivateKey.sign semantics over the SignDoc bytes.
+        """Sign Cosmos SignDoc bytes via the Forge backend (the backend SHA-256 hashes the
+        message before signing, matching cosmpy's local ``PrivateKey.sign``).
+
+        ``deterministic`` is accepted for cosmpy ``Signer`` compatibility but has NO effect:
+        the Forge backend always signs deterministically (RFC 6979), so ``deterministic=False``
+        (a request for randomized k) still returns a deterministic signature. This is
+        asymmetric with ``canonicalise=False`` — which is rejected because the backend cannot
+        honor it — on purpose: a deterministic signature is valid for any requested value, and
+        cosmpy's transaction path passes ``deterministic=False`` by default, so raising here
+        would break ordinary signing.
+        """
         self._check_canonicalise(canonicalise)
         return self._remote_sign(message, prehashed=False)
 
     def sign_digest(self, digest: bytes, deterministic: bool = False, canonicalise: bool = True) -> bytes:
-        # The digest is already hashed; the backend signs it directly.
+        """Sign a pre-hashed 32-byte digest via the Forge backend (used for bundle
+        signatures; the backend signs the digest as-is).
+
+        ``deterministic`` is accepted for cosmpy ``Signer`` compatibility but has NO effect —
+        see :meth:`sign` for the rationale (the backend always uses RFC 6979).
+        """
         self._check_canonicalise(canonicalise)
         return self._remote_sign(digest, prehashed=True)
 

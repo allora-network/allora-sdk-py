@@ -102,6 +102,19 @@ def test_remote_signer_sign_digest_verifies(backend):
     assert priv.public_key.verify_digest(digest, sig)
 
 
+def test_sign_ignores_deterministic_flag_and_rejects_non_canonical(backend):
+    # deterministic is accepted for cosmpy Signer compatibility but has no effect (the
+    # backend always uses RFC 6979). It must not raise — cosmpy's tx path passes
+    # deterministic=False by default — unlike canonicalise=False, which is rejected.
+    priv, url = backend
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+    message = b"cosmos signdoc bytes"
+    sig = wallet.signer().sign(message, deterministic=False)
+    assert priv.public_key.verify(message, sig)
+    with pytest.raises(ValueError, match="canonicalise"):
+        wallet.signer().sign(message, canonicalise=False)
+
+
 def test_caller_supplied_address_mismatch_rejected(backend):
     # Passing address= without public_key_hex is a "this wallet_id maps to this address"
     # assertion. If it disagrees with the backend it must fail, not be silently overwritten.
