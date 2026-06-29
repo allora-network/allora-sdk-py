@@ -211,7 +211,7 @@ class AlloraRPCClient:
                 self.wallet = wallet.wallet
                 # A pre-built wallet's lifecycle belongs to the caller.
                 self._owns_wallet = False
-                logger.debug(f"Wallet initialized from pre-built {type(wallet.wallet).__name__}")
+                logger.debug("Wallet initialized from pre-built %s", type(wallet.wallet).__name__)
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix=wallet.prefix)
@@ -228,7 +228,7 @@ class AlloraRPCClient:
                 self._owns_wallet = True
                 logger.debug("Wallet initialized from mnemonic file")
         except Exception as e:
-            logger.error(f"Failed to initialize wallet: {e}")
+            logger.error("Failed to initialize wallet: %s", e)
             raise ValueError(f"Invalid wallet credentials: {e}") from e
     
 
