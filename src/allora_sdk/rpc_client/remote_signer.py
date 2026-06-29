@@ -567,7 +567,17 @@ class RemoteWallet(Wallet):
                     f"forge wallet-info response for {wallet_id} missing 'id'; cannot verify "
                     "the backend bound the response to the requested wallet"
                 )
-            if info.id != wallet_id:
+            # Normalize the backend id to the canonical dashed form before comparing: wallet_id
+            # was already normalized via str(uuid.UUID(...)) above, so a backend/proxy that
+            # returns a non-canonical but equivalent form (uppercase, urn:uuid:, {braced}) is not
+            # spuriously rejected as a misroute. A non-UUID id is a backend contract violation.
+            try:
+                normalized_id = str(uuid.UUID(info.id))
+            except ValueError as e:
+                raise ForgeBackendError(
+                    f"forge wallet-info id is not a valid UUID: {info.id!r}: {e}"
+                ) from e
+            if normalized_id != wallet_id:
                 raise WalletConfigError(
                     f"forge wallet-info id {info.id} does not match requested wallet_id {wallet_id}"
                 )
