@@ -155,11 +155,15 @@ class ForgeBackendClient:
             self._session = session
             return
         self._session = requests.Session()
-        # Retry transient backend failures so a momentary 5xx/connection blip does not lose a
-        # nonce. Signing is idempotent (the pinned pubkey verifies every response), so re-sending
-        # is safe. redirect=0 preserves the no-redirect security property (the X-Forge-API-Key is
-        # never re-sent on a 3xx); raise_on_status=False lets the final non-2xx response flow into
-        # _request's normal error handling instead of raising a urllib3 MaxRetryError.
+        # Retry only idempotent GET requests (e.g. wallet-info) on a transient 5xx/connection
+        # blip. POST is deliberately excluded: clear_association is not idempotent from the
+        # client's perspective — a retry after the backend already applied the clear surfaces a
+        # spurious 404 on the second attempt. urllib3's retry policy is per-method, not per-route,
+        # so clear_association cannot be singled out; a failed sign/provision instead surfaces and
+        # is re-driven by the caller on the next nonce. redirect=0 preserves the no-redirect
+        # security property (the X-Forge-API-Key is never re-sent on a 3xx); raise_on_status=False
+        # lets the final non-2xx response flow into _request's normal error handling instead of
+        # raising a urllib3 MaxRetryError.
         retry = Retry(
             total=2,
             connect=2,
@@ -167,7 +171,7 @@ class ForgeBackendClient:
             redirect=0,
             backoff_factor=0.5,
             status_forcelist=(502, 503, 504),
-            allowed_methods=("GET", "POST"),
+            allowed_methods=("GET",),
             raise_on_status=False,
         )
         adapter = HTTPAdapter(max_retries=retry)
