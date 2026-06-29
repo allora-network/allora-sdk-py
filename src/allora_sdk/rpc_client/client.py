@@ -214,6 +214,11 @@ class AlloraRPCClient:
                 # (from_env's RemoteWallet path, or a worker factory that provisioned one) is
                 # client-owned — close() must release its Forge HTTP session, or it leaks.
                 self._owns_wallet = wallet._sdk_owned
+                # Ownership moves once: the SDK-built wallet has a single instance, so hand it to
+                # the first client and clear the flag. Otherwise a second client built from the same
+                # (reused) config would also claim ownership and its close() would tear down a
+                # RemoteWallet still in use by the first client.
+                wallet._sdk_owned = False
                 logger.debug("Wallet initialized from pre-built %s", type(wallet.wallet).__name__)
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))

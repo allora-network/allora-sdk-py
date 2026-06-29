@@ -39,3 +39,22 @@ def test_initialize_wallet_does_not_own_caller_supplied_wallet():
     client = AlloraRPCClient.__new__(AlloraRPCClient)
     client._initialize_wallet(cfg)
     assert client._owns_wallet is False
+
+
+def test_sdk_owned_ownership_transfers_to_first_client_only():
+    # An SDK-built wallet has a single instance. If a config carrying _sdk_owned=True is reused to
+    # build two clients, only the first may own (and close) the wallet — otherwise the first
+    # client's close() would tear down a wallet still in use by the second.
+    from cosmpy.aerial.wallet import LocalWallet
+    from cosmpy.crypto.keypairs import PrivateKey
+
+    cfg = AlloraWalletConfig(wallet=LocalWallet(PrivateKey(), prefix="allo"))
+    cfg._sdk_owned = True
+
+    first = AlloraRPCClient.__new__(AlloraRPCClient)
+    first._initialize_wallet(cfg)
+    second = AlloraRPCClient.__new__(AlloraRPCClient)
+    second._initialize_wallet(cfg)
+
+    assert first._owns_wallet is True
+    assert second._owns_wallet is False
