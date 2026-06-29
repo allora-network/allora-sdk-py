@@ -866,3 +866,23 @@ def test_wallet_config_repr_hides_secrets():
     assert "forge_sk_SECRET" not in api_key_repr
     assert "ab" * 32 not in repr(AlloraWalletConfig(private_key="ab" * 32))
     assert "abandon" not in repr(AlloraWalletConfig(mnemonic="abandon " * 12))
+
+
+def test_remote_wallet_rejects_invalid_discovered_granter():
+    # Defense-in-depth: a backend-supplied master_granter with the wrong HRP (cosmos1 for an
+    # allo wallet) must be rejected at the RemoteWallet boundary, not stored unvalidated.
+    from allora_sdk.rpc_client.remote_signer import RemoteWallet
+
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+    cosmos_granter = str(Address(PrivateKey().public_key, "cosmos"))
+    with pytest.raises(WalletConfigError, match="master_granter"):
+        RemoteWallet(
+            "https://forge.invalid",
+            API_KEY,
+            WALLET_ID,
+            public_key_hex=pub_hex,
+            address=address,
+            fee_granter=cosmos_granter,
+        )

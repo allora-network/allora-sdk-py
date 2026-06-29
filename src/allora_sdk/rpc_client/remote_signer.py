@@ -607,6 +607,31 @@ class RemoteWallet(Wallet):
             self._client, wallet_id, public_key=self._public_key
         )
 
+        # Defense-in-depth: validate a backend-discovered granter at this boundary (bech32 +
+        # 20-byte payload + HRP == wallet prefix), matching AlloraWalletConfig._validate_fee_granter
+        # so EVERY consumer of wallet.fee_granter — not just the worker/config paths — gets a
+        # checked value. A misbehaving backend then fails fast here instead of surfacing as an
+        # opaque on-chain "feegrant not found" at broadcast time.
+        if discovered_granter:
+            try:
+                parsed = Address(discovered_granter)
+            except Exception as e:
+                raise WalletConfigError(
+                    f"backend master_granter {discovered_granter!r} is not a "
+                    f"valid address: {e}"
+                ) from e
+            if len(bytes(parsed)) != 20:
+                raise WalletConfigError(
+                    f"backend master_granter {discovered_granter!r} is not a "
+                    "20-byte account address"
+                )
+            granter_hrp = discovered_granter.rsplit("1", 1)[0]
+            if granter_hrp != self._prefix:
+                raise WalletConfigError(
+                    f"backend master_granter HRP {granter_hrp!r} does not match "
+                    f"wallet prefix {self._prefix!r}"
+                )
+
         # Discovered feegrant fee payer, exposed for the worker's fee_granter fallback (see
         # worker.utils.resolve_fee_granter). Normalize an empty backend value to None ("unset").
         self.fee_granter: Optional[str] = discovered_granter or None
