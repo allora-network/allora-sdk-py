@@ -333,6 +333,17 @@ def test_from_env_empty_backend_url_falls_back_to_default(monkeypatch):
     assert cfg.forge_backend_url == "https://forge.allora.network"
 
 
+def test_deferred_managed_config_validates_backend_url_eagerly():
+    # A deferred managed-custody config (forge_api_key only) must reject an insecure cleartext-http
+    # backend URL at construction, not later at provision time (the API key would otherwise leak).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    with pytest.raises(ValueError, match="https"):
+        AlloraWalletConfig(
+            forge_api_key="forge_sk_test", forge_backend_url="http://evil.example"
+        )
+
+
 def test_fee_granter_invalid_bech32_rejected():
     # A typo'd granter must fail at config time, not per-transaction at broadcast time.
     from allora_sdk.rpc_client.config import AlloraWalletConfig
