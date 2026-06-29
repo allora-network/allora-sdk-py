@@ -165,7 +165,7 @@ class AlloraWalletConfig:
             # No try/except: only wallet.address() can raise here, and a Wallet whose
             # address() raises is a real bug that should surface, not be swallowed into a
             # silently wrong prefix that fails far downstream in the broadcast path.
-            hrp = str(self.wallet.address()).split("1", 1)[0]
+            hrp = str(self.wallet.address()).rsplit("1", 1)[0]
             if hrp:
                 self.prefix = hrp
 
@@ -188,8 +188,8 @@ class AlloraWalletConfig:
             Address(self.fee_granter)
         except Exception as e:
             raise ValueError(f"invalid fee_granter address {self.fee_granter!r}: {e}") from e
-        # bech32 has a single '1' separator; everything before it is the human-readable prefix.
-        hrp = self.fee_granter.split("1", 1)[0]
+        # bech32's separator is the LAST '1' (BIP 173); everything before it is the HRP.
+        hrp = self.fee_granter.rsplit("1", 1)[0]
         if hrp != self.prefix:
             raise ValueError(
                 f"fee_granter HRP {hrp!r} does not match the signing wallet prefix "
