@@ -303,6 +303,23 @@ def test_forge_client_close_respects_session_ownership():
     injected_session.close.assert_not_called()
 
 
+def test_http_pool_sized_to_signing_pool(monkeypatch):
+    # The connection pool must not cap below ALLORA_SIGNING_POOL_SIZE, or signing threads
+    # fan out but serialize on urllib3's default 10-connection pool.
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    monkeypatch.delenv("ALLORA_SIGNING_POOL_SIZE", raising=False)
+    owned = ForgeBackendClient("https://forge.invalid", API_KEY)
+    adapter = owned._session.get_adapter("https://forge.invalid")
+    assert adapter._pool_maxsize >= 10  # default floor
+
+    monkeypatch.setenv("ALLORA_SIGNING_POOL_SIZE", "32")
+    raised = ForgeBackendClient("https://forge.invalid", API_KEY)
+    raised_adapter = raised._session.get_adapter("https://forge.invalid")
+    assert raised_adapter._pool_maxsize == 32
+    assert raised_adapter._pool_connections == 32
+
+
 def test_remote_wallet_close_delegates(backend):
     # RemoteWallet.close releases the backend session it owns; idempotent and non-raising.
     _priv, url = backend

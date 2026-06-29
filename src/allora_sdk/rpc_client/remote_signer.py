@@ -191,7 +191,19 @@ class ForgeBackendClient:
             allowed_methods=("GET",),
             raise_on_status=False,
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        # Size the connection pool to the signing thread pool. urllib3 defaults
+        # pool_connections/pool_maxsize to 10, which would cap concurrent backend
+        # connections below a raised ALLORA_SIGNING_POOL_SIZE — signing threads would
+        # fan out but then serialize on the connection pool. Use max(10, pool_size) so
+        # the default stays 10 and an operator who raises the pool size actually gets it.
+        from allora_sdk.rpc_client._executors import _signing_pool_size
+
+        pool_size = max(10, _signing_pool_size())
+        adapter = HTTPAdapter(
+            max_retries=retry,
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
+        )
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
 
