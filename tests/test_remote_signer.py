@@ -219,6 +219,34 @@ def test_caller_supplied_wallet_is_not_sdk_owned(backend):
     assert cfg._sdk_owned is False
 
 
+def test_from_env_closes_wallet_if_validation_fails(backend, monkeypatch):
+    # If __post_init__ validation fails after make_remote_wallet built a RemoteWallet, from_env must
+    # close that wallet's HTTP session (the caller never receives a handle to close it itself).
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from allora_sdk.rpc_client.remote_signer import RemoteWallet
+
+    _priv, url = backend
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.setenv("FORGE_SIGNING_WALLET_ID", WALLET_ID)
+    monkeypatch.setenv("FORGE_BACKEND_URL", url)
+    # A cosmos1 granter against the allo signing wallet fails the HRP check in __post_init__.
+    monkeypatch.setenv(
+        "FORGE_MASTER_GRANTER_ADDRESS", str(Address(PrivateKey().public_key, "cosmos"))
+    )
+
+    closed = {"called": False}
+    real_close = RemoteWallet.close
+
+    def spy(self):
+        closed["called"] = True
+        return real_close(self)
+
+    monkeypatch.setattr(RemoteWallet, "close", spy)
+    with pytest.raises(ValueError, match="HRP"):
+        AlloraWalletConfig.from_env()
+    assert closed["called"] is True
+
+
 def test_from_env_rejects_empty_address_prefix(monkeypatch):
     # `export ADDRESS_PREFIX=` (accidentally unset) must fail loudly at config time, not as a
     # confusing downstream HRP-mismatch. The check runs before credential resolution.

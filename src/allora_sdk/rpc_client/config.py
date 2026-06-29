@@ -157,11 +157,21 @@ class AlloraWalletConfig:
                 from .remote_signer import make_remote_wallet
 
                 wallet = make_remote_wallet(backend_url, api_key, wallet_id, prefix=prefix)
-                cfg = cls(wallet=wallet, prefix=prefix, fee_granter=fee_granter)
-                # The SDK built this RemoteWallet (the caller only ever receives the config, not
-                # the wallet), so the client owns it and must close its Forge HTTP session.
-                cfg._sdk_owned = True
-                return cfg
+                # The SDK built this RemoteWallet (the caller only ever receives the config, not the
+                # wallet), so the client owns it and must close its Forge HTTP session — mark it via
+                # the constructor. If __post_init__ validation (e.g. a bad FORGE_MASTER_GRANTER_
+                # ADDRESS) raises, close the wallet here so its connection pool isn't leaked: the
+                # caller never receives a handle to close it.
+                try:
+                    return cls(
+                        wallet=wallet,
+                        prefix=prefix,
+                        fee_granter=fee_granter,
+                        _sdk_owned=True,
+                    )
+                except Exception:
+                    wallet.close()
+                    raise
             # Managed custody, no explicit wallet id: defer to the worker, which provisions a
             # wallet bound to its topic (one worker = one topic) at startup.
             return cls(
