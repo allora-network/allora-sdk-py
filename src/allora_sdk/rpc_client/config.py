@@ -105,7 +105,17 @@ class AlloraWalletConfig:
                 (the signing flow must be unambiguous), or if no credential source is present.
         """
         p = env_prefix or ""
-        prefix = os.getenv(p + "ADDRESS_PREFIX", "allo")
+        prefix = os.getenv(p + "ADDRESS_PREFIX", "allo").strip()
+        # Validate the HRP up front. An empty/whitespace value (e.g. a shell `export
+        # ADDRESS_PREFIX=` that unset it) or an uppercase one would otherwise surface far from
+        # the cause — as a confusing "fee_granter HRP ... does not match prefix ''" or an opaque
+        # bech32 error at first broadcast. BIP173 HRPs are non-empty, lowercase, and the '1'
+        # separator cannot appear in them, so a digit-free lowercase alphabetic string.
+        if not prefix.isalpha() or prefix != prefix.lower():
+            raise ValueError(
+                f"{p}ADDRESS_PREFIX must be a non-empty lowercase alphabetic BIP173 HRP, got "
+                f"{os.getenv(p + 'ADDRESS_PREFIX')!r}"
+            )
         fee_granter = _read_fee_granter(p)
 
         api_key = os.getenv(p + "FORGE_API_KEY")

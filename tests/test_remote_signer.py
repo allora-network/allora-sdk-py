@@ -206,6 +206,34 @@ def test_from_env_builds_remote_wallet(backend, monkeypatch):
     assert str(cfg.wallet.address()) == str(Address(priv.public_key, "allo"))
 
 
+def test_from_env_rejects_empty_address_prefix(monkeypatch):
+    # `export ADDRESS_PREFIX=` (accidentally unset) must fail loudly at config time, not as a
+    # confusing downstream HRP-mismatch. The check runs before credential resolution.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("ADDRESS_PREFIX", "  ")
+    with pytest.raises(ValueError, match="ADDRESS_PREFIX"):
+        AlloraWalletConfig.from_env()
+
+
+def test_from_env_rejects_uppercase_address_prefix(monkeypatch):
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("ADDRESS_PREFIX", "ALLO")
+    with pytest.raises(ValueError, match="ADDRESS_PREFIX"):
+        AlloraWalletConfig.from_env()
+
+
+def test_from_env_accepts_and_strips_valid_address_prefix(monkeypatch):
+    # A valid lowercase HRP is accepted; stray YAML whitespace is stripped.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("ADDRESS_PREFIX", " cosmos ")
+    monkeypatch.setenv("PRIVATE_KEY", PrivateKey().private_key_hex)
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.prefix == "cosmos"
+
+
 def test_from_env_reads_fee_granter_canonical(backend, monkeypatch):
     from allora_sdk.rpc_client.config import AlloraWalletConfig
 
