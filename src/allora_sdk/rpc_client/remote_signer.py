@@ -113,8 +113,10 @@ def _validate_backend_url(url: str) -> None:
     Also reject malformed URLs that would otherwise weaken the boundary: embedded
     userinfo (``user:password@host`` is sent as a Basic auth header alongside the API
     key on every request), a missing hostname (otherwise an opaque ConnectionError at
-    first use), or a query string / fragment (URL-encoded into every request path).
-    Mirrors the tightened allora-sdk-go boundary.
+    first use), a query string / fragment (URL-encoded into every request path), or a
+    non-root path (prepended to every request URL — e.g. ``https://host/api`` would make
+    the signing calls hit ``/api/api/v1/...`` and 404). Mirrors the tightened
+    allora-sdk-go boundary (``requireSecureBackend``).
     """
     parsed = urllib.parse.urlsplit(url)
     if not parsed.hostname:
@@ -127,6 +129,11 @@ def _validate_backend_url(url: str) -> None:
     if parsed.query or parsed.fragment:
         raise ValueError(
             f"backend_url must not contain a query string or fragment, got: {url!r}"
+        )
+    if parsed.path not in ("", "/"):
+        raise ValueError(
+            f"backend_url must not contain a path (got {parsed.path!r}); pass only "
+            "scheme+host (e.g. https://forge.allora.network)"
         )
     if parsed.scheme == "https":
         return

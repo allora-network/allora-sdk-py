@@ -752,6 +752,17 @@ def test_backend_url_without_hostname_rejected():
         make_remote_wallet("https://", API_KEY, WALLET_ID)
 
 
+def test_backend_url_with_path_rejected():
+    # A non-root path is prepended to every request URL (e.g. https://host/api ->
+    # /api/api/v1/...), so signing 404s. Parity with allora-sdk-go's requireSecureBackend.
+    with pytest.raises(ValueError, match="path"):
+        make_remote_wallet("https://forge.example.com/api", API_KEY, WALLET_ID)
+    # A bare trailing slash is the root path and stays accepted.
+    from allora_sdk.rpc_client.remote_signer import _validate_backend_url
+
+    _validate_backend_url("https://forge.example.com/")
+
+
 def test_redirect_is_not_followed():
     # A redirecting backend must not have the X-Forge-API-Key re-sent on the next hop. Point
     # the redirect at a second "leak" server and assert it is never contacted, so a future
