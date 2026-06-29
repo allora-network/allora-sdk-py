@@ -120,10 +120,13 @@ class AlloraWalletConfig:
         # ADDRESS_PREFIX=` that unset it) or an uppercase one would otherwise surface far from
         # the cause — as a confusing "fee_granter HRP ... does not match prefix ''" or an opaque
         # bech32 error at first broadcast. BIP173 HRPs are non-empty, lowercase, and the '1'
-        # separator cannot appear in them, so a digit-free lowercase alphabetic string.
-        if not prefix.isalpha() or prefix != prefix.lower():
+        # separator cannot appear in them, so a digit-free lowercase alphabetic string. Require
+        # ASCII too: str.isalpha() accepts non-ASCII letters (e.g. "allø".isalpha() is True), but a
+        # BIP173 HRP is ASCII — so an ASCII check rejects a non-ASCII prefix that would otherwise
+        # produce a malformed address downstream.
+        if not (prefix.isascii() and prefix.isalpha()) or prefix != prefix.lower():
             raise ValueError(
-                f"{p}ADDRESS_PREFIX must be a non-empty lowercase alphabetic BIP173 HRP, got "
+                f"{p}ADDRESS_PREFIX must be a non-empty lowercase ASCII alphabetic BIP173 HRP, got "
                 f"{os.getenv(p + 'ADDRESS_PREFIX')!r}"
             )
         fee_granter = _read_fee_granter(p)

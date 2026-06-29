@@ -265,6 +265,16 @@ def test_from_env_rejects_uppercase_address_prefix(monkeypatch):
         AlloraWalletConfig.from_env()
 
 
+def test_from_env_rejects_non_ascii_address_prefix(monkeypatch):
+    # str.isalpha() accepts non-ASCII letters (e.g. "allø"), but a BIP-173 HRP is ASCII; the prefix
+    # check must reject a non-ASCII value rather than let it produce a malformed address downstream.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("ADDRESS_PREFIX", "allø")  # "allø"
+    with pytest.raises(ValueError, match="ADDRESS_PREFIX"):
+        AlloraWalletConfig.from_env()
+
+
 def test_from_env_accepts_and_strips_valid_address_prefix(monkeypatch):
     # A valid lowercase HRP is accepted; stray YAML whitespace is stripped.
     from allora_sdk.rpc_client.config import AlloraWalletConfig
