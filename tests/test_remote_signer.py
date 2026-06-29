@@ -847,6 +847,49 @@ def test_sign_response_uppercase_pubkey_accepted():
         thread.join(timeout=2)
 
 
+def test_sign_response_missing_pubkey_echo_rejected():
+    # Fail closed: a sign response that omits the pubkey echo must be rejected, matching
+    # allora-sdk-ts. Otherwise a backend could simply drop the field to dodge the
+    # rotation/mis-route check.
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            req = json.loads(self.rfile.read(length))
+            payload = bytes.fromhex(req["payload"])
+            sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
+            # Valid signature over the payload, but no pubkey echo field at all.
+            self._send({"signature": sig.hex()})
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+        with pytest.raises(ForgeBackendError, match="omitted the pubkey echo"):
+            wallet.signer().sign(b"cosmos signdoc bytes")
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
 def test_wallet_id_normalized_to_canonical(backend):
     # A non-canonical UUID (braced form) must be normalized to the canonical dashed form so it
     # matches the backend's canonical id and is URL-encoded canonically. Before normalization the
