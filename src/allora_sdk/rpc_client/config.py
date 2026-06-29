@@ -15,11 +15,15 @@ def _read_fee_granter(prefix: str) -> Optional[str]:
     accepted for one release (with a ``DeprecationWarning``) so existing 12-factor
     deployments keep working through the rename.
     """
+    # Treat an empty value (e.g. a shell `export FORGE_MASTER_GRANTER_ADDRESS=`) as unset, not as
+    # a real address: otherwise an empty canonical var would silently shadow a valid FEE_GRANTER
+    # alias, and the empty string would then fail _validate_fee_granter with a confusing
+    # "invalid fee_granter address ''" that gives no hint the legacy value was discarded.
     granter = os.getenv(prefix + "FORGE_MASTER_GRANTER_ADDRESS")
-    if granter is not None:
+    if granter:
         return granter
     legacy = os.getenv(prefix + "FEE_GRANTER")
-    if legacy is not None:
+    if legacy:
         warnings.warn(
             f"{prefix}FEE_GRANTER is deprecated; rename it to "
             f"{prefix}FORGE_MASTER_GRANTER_ADDRESS (the canonical fee-granter env var "
@@ -27,7 +31,8 @@ def _read_fee_granter(prefix: str) -> Optional[str]:
             DeprecationWarning,
             stacklevel=3,
         )
-    return legacy
+        return legacy
+    return None
 
 
 @dataclass
@@ -125,7 +130,9 @@ class AlloraWalletConfig:
 
         api_key = os.getenv(p + "FORGE_API_KEY")
         wallet_id = os.getenv(p + "FORGE_SIGNING_WALLET_ID")
-        backend_url = os.getenv(p + "FORGE_BACKEND_URL", "https://forge.allora.network")
+        # `or` (not getenv's default arg) so an empty `export FORGE_BACKEND_URL=` falls back to the
+        # public backend instead of an empty string that fails _validate_backend_url confusingly.
+        backend_url = os.getenv(p + "FORGE_BACKEND_URL") or "https://forge.allora.network"
         if api_key:
             # Managed (Privy) custody must be the *sole* signing source. The returns below never
             # read PRIVATE_KEY/MNEMONIC/MNEMONIC_FILE, so a stale local-key env var (a common

@@ -293,6 +293,46 @@ def test_from_env_fee_granter_canonical_takes_precedence(backend, monkeypatch):
     assert cfg.fee_granter == canonical
 
 
+def test_read_fee_granter_empty_canonical_does_not_shadow_legacy(monkeypatch):
+    # An empty `export FORGE_MASTER_GRANTER_ADDRESS=` must be treated as unset, not shadow a valid
+    # FEE_GRANTER alias (which would otherwise fail validation with a confusing empty-string error).
+    from allora_sdk.rpc_client.config import _read_fee_granter
+
+    legacy = str(Address(PrivateKey().public_key, "allo"))
+    monkeypatch.setenv("FORGE_MASTER_GRANTER_ADDRESS", "")
+    monkeypatch.setenv("FEE_GRANTER", legacy)
+    with pytest.warns(DeprecationWarning, match="FORGE_MASTER_GRANTER_ADDRESS"):
+        assert _read_fee_granter("") == legacy
+
+
+def test_read_fee_granter_all_empty_returns_none(monkeypatch):
+    from allora_sdk.rpc_client.config import _read_fee_granter
+
+    monkeypatch.setenv("FORGE_MASTER_GRANTER_ADDRESS", "")
+    monkeypatch.setenv("FEE_GRANTER", "")
+    assert _read_fee_granter("") is None
+
+
+def test_from_env_empty_backend_url_falls_back_to_default(monkeypatch):
+    # An empty `export FORGE_BACKEND_URL=` must fall back to the public backend rather than surface
+    # as a confusing "must have a hostname" failure.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+
+    monkeypatch.setenv("FORGE_API_KEY", API_KEY)
+    monkeypatch.delenv("FORGE_SIGNING_WALLET_ID", raising=False)
+    monkeypatch.setenv("FORGE_BACKEND_URL", "")
+    for name in (
+        "PRIVATE_KEY",
+        "MNEMONIC",
+        "MNEMONIC_FILE",
+        "FEE_GRANTER",
+        "FORGE_MASTER_GRANTER_ADDRESS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    cfg = AlloraWalletConfig.from_env()
+    assert cfg.forge_backend_url == "https://forge.allora.network"
+
+
 def test_fee_granter_invalid_bech32_rejected():
     # A typo'd granter must fail at config time, not per-transaction at broadcast time.
     from allora_sdk.rpc_client.config import AlloraWalletConfig
