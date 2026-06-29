@@ -340,6 +340,13 @@ wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set
 `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` options. Set `FEE_GRANTER` to enable the
 feegrant subsidy described above.
 
+> **Migration note:** `AlloraWalletConfig` now requires *exactly one* signing-credential
+> source. Configuring more than one of `private_key` / `mnemonic` / `mnemonic_file` / `wallet`
+> (or more than one of the `PRIVATE_KEY` / `MNEMONIC` / `MNEMONIC_FILE` env vars), or
+> combining `FORGE_API_KEY` with any local credential, now raises `ValueError` at startup
+> instead of silently picking one by precedence. Remove any stale credential env vars before
+> upgrading. See the CHANGELOG for details.
+
 ## Allora API Client
 
 Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
