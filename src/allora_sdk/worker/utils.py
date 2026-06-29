@@ -49,8 +49,10 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None, topic_id: int | None =
         # Managed (Privy) custody with no explicit wallet: provision a backend-signed wallet
         # bound to this worker's topic (get-or-create; one worker = one topic).
         if wallet.forge_api_key:
-            if topic_id is None:
-                raise ValueError("managed-wallet provisioning requires a topic_id")
+            if topic_id is None or topic_id <= 0:
+                raise ValueError(
+                    "managed-wallet provisioning requires a positive topic_id"
+                )
             from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
 
             return provision_remote_wallet(

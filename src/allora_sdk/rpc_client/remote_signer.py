@@ -731,6 +731,10 @@ def provision_remote_wallet(
     the wallet as ``fee_granter`` so a worker can subsidize gas without explicit config; an
     explicit fee_granter / ``FORGE_MASTER_GRANTER_ADDRESS`` overrides it at the worker layer.
     """
+    if topic_id <= 0:
+        # forge-v2 keys signing wallets by (user, topic_id); a sentinel 0/negative would bind a
+        # wallet to a non-existent on-chain topic or silently collide two workers on one wallet.
+        raise ValueError(f"provision requires a positive topic_id, got {topic_id}")
     c = (
         client
         if client is not None
