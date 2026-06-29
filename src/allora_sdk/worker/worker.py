@@ -48,7 +48,7 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet
+from allora_sdk.worker.utils import init_worker_wallet, resolve_fee_granter
 
 logger = logging.getLogger("allora_sdk")
 
@@ -112,7 +112,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,
-                fee_granter=wallet.fee_granter if wallet else None,
+                fee_granter=resolve_fee_granter(wallet, wallet_initialized),
             ),
             network=network,
             debug=debug,
@@ -183,7 +183,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,
-                fee_granter=wallet.fee_granter if wallet else None,
+                fee_granter=resolve_fee_granter(wallet, wallet_initialized),
             ),
             network=network,
             debug=debug,
@@ -251,7 +251,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         client = AlloraRPCClient(
             wallet=AlloraWalletConfig(
                 wallet=wallet_initialized,
-                fee_granter=wallet.fee_granter if wallet else None,
+                fee_granter=resolve_fee_granter(wallet, wallet_initialized),
             ),
             network=network,
             debug=debug,

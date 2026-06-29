@@ -333,6 +333,11 @@ Worker gas can be subsidized by a master-wallet feegrant: set `fee_granter` to t
 wallet address (which must hold an on-chain feegrant allowance for the signing wallet) and
 transactions are broadcast with that granter as the fee payer, so the signing wallet needs
 no ALLO of its own. Leave `fee_granter` unset to have the signing wallet pay its own fees.
+When it is unset, a worker on the managed (Privy) custody path will use the master granter the
+Forge backend reports for the wallet — returned on provision and wallet-info responses as
+`master_granter` — so a server-configured feegrant is discovered and applied automatically at
+runtime. An explicit `fee_granter` (or the `FORGE_MASTER_GRANTER_ADDRESS` env var) always
+overrides the discovered value.
 
 For env-driven (12-factor) deployments, `AlloraWalletConfig.from_env()` builds the remote
 wallet automatically when `FORGE_API_KEY` and `FORGE_SIGNING_WALLET_ID` are set

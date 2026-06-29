@@ -86,6 +86,30 @@ def init_worker_wallet(wallet: AlloraWalletConfig | None, topic_id: int | None =
         return LocalWallet.from_mnemonic(mnemonic, wallet_prefix)
 
 
+def resolve_fee_granter(
+    wallet: AlloraWalletConfig | None, resolved_wallet: Wallet
+) -> str | None:
+    """Resolve the effective fee-granter for a worker.
+
+    Precedence: an explicit / env-configured ``wallet.fee_granter`` (e.g.
+    ``FORGE_MASTER_GRANTER_ADDRESS``) overrides everything; otherwise fall back to a granter
+    discovered from the Forge backend — the managed wallet's ``master_granter``, which a
+    provisioned (or wallet-info-fetched) :class:`RemoteWallet` exposes as ``fee_granter``.
+
+    Args:
+        wallet: The worker's wallet configuration, or None.
+        resolved_wallet: The concrete Wallet returned by ``init_worker_wallet`` (a RemoteWallet
+            on the managed path; a LocalWallet otherwise, which carries no discovered granter).
+
+    Returns:
+        The fee-granter address to broadcast with, or None when neither source provides one
+        (the signing wallet then pays its own fees).
+    """
+    if wallet and wallet.fee_granter:
+        return wallet.fee_granter
+    return getattr(resolved_wallet, "fee_granter", None)
+
+
 R = TypeVar("R")
 P = ParamSpec("P")
 

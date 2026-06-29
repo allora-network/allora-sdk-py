@@ -23,6 +23,8 @@ from allora_sdk.rpc_client.remote_signer import (
 
 WALLET_ID = "11111111-1111-1111-1111-111111111111"
 API_KEY = "forge_sk_test"
+# A valid allo1 master-granter address the fake backend reports on wallet-info / provision.
+MASTER_GRANTER = str(Address(PrivateKey().public_key, "allo"))
 
 
 def _make_handler(priv: PrivateKey):
@@ -43,7 +45,14 @@ def _make_handler(priv: PrivateKey):
 
         def do_GET(self):
             assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
-            self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex})
+            self._send(
+                {
+                    "id": WALLET_ID,
+                    "address": address,
+                    "pubkey": pub_hex,
+                    "master_granter": MASTER_GRANTER,
+                }
+            )
 
         def do_POST(self):
             assert self.headers.get("X-Forge-API-Key") == API_KEY, "wrong/missing api key header"
@@ -56,7 +65,15 @@ def _make_handler(priv: PrivateKey):
             req = json.loads(self.rfile.read(length))
             if not self.path.endswith("/sign"):
                 # Provision (POST /api/v1/signing-wallets with topic_id): get-or-create wallet.
-                self._send({"id": WALLET_ID, "address": address, "pubkey": pub_hex, "topic_id": req.get("topic_id")})
+                self._send(
+                    {
+                        "id": WALLET_ID,
+                        "address": address,
+                        "pubkey": pub_hex,
+                        "topic_id": req.get("topic_id"),
+                        "master_granter": MASTER_GRANTER,
+                    }
+                )
                 return
             payload = bytes.fromhex(req["payload"])
             sig = priv.sign_digest(payload) if req["prehashed"] else priv.sign(payload)
@@ -387,6 +404,71 @@ def test_init_worker_wallet_managed_requires_topic():
         init_worker_wallet(cfg, topic_id=None)
 
 
+def test_remote_wallet_discovers_master_granter_from_wallet_info(backend):
+    # The backend reports master_granter on wallet-info; the RemoteWallet captures it as the
+    # fee_granter fallback so a worker can subsidize gas without explicit config.
+    _priv, url = backend
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+    assert wallet.fee_granter == MASTER_GRANTER
+
+
+def test_provision_remote_wallet_discovers_master_granter(backend):
+    # The provision response carries master_granter; it is threaded onto the wallet without a
+    # second (blocking) wallet-info fetch.
+    from allora_sdk.rpc_client.remote_signer import provision_remote_wallet
+
+    _priv, url = backend
+    wallet = provision_remote_wallet(url, API_KEY, topic_id=42)
+    assert wallet.fee_granter == MASTER_GRANTER
+
+
+def test_public_key_hex_shortcut_has_no_discovered_granter():
+    # The async shortcut skips wallet-info, so there is no master_granter to discover.
+    priv = PrivateKey()
+    pub_hex = priv.public_key.public_key_bytes.hex()
+    address = str(Address(priv.public_key, "allo"))
+    wallet = make_remote_wallet(
+        "https://forge.invalid",
+        API_KEY,
+        WALLET_ID,
+        public_key_hex=pub_hex,
+        address=address,
+    )
+    assert wallet.fee_granter is None
+
+
+def test_resolve_fee_granter_precedence(backend):
+    # env/explicit config overrides the discovered value; the discovered master_granter is the
+    # fallback when no fee_granter is configured.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from allora_sdk.worker.utils import init_worker_wallet, resolve_fee_granter
+
+    _priv, url = backend
+    cfg = AlloraWalletConfig(forge_api_key=API_KEY, forge_backend_url=url)
+    wallet = init_worker_wallet(cfg, topic_id=7)
+    assert resolve_fee_granter(cfg, wallet) == MASTER_GRANTER
+
+    override = str(Address(PrivateKey().public_key, "allo"))
+    cfg_override = AlloraWalletConfig(
+        forge_api_key=API_KEY, forge_backend_url=url, fee_granter=override
+    )
+    assert resolve_fee_granter(cfg_override, wallet) == override
+
+
+def test_resolve_fee_granter_local_wallet_has_no_discovery():
+    # A LocalWallet carries no discovered granter; resolve falls through to the config value.
+    from allora_sdk.rpc_client.config import AlloraWalletConfig
+    from allora_sdk.worker.utils import resolve_fee_granter
+    from cosmpy.aerial.wallet import LocalWallet
+
+    local = LocalWallet(PrivateKey(), prefix="allo")
+    assert resolve_fee_granter(AlloraWalletConfig(wallet=local), local) is None
+
+    granter = str(Address(PrivateKey().public_key, "allo"))
+    cfg = AlloraWalletConfig(wallet=local, fee_granter=granter)
+    assert resolve_fee_granter(cfg, local) == granter
+
+
 def test_forge_api_key_rejects_local_credentials():
     # Managed (Privy) custody must be the sole credential source. Combined with a local key the
     # worker would silently provision and sign with a remote wallet (wrong worker address), so the
@@ -605,6 +687,7 @@ def test_signing_wallet_info_models_full_contract():
             "topic_id": 7,
             "worker_label": "btc-inferer",
             "created_at": "2024-01-02T03:04:05Z",
+            "master_granter": "allo1master",
             "privy_wallet_id": "ignored-never-on-wire",
             "some_future_field": "ignored",
         }
@@ -614,6 +697,7 @@ def test_signing_wallet_info_models_full_contract():
     assert info.topic_id == 7
     assert info.worker_label == "btc-inferer"
     assert info.created_at == "2024-01-02T03:04:05Z"
+    assert info.master_granter == "allo1master"
     # privy_wallet_id is no longer modeled (server never emits it).
     assert not hasattr(info, "privy_wallet_id")
 

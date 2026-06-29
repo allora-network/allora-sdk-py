@@ -67,6 +67,11 @@ class SigningWalletInfo(BaseModel):
     Privy server-wallet id is never serialized on the wire — it is intentionally not modeled
     here (it would always be ``None``). ``topic_id``/``worker_label`` are the bound-topic
     metadata the server actually returns (omitempty) for a managed wallet.
+
+    ``master_granter`` is the master/subsidy wallet (the on-chain feegrant fee payer) the
+    backend has configured for the wallet. The worker uses it as the ``fee_granter`` fallback
+    when none is set explicitly or via ``FORGE_MASTER_GRANTER_ADDRESS`` (both of which
+    override it); see ``worker.utils.resolve_fee_granter``.
     """
 
     id: str
@@ -77,6 +82,7 @@ class SigningWalletInfo(BaseModel):
     topic_id: Optional[int] = None  # bound topic id (None when unassigned)
     worker_label: Optional[str] = None  # display-only worker hint
     created_at: Optional[str] = None  # RFC 3339 timestamp, raw string (unused)
+    master_granter: Optional[str] = None  # allo1... feegrant fee payer (fallback)
 
 
 class SignResult(BaseModel):
@@ -425,6 +431,11 @@ class RemoteWallet(Wallet):
     directly) so the wallet can seal/simulate transactions before it has ever transacted
     on-chain. ``signer()`` returns a :class:`RemoteSigner`.
 
+    On construction it also captures the backend-reported ``master_granter`` (if any) as the
+    ``fee_granter`` attribute, so a worker on the managed path can subsidize gas from that
+    feegrant without explicit config. An explicit ``fee_granter`` (or
+    ``FORGE_MASTER_GRANTER_ADDRESS``) overrides the discovered value at the worker/config layer.
+
     Passing ``public_key_hex`` skips the (blocking) wallet-info fetch — useful from async
     contexts. **When you use it, the backend is not contacted at construction, so the
     (api_key, wallet_id) binding and the wallet's existence are NOT verified until the
@@ -453,6 +464,7 @@ class RemoteWallet(Wallet):
         public_key_hex: Optional[str] = None,
         address: Optional[str] = None,
         client: Optional[ForgeBackendClient] = None,
+        fee_granter: Optional[str] = None,
     ):
         # forge-v2 keys signing wallets by Privy UUID, so a non-UUID wallet_id is always a
         # config bug (e.g. a typo in FORGE_SIGNING_WALLET_ID). Fail locally with a clear error
@@ -477,6 +489,10 @@ class RemoteWallet(Wallet):
 
         # For the public_key_hex shortcut, cross-check against a caller-supplied address.
         reported_address: Optional[str] = address
+        # The managed master granter (feegrant fee payer) the backend reports for this wallet.
+        # provision_remote_wallet, which already has it from the provision response, passes it
+        # in to skip rediscovery; otherwise it is read from wallet-info below.
+        discovered_granter: Optional[str] = fee_granter
         if public_key_hex is None:
             info = self._client.get_wallet_info(wallet_id)
             # Guard against a proxy misroute / cache bug returning a different wallet.
@@ -509,6 +525,8 @@ class RemoteWallet(Wallet):
                     f"caller-supplied address {reported_address}"
                 )
             reported_address = info.address
+            if discovered_granter is None:
+                discovered_granter = info.master_granter
 
         try:
             pubkey_bytes = bytes.fromhex(public_key_hex)
@@ -534,6 +552,10 @@ class RemoteWallet(Wallet):
         self._signer = RemoteSigner(
             self._client, wallet_id, public_key=self._public_key
         )
+
+        # Discovered feegrant fee payer, exposed for the worker's fee_granter fallback (see
+        # worker.utils.resolve_fee_granter). Normalize an empty backend value to None ("unset").
+        self.fee_granter: Optional[str] = discovered_granter or None
 
     def address(self) -> Address:
         return Address(self._public_key, self._prefix)
@@ -607,7 +629,10 @@ def provision_remote_wallet(
     one topic) and return a :class:`RemoteWallet` for it. Safe to call on every worker start.
 
     The provisioned wallet's pubkey/address are returned by the provision call, so the resulting
-    RemoteWallet is built without a second (blocking) wallet-info fetch.
+    RemoteWallet is built without a second (blocking) wallet-info fetch. If the provision response
+    carries a ``master_granter`` (the backend-configured feegrant fee payer), it is captured on
+    the wallet as ``fee_granter`` so a worker can subsidize gas without explicit config; an
+    explicit fee_granter / ``FORGE_MASTER_GRANTER_ADDRESS`` overrides it at the worker layer.
     """
     c = (
         client
@@ -624,4 +649,5 @@ def provision_remote_wallet(
         public_key_hex=info.pubkey,
         address=info.address,
         client=c,
+        fee_granter=info.master_granter,
     )
