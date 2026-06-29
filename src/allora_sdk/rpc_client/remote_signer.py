@@ -152,8 +152,11 @@ class ForgeBackendClient:
         self._api_key = api_key
         self._timeout = timeout
         if session is not None:
+            # Injected session: the caller owns its lifecycle, so close() must leave it open.
             self._session = session
+            self._owns_session = False
             return
+        self._owns_session = True
         self._session = requests.Session()
         # Retry only idempotent GET requests (e.g. wallet-info) on a transient 5xx/connection
         # blip. POST is deliberately excluded: clear_association is not idempotent from the
@@ -177,6 +180,20 @@ class ForgeBackendClient:
         adapter = HTTPAdapter(max_retries=retry)
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
+
+    def close(self) -> None:
+        """Close the underlying HTTP session (releasing its connection pool) if this client
+        created it. A caller-injected session is left open — the caller owns its lifecycle.
+        Idempotent: safe to call more than once.
+        """
+        if self._owns_session:
+            self._session.close()
+
+    def __enter__(self) -> "ForgeBackendClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def get_wallet_info(self, wallet_id: str) -> SigningWalletInfo:
         """Fetch a signing wallet's public, non-secret info (id, address, pubkey)."""
@@ -500,6 +517,20 @@ class RemoteWallet(Wallet):
 
     def signer(self) -> Signer:
         return self._signer
+
+    def close(self) -> None:
+        """Release the Forge backend HTTP connection pool. Idempotent.
+
+        A no-op when this wallet was built around a caller-injected ForgeBackendClient whose
+        session the caller owns (ForgeBackendClient.close honors session ownership).
+        """
+        self._client.close()
+
+    def __enter__(self) -> "RemoteWallet":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 def make_remote_wallet(

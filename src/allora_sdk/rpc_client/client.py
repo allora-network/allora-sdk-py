@@ -41,6 +41,7 @@ from .client_emissions import EmissionsClient
 from .client_mint import MintClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
 from .client_websocket_events import AlloraWebsocketSubscriber
+from .remote_signer import RemoteWallet
 from .tx_manager import TxManager
 
 logger = logging.getLogger("allora_sdk")
@@ -256,6 +257,10 @@ class AlloraRPCClient:
             await self.events.stop()
         if hasattr(self, "grpc_client") and self.grpc_client:
             self.grpc_client.close()
+        # A RemoteWallet owns a Forge backend HTTP session; release it so short-lived or
+        # test clients do not leak sockets. LocalWallet has no resources to free.
+        if isinstance(self.wallet, RemoteWallet):
+            self.wallet.close()
 
 
     @classmethod

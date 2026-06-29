@@ -228,6 +228,35 @@ def test_fee_granter_cross_hrp_rejected():
         AlloraWalletConfig(private_key="ab" * 32, fee_granter=cosmos_granter)
 
 
+def test_forge_client_close_respects_session_ownership():
+    # A self-created session is closed by close() (idempotently); a caller-injected session
+    # is left open because the caller owns its lifecycle.
+    import requests
+    from unittest.mock import MagicMock
+    from allora_sdk.rpc_client.remote_signer import ForgeBackendClient
+
+    owned = ForgeBackendClient("https://forge.invalid", API_KEY)
+    assert owned._owns_session is True
+    owned._session = MagicMock(spec=requests.Session)
+    owned.close()
+    owned.close()
+    assert owned._session.close.call_count == 2  # idempotent, both reach session.close
+
+    injected_session = MagicMock(spec=requests.Session)
+    injected = ForgeBackendClient("https://forge.invalid", API_KEY, session=injected_session)
+    assert injected._owns_session is False
+    injected.close()
+    injected_session.close.assert_not_called()
+
+
+def test_remote_wallet_close_delegates(backend):
+    # RemoteWallet.close releases the backend session it owns; idempotent and non-raising.
+    _priv, url = backend
+    wallet = make_remote_wallet(url, API_KEY, WALLET_ID)
+    wallet.close()
+    wallet.close()
+
+
 def test_wallet_prefix_conflict_rejected():
     # An explicit, non-default prefix that disagrees with the pre-built wallet's actual HRP
     # must raise, not be silently overwritten (which would mask a real misconfiguration).
