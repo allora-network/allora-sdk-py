@@ -289,7 +289,7 @@ class ForgeBackendClient:
     def _request(
         self, method: str, path: str, body: Optional[str] = None
     ) -> dict[str, Any]:
-        headers = {API_KEY_HEADER: self._api_key}
+        headers = {API_KEY_HEADER: self._api_key, "Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
         try:
@@ -340,6 +340,18 @@ class ForgeBackendClient:
             # JSON parse; callers that need fields validate them separately and would still
             # surface a clear "unexpected response" error if the body were wrongly empty.
             return {}
+
+        # Verify the backend actually returned JSON before parsing. A captive portal, auth
+        # proxy, or misconfigured CDN intercepting the TLS connection typically returns a 200
+        # HTML page; surface a clear Content-Type error (parity with allora-sdk-go/ts) rather
+        # than an opaque decode failure on this credential-carrying signing endpoint.
+        content_type = resp.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("application/json"):
+            snippet = raw.decode(errors="replace")[:256]
+            raise ForgeBackendError(
+                f"forge backend returned non-JSON response "
+                f"(Content-Type: {content_type!r}): {snippet!r}"
+            )
 
         try:
             parsed = json.loads(raw.decode())

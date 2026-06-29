@@ -614,6 +614,7 @@ def test_signature_not_matching_pubkey_rejected():
         def _send(self, obj):
             body = json.dumps(obj).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -655,6 +656,7 @@ def test_address_mismatch_raises():
                 {"id": WALLET_ID, "address": "allo1wrongaddressxxxxxxxxxxxxxxxxxxxxxxxxxx", "pubkey": pub_hex}
             ).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -725,6 +727,38 @@ def test_non_json_response_raises():
     try:
         with pytest.raises(ForgeBackendError, match="non-JSON"):
             make_remote_wallet(url, API_KEY, WALLET_ID)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+def test_captive_portal_html_response_rejected_with_content_type():
+    # A 200 text/html page (captive portal / auth proxy / misconfigured CDN) must surface a
+    # clear Content-Type error, and every request must send Accept: application/json so a
+    # content-negotiating backend returns JSON (parity with allora-sdk-go / allora-sdk-ts).
+    seen = {}
+
+    class HtmlHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            seen["accept"] = self.headers.get("Accept")
+            body = b"<html>login</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = HTTPServer(("127.0.0.1", 0), HtmlHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with pytest.raises(ForgeBackendError, match="Content-Type"):
+            make_remote_wallet(url, API_KEY, WALLET_ID)
+        assert seen["accept"] == "application/json"
     finally:
         server.shutdown()
         thread.join(timeout=2)
@@ -862,6 +896,7 @@ def test_sign_response_uppercase_pubkey_accepted():
         def _send(self, obj):
             body = json.dumps(obj).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -906,6 +941,7 @@ def test_sign_response_missing_pubkey_echo_rejected():
         def _send(self, obj):
             body = json.dumps(obj).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
