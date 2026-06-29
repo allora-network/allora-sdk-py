@@ -192,19 +192,20 @@ class AlloraWalletConfig:
                 "forge_api_key (managed custody) cannot be combined with a local wallet "
                 "credential (private_key, mnemonic, mnemonic_file, or wallet); choose exactly one"
             )
-        # Managed (Privy) custody is a valid "deferred" source: the wallet is provisioned later
-        # from forge_api_key + the worker's topic, so no local credential is present here.
-        if sources == 0 and self.forge_api_key:
-            # Validate the backend URL eagerly, like the wallet-id path does via make_remote_wallet,
-            # so a cleartext-http (API-key leak) or userinfo-bearing FORGE_BACKEND_URL fails at
-            # config time rather than later inside init_worker_wallet -> provision_remote_wallet.
-            if self.forge_backend_url is not None:
-                from .remote_signer import _validate_backend_url
-
-                _validate_backend_url(self.forge_backend_url)
-            self._validate_fee_granter()
-            return
         if sources == 0:
+            # Managed (Privy) custody is a valid "deferred" source: the wallet is provisioned later
+            # from forge_api_key + the worker's topic, so no local credential is present here.
+            if self.forge_api_key:
+                # Validate the backend URL eagerly, like the wallet-id path does via
+                # make_remote_wallet, so a cleartext-http (API-key leak) or userinfo-bearing
+                # FORGE_BACKEND_URL fails at config time rather than later inside
+                # init_worker_wallet -> provision_remote_wallet.
+                if self.forge_backend_url is not None:
+                    from .remote_signer import _validate_backend_url
+
+                    _validate_backend_url(self.forge_backend_url)
+                self._validate_fee_granter()
+                return
             raise ValueError("No wallet credentials provided")
         if sources > 1:
             # Avoid a silent-precedence footgun (e.g. leaving PRIVATE_KEY set while
