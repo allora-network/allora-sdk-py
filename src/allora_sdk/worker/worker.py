@@ -381,6 +381,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _log_balance(self):
         await self._ensure_initialized()
 
+        # A fee-granted signing wallet holds zero ALLO by design (the granter pays the fees), so a
+        # balance line here is misleading noise — and the account may not exist on-chain yet. Gate
+        # on the same client.fee_granter the faucet pre-flight uses (the value TxManager broadcasts).
+        if self.client.fee_granter:
+            return
+
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
             logger.error(f"Could not check balance for {self.address}")
@@ -757,10 +763,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     logger.info(f"     - View on explorer: {explorer_url}")
                     self.submitted_nonces.add(nonce)
 
-                resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
-                if resp.balance is None:
-                    logger.error(f"❌ Could not check balance for {self.address}")
-                    return
+                # Under managed custody (fee_granter set) the signing wallet may have no on-chain
+                # account yet, so resp.balance is legitimately None — don't treat that as an error
+                # or skip the post-broadcast bookkeeping below. Same gate as the faucet pre-flight.
+                if not self.client.fee_granter:
+                    resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
+                    if resp.balance is None:
+                        logger.error(f"❌ Could not check balance for {self.address}")
+                        return
 
                 await self._log_balance()
                 await self._maybe_faucet_request()

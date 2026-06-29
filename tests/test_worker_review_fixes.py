@@ -98,6 +98,28 @@ async def test_faucet_skipped_when_fee_granter_set() -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_balance_skipped_when_fee_granter_set() -> None:
+    # A fee-granted signing wallet holds zero ALLO by design, so _log_balance must not query or log
+    # a (misleading) balance — same client.fee_granter gate as the faucet pre-flight.
+    client = _make_worker_client()
+    client.fee_granter = "allo1granter"
+    worker = AlloraWorker(
+        use_case=_make_use_case(),
+        client=client,
+        address="allo1worker",
+        api_key=None,
+        topic_id=69,
+        show_banner=False,
+    )
+    worker._initialized = True
+    worker._chain_id = "allora-testnet-1"
+
+    await worker._log_balance()
+
+    client.bank.query.balance.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_make_reputer_function_uses_single_entry_topic_nonce_cache() -> None:
     calls: list[tuple[int, int]] = []
 
