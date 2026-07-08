@@ -69,7 +69,7 @@ $(GOOGLEAPIS_DIR)/.git:
 
 $(ALLORA_CHAIN_DIR)/.git:
 	rm -rf "$(ALLORA_CHAIN_DIR)"
-	git clone --depth 1 --single-branch --branch alek/classification \
+	git clone --depth 1 --single-branch --branch dev \
 	  https://github.com/allora-network/allora-chain "$(ALLORA_CHAIN_DIR)"
 
 .PHONY: proto-deps
@@ -88,7 +88,7 @@ proto-deps-update:
 	git -C "$(COSMOS_SDK_DIR)" fetch --depth 1 origin v0.50.13 && git -C "$(COSMOS_SDK_DIR)" reset --hard FETCH_HEAD
 	git -C "$(FEEMARKET_DIR)" fetch --depth 1 origin v1.1.1 && git -C "$(FEEMARKET_DIR)" reset --hard FETCH_HEAD
 	git -C "$(GOOGLEAPIS_DIR)" fetch --depth 1 origin master && git -C "$(GOOGLEAPIS_DIR)" reset --hard FETCH_HEAD
-	git -C "$(ALLORA_CHAIN_DIR)" fetch --depth 1 origin alek/classification && git -C "$(ALLORA_CHAIN_DIR)" reset --hard FETCH_HEAD
+	git -C "$(ALLORA_CHAIN_DIR)" fetch --depth 1 origin dev && git -C "$(ALLORA_CHAIN_DIR)" reset --hard FETCH_HEAD
 
 # --- Ensure output dirs exist (order-only)
 $(ALLORA_PROTOS_DIR):
