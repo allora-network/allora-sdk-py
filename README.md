@@ -160,15 +160,15 @@ inference_worker = AlloraWorker.inferer(
 
 ### Reputer Configuration
 
-Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: float) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function.
+Reputers evaluate inference quality by computing losses between ground truth and predictions. An simple reputer can be built with the SDK just as easily as an inference worker. The main difference, is that instead of the `run_model` callback we need to pass a `reputer_fn` which has the type `(context: RunContext, inference: dict[str, float]) -> float`. This function gets called once for each inference in the epoch (that is, the network inference, each individual worker's inference, and a few additional "one-out" inferences which the network uses for scoring). It is expected to obtain a ground truth value, compare it to the inference, and return a loss which is computed with the topic-defined loss function.
 
 In practice, it is often more convenient to have two separate callbacks:
 1. A ground truth function `get_ground_truth(context: RunContext) -> GroundTruthType` which only runs once per epoch.
-2. A loss function `loss(gt: GroundTruthType, inference: float) -> float`, which runs for every value in the inference bundle
+2. A loss function of the type `loss(gt: GroundTruthType, inference: float) -> float` for single-value topics, or of the type `loss(gt: GroundTruthType, inference: dict[str, float]) -> float` for multi-value topics, which runs for every value in the inference bundle.
 
-Note that the ground truth type does not need to agree with the inference type (`float`). That is useful for certain loss functions which require extra data. For example, the `czar` and `ztae` loss functions require a standard deviation of historical values, which can just be treated as part of the ground truth.
+Note that the ground truth type does not need to agree with the inference type. That is useful for certain loss functions which require extra data. For example, the `czar` and `ztae` loss functions require a standard deviation of historical values, which can just be treated as part of the ground truth.
 
-We provide a helper function `make_reputer_function` which takes two functions `get_ground_truth` and `loss_fn` as above and returns a `reputer_fn` that is suitable for passing to the Allora worker. It handles the caching of the ground truth, so that `get_ground_truth` only needs to be called once.
+We provide a helper function `make_reputer_function` which takes two functions `get_ground_truth` and `loss_fn` as above and returns a `reputer_fn` that is suitable for passing to the Allora worker. It handles the caching of the ground truth, so that `get_ground_truth` only needs to be called once per epoch.
 
 ```python
 def mse_loss(x: float, y: float) -> float:
