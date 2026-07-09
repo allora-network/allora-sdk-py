@@ -250,11 +250,12 @@ class Reputer:
         one_out_inferer_forecaster_losses = [
             InputOneOutInfererForecasterValues(
                 forecaster=f,
-                one_out_inferer_values=InputWithheldWorkerAttributedValue(
-                    worker=i,
-                    value=v,
-                ))
-            for (f, x) in ooifs.items() for (i, v) in x.items()
+                one_out_inferer_values=[
+                    InputWithheldWorkerAttributedValue(worker=i, value=v)
+                    for (i, v) in inferers.items()
+                ],
+            )
+            for (f, inferers) in ooifs.items()
         ]
 
         return InputValueBundle(
