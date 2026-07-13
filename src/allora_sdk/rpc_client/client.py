@@ -26,7 +26,7 @@ import allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 as cosmos_tx_v1beta1
 import allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 as cosmos_auth_v1beta1
 import allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 as cosmos_bank_v1beta1
 import allora_sdk.rpc_client.protos.cosmos.staking.v1beta1 as cosmos_staking_v1beta1
-import allora_sdk.rpc_client.protos.emissions.v9 as emissions_v9
+import allora_sdk.rpc_client.protos.emissions.v10 as emissions_v10
 import allora_sdk.rpc_client.protos.feemarket.feemarket.v1 as feemarket_v1
 import allora_sdk.rpc_client.protos.mint.v5 as mint_v5
 import allora_sdk.rpc_client.rest as rest
@@ -91,7 +91,7 @@ class ReconnectingGRPCChannel(Channel):
 class AlloraRPCClient:
     """
     Main client for interacting with the Allora blockchain.
-    
+
     This class provides a high-level interface for blockchain operations
     including queries, transactions, and event subscriptions.
     """
@@ -107,7 +107,7 @@ class AlloraRPCClient:
     ):
         """
         Initialize the Allora blockchain client.
-        
+
         Args:
             config: Network configuration. If None, uses testnet config.
             private_key: Hex-encoded private key for signing transactions.
@@ -140,7 +140,7 @@ class AlloraRPCClient:
                 tendermint_v1beta1.ServiceStub(self.grpc_client),
             )
             tx_query = cast(rest.CosmosTxV1Beta1ServiceLike, cosmos_tx_v1beta1.ServiceStub(self.grpc_client))
-            emissions_query = cast(rest.EmissionsV9QueryServiceLike, emissions_v9.QueryServiceStub(self.grpc_client))
+            emissions_query = cast(rest.EmissionsV10QueryServiceLike, emissions_v10.QueryServiceStub(self.grpc_client))
             mint_query = cast(rest.MintV5QueryServiceLike, mint_v5.QueryServiceStub(self.grpc_client))
             feemarket_query = cast(rest.FeemarketFeemarketV1QueryLike, feemarket_v1.QueryStub(self.grpc_client))
             staking_query = cosmos_staking_v1beta1.QueryStub(self.grpc_client)
@@ -150,7 +150,7 @@ class AlloraRPCClient:
             bank_query: rest.CosmosBankV1Beta1QueryLike = rest.CosmosBankV1Beta1RestQueryClient(parsed_url.rest_url)
             tendermint_query: rest.CosmosBaseTendermintV1Beta1ServiceLike = rest.CosmosBaseTendermintV1Beta1RestServiceClient(parsed_url.rest_url)
             tx_query: rest.CosmosTxV1Beta1ServiceLike = rest.CosmosTxV1Beta1RestServiceClient(parsed_url.rest_url)
-            emissions_query: rest.EmissionsV9QueryServiceLike = rest.EmissionsV9RestQueryServiceClient(parsed_url.rest_url)
+            emissions_query: rest.EmissionsV10QueryServiceLike = rest.EmissionsV10RestQueryServiceClient(parsed_url.rest_url)
             mint_query: rest.MintV5QueryServiceLike = rest.MintV5RestQueryServiceClient(parsed_url.rest_url)
             feemarket_query: rest.FeemarketFeemarketV1QueryLike = rest.FeemarketFeemarketV1RestQueryClient(parsed_url.rest_url)
             staking_query = None
@@ -177,9 +177,9 @@ class AlloraRPCClient:
 
         if self.network.websocket_url is not None:
             self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
-        
+
         logger.debug(f"Initialized Allora client for {self.network.chain_id}")
-    
+
 
     def _initialize_wallet(self, wallet: Optional[AlloraWalletConfig]):
         """Initialize wallet from private key or mnemonic."""
@@ -205,7 +205,7 @@ class AlloraRPCClient:
         except Exception as e:
             logger.error(f"Failed to initialize wallet: {e}")
             raise ValueError(f"Invalid wallet credentials: {e}")
-    
+
 
     async def raise_for_chain_id_mismatch(self):
         chain_id = await self.chain_id()
@@ -224,14 +224,14 @@ class AlloraRPCClient:
         """Get the wallet address if wallet is initialized."""
         return str(self.wallet.address()) if self.wallet else None
 
-    
+
     @property
     def public_key(self) -> Optional[str]:
         """Get the wallet public key if wallet is initialized."""
         if self.wallet:
             return self.wallet.public_key().public_key_hex
         return None
-    
+
 
     async def close(self):
         """Close client and cleanup resources."""

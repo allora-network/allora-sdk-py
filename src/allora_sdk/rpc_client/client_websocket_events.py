@@ -797,7 +797,7 @@ class AlloraWebsocketSubscriber:
         Subscribe to specific events within NewBlockEvents.
         
         Args:
-            event_name: The specific event type to filter for (e.g., "emissions.v9.EventEMAScoresSet")
+            event_name: The specific event type to filter for (e.g., "emissions.v10.EventEMAScoresSet")
             event_attribute_conditions: List of attribute conditions to apply
             callback: Function to call for each matching event (event, block_height)
             subscription_id: Optional custom subscription ID
@@ -866,7 +866,7 @@ class AlloraWebsocketSubscriber:
             self._subscription_id_counter += 1
             subscription_id = f"typed_block_events_{self._subscription_id_counter}"
         
-        # Extract event name from class (e.g., EventScoresSet -> emissions.v9.EventScoresSet)
+        # Extract event name from class (e.g., EventScoresSet -> emissions.v10.EventScoresSet)
         event_name = self._get_event_type_from_class(event_class)
         if not event_name:
             logger.error(f"❌ Could not determine event type for class {event_class.__name__}")

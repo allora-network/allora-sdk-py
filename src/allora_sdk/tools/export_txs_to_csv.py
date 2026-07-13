@@ -12,7 +12,7 @@ import argparse
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import GetTxsEventRequest, GetTxsEventResponse, OrderBy
-from allora_sdk.rpc_client.protos.emissions.v9 import InsertWorkerPayloadRequest
+from allora_sdk.rpc_client.protos.emissions.v10 import InsertWorkerPayloadRequest
 
 
 def main():
@@ -101,7 +101,7 @@ def filter_and_extract_data(data: GetTxsEventResponse):
         if tx.body is None:
             continue
 
-        target_suffix = "emissions.v9.InsertWorkerPayloadRequest"
+        target_suffix = "emissions.v10.InsertWorkerPayloadRequest"
         qualifying_messages = [ msg for msg in tx.body.messages if msg.type_url.endswith(target_suffix) ]
 
         for m in qualifying_messages:

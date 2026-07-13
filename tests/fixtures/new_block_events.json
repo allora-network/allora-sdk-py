@@ -3,7 +3,7 @@
     "id": "typed_block_events_1",
     "result":
     {
-        "query": "tm.event='NewBlockEvents' AND emissions.v9.EventWorkerLastCommitSet.topic_id CONTAINS '13'",
+        "query": "tm.event='NewBlockEvents' AND emissions.v10.EventWorkerLastCommitSet.topic_id CONTAINS '13'",
         "data":
         {
             "type": "tendermint/event/NewBlockEvents",
@@ -2669,7 +2669,7 @@
                         ]
                     },
                     {
-                        "type": "emissions.v9.EventTopicRewardsSet",
+                        "type": "emissions.v10.EventTopicRewardsSet",
                         "attributes":
                         [
                             {
@@ -2690,7 +2690,7 @@
                         ]
                     },
                     {
-                        "type": "emissions.v9.EventNetworkInferences",
+                        "type": "emissions.v10.EventNetworkInferences",
                         "attributes":
                         [
                             {
@@ -2716,7 +2716,7 @@
                         ]
                     },
                     {
-                        "type": "emissions.v9.EventWorkerLastCommitSet",
+                        "type": "emissions.v10.EventWorkerLastCommitSet",
                         "attributes":
                         [
                             {
@@ -2768,15 +2768,15 @@
             [
                 "\"5100967\""
             ],
-            "emissions.v9.EventTopicRewardsSet.rewards":
+            "emissions.v10.EventTopicRewardsSet.rewards":
             [
                 "[\"0\"]"
             ],
-            "emissions.v9.EventTopicRewardsSet.mode":
+            "emissions.v10.EventTopicRewardsSet.mode":
             [
                 "EndBlock"
             ],
-            "emissions.v9.EventNetworkInferences.value_bundle":
+            "emissions.v10.EventNetworkInferences.value_bundle":
             [
                 "{\"topic_id\":\"13\",\"reputer_request_nonce\":{\"reputer_nonce\":{\"block_height\":\"5100955\"}},\"reputer\":\"allo1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqas6usy\",\"extra_data\":null,\"combined_value\":\"4260.058888453676459961899479786112\",\"inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4258.717228926043\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4266.731173804956\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4268.512336271559\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4255.622757413335\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4256.84088323789\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4257.115107072493\"}],\"forecaster_values\":[{\"worker\":\"allo12xax6td0vn7esy3qm54zh0ft96pdtwa4k5gx3j\",\"value\":\"4265.334928248429414133097399752205\"},{\"worker\":\"allo1f07yhttcu6lggaleyd5r4jsgq85dfgsctze2zp\",\"value\":\"4266.553604025666027799103472337839\"},{\"worker\":\"allo1m9vghpc32w8maw8vpp6p55fmcyqkn487r45zwc\",\"value\":\"4258.402653769247209906531611778854\"},{\"worker\":\"allo1s5pkkvwl59egqxqrt7a7w23080grn66m45fcvk\",\"value\":\"4263.409788301422812371839387304860\"},{\"worker\":\"allo1zp8xepd92t4wpk2nkc63h59zwh20k5mkt28h9v\",\"value\":\"4256.903303290942674493133192340247\"}],\"naive_value\":\"4261.487792717884703618835666099610\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4261.629525747233142638004864061041\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4260.950839924766922792074594383964\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4256.780574390552917891247612687207\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4262.333474556632243605888821084564\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4260.489454645500301969335522729136\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4258.237143909351667290466580716167\"}],\"one_out_forecaster_values\":[{\"worker\":\"allo12xax6td0vn7esy3qm54zh0ft96pdtwa4k5gx3j\",\"value\":\"4262.737127885234402608216256910918\"},{\"worker\":\"allo1f07yhttcu6lggaleyd5r4jsgq85dfgsctze2zp\",\"value\":\"4259.469168545268139754128228685300\"},{\"worker\":\"allo1m9vghpc32w8maw8vpp6p55fmcyqkn487r45zwc\",\"value\":\"4258.054003282994011007962582946369\"},{\"worker\":\"allo1s5pkkvwl59egqxqrt7a7w23080grn66m45fcvk\",\"value\":\"4257.446020948450506996471900654085\"},{\"worker\":\"allo1zp8xepd92t4wpk2nkc63h59zwh20k5mkt28h9v\",\"value\":\"4263.525529189114093138803122307810\"}],\"one_in_forecaster_values\":[{\"worker\":\"allo12xax6td0vn7esy3qm54zh0ft96pdtwa4k5gx3j\",\"value\":\"4258.407103721686426411978526758915\"},{\"worker\":\"allo1f07yhttcu6lggaleyd5r4jsgq85dfgsctze2zp\",\"value\":\"4262.947564136263230881191206474605\"},{\"worker\":\"allo1m9vghpc32w8maw8vpp6p55fmcyqkn487r45zwc\",\"value\":\"4257.526328125464141105132572731330\"},{\"worker\":\"allo1s5pkkvwl59egqxqrt7a7w23080grn66m45fcvk\",\"value\":\"4263.246945385215936188947403709203\"},{\"worker\":\"allo1zp8xepd92t4wpk2nkc63h59zwh20k5mkt28h9v\",\"value\":\"4257.093912622890055713288093432139\"}],\"one_out_inferer_forecaster_values\":[{\"forecaster\":\"allo12xax6td0vn7esy3qm54zh0ft96pdtwa4k5gx3j\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4265.334928248429414133097399752205\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4265.301615999440292007150092472805\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4257.622787880989534231669881702046\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4265.353476251888946236458911960557\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4268.422245491813811366406773268938\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4265.334928248429414133097399752205\"}]},{\"forecaster\":\"allo1f07yhttcu6lggaleyd5r4jsgq85dfgsctze2zp\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4266.553604025666027799103472337839\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4266.553604025666027799103472337839\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4256.084176848552784792678515729568\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4267.826857432934068038844082132009\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4266.802083729565506838459081957763\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4266.828738195045108258065767453524\"}]},{\"forecaster\":\"allo1m9vghpc32w8maw8vpp6p55fmcyqkn487r45zwc\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4258.401368791152243516660551137793\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4258.402653769247209906531611778854\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4257.120230062856435435352716073856\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4258.406177415926855351148912558617\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4258.403122144644996407640485848506\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4268.007471837821004438872125741721\"}]},{\"forecaster\":\"allo1s5pkkvwl59egqxqrt7a7w23080grn66m45fcvk\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4263.409788301422812371839387304860\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4263.409551101135742744428929354313\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4256.973642132448200109218467043041\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4263.409788301422812371839387304860\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4265.378931101917931545088471560074\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4265.098306459682111282591745611177\"}]},{\"forecaster\":\"allo1zp8xepd92t4wpk2nkc63h59zwh20k5mkt28h9v\",\"one_out_inferer_values\":[{\"worker\":\"allo1968fa6rwwytemeqw3aqm97gu34j2mntp2zx5a0\",\"value\":\"4256.902860050894136513728074286840\"},{\"worker\":\"allo19qefnmnx0tq40hppjy2gdwnsm8y77405hxfnvq\",\"value\":\"4256.903303290942674493133192340247\"},{\"worker\":\"allo1aujlfklcxn26u6302d75ufsn0887zpjtl354ek\",\"value\":\"4256.771800157246747608627545994700\"},{\"worker\":\"allo1qdusx2g4yszg37w8ae68j7usmksexzvsdnmkf9\",\"value\":\"4257.014623609612259078642713849193\"},{\"worker\":\"allo1sup3qzm00n7790w30p4tdkkqh3saw2p6nd956w\",\"value\":\"4257.159570928852848925230697058028\"},{\"worker\":\"allo1tj7aghwhudntj6t8eg4fz3cygqpxm94smeyxpz\",\"value\":\"4256.878586322038540946238764444254\"}]}]}"
             ],
@@ -2988,15 +2988,15 @@
             [
                 "\"5828527245427720480\""
             ],
-            "emissions.v9.EventWorkerLastCommitSet.nonce":
+            "emissions.v10.EventWorkerLastCommitSet.nonce":
             [
                 "{\"block_height\":\"5100955\"}"
             ],
-            "emissions.v9.EventWorkerLastCommitSet.topic_id":
+            "emissions.v10.EventWorkerLastCommitSet.topic_id":
             [
                 "\"13\""
             ],
-            "emissions.v9.EventWorkerLastCommitSet.mode":
+            "emissions.v10.EventWorkerLastCommitSet.mode":
             [
                 "EndBlock"
             ],
@@ -3012,7 +3012,7 @@
                 "5828527245427720480uallo",
                 "33650935918233uallo"
             ],
-            "emissions.v9.EventNetworkInferences.block_height":
+            "emissions.v10.EventNetworkInferences.block_height":
             [
                 "\"5100955\""
             ],
@@ -3033,7 +3033,7 @@
                 "allo12uxa8rw9hte3z2nuswjzpmfen289n30uag6agp",
                 "allo17099f3pwtd7u0je2x3ajrem6cfydj9xj5ccq2a"
             ],
-            "emissions.v9.EventTopicRewardsSet.topic_ids":
+            "emissions.v10.EventTopicRewardsSet.topic_ids":
             [
                 "[\"50\"]"
             ],
@@ -3050,7 +3050,7 @@
             [
                 "BeginBlock"
             ],
-            "emissions.v9.EventNetworkInferences.topic_id":
+            "emissions.v10.EventNetworkInferences.topic_id":
             [
                 "\"13\""
             ],
@@ -3136,11 +3136,11 @@
             [
                 "BeginBlock"
             ],
-            "emissions.v9.EventNetworkInferences.mode":
+            "emissions.v10.EventNetworkInferences.mode":
             [
                 "EndBlock"
             ],
-            "emissions.v9.EventWorkerLastCommitSet.block_height":
+            "emissions.v10.EventWorkerLastCommitSet.block_height":
             [
                 "\"5100967\""
             ],

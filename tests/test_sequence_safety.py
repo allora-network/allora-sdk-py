@@ -180,8 +180,9 @@ class TestReputerSequenceSafePath:
         mock_client.emissions.query.get_network_inferences_at_block = AsyncMock(
             return_value=MagicMock(
                 network_inferences=MagicMock(
-                    combined_value="1.0",
-                    naive_value="1.0",
+                    combined_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    naive_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    nonce=100,
                     inferer_values=[],
                     forecaster_values=[],
                     one_out_inferer_values=[],
@@ -236,8 +237,9 @@ class TestReputerSequenceSafePath:
         mock_client.emissions.query.get_network_inferences_at_block = AsyncMock(
             return_value=MagicMock(
                 network_inferences=MagicMock(
-                    combined_value="1.0",
-                    naive_value="1.0",
+                    combined_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    naive_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    nonce=100,
                     inferer_values=[],
                     forecaster_values=[],
                     one_out_inferer_values=[],
@@ -300,8 +302,9 @@ class TestReputerSequenceSafePath:
         mock_client.emissions.query.get_network_inferences_at_block = AsyncMock(
             return_value=MagicMock(
                 network_inferences=MagicMock(
-                    combined_value="1.0",
-                    naive_value="1.0",
+                    combined_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    naive_value=[MagicMock(value="1.0", label_id=0, label_name="")],
+                    nonce=100,
                     inferer_values=[],
                     forecaster_values=[],
                     one_out_inferer_values=[],

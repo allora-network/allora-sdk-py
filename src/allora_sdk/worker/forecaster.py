@@ -2,13 +2,14 @@ import logging
 from typing import Dict
 from cosmpy.aerial.wallet import LocalWallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitWorkerPayloadRequest,
     EventWorkerSubmissionWindowOpened,
     EventRewardsSettled,
     GetUnfulfilledWorkerNoncesRequest,
     IsWorkerRegisteredInTopicIdRequest,
 )
+from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
@@ -139,15 +140,10 @@ class Forecaster:
                 logger.warning("Empty forecasts dict provided, skipping submission")
                 return Exception("Empty forecasts dict")
 
-            # Coerce/validate to stable {str: float} and keep a canonical ordering for signing.
-            forecasts: dict[str, float] = {}
-            for addr, pred in forecasts_raw.items():
-                forecasts[str(addr)] = float(pred)
-
             # Convert to forecast_elements format: [{"inferer": addr, "value": str}, ...]
             forecast_elements = [
-                {"inferer": addr, "value": str(pred)}
-                for addr, pred in sorted(forecasts.items(), key=lambda kv: kv[0])
+                {"inferer": addr, "value": canonicalize_dec(pred)}
+                for addr, pred in sorted(forecasts_raw.items(), key=lambda kv: kv[0])
             ]
 
             pending = await self.client.emissions.tx.insert_worker_payload(
@@ -160,7 +156,7 @@ class Forecaster:
             )
             resp = await pending.wait()
 
-            return WorkerResult(submission=forecasts, tx_result=resp)
+            return WorkerResult(submission=forecasts_raw, tx_result=resp)
 
         except TxError as err:
             already_submitted = False

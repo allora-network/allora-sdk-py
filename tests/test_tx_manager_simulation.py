@@ -48,13 +48,13 @@ async def test_submit_transaction_falls_back_when_simulation_raises_tx_error(mon
     monkeypatch.setattr(asyncio, "create_task", _capture_task)
 
     pending = await manager.submit_transaction(
-        type_url="/emissions.v9.InsertWorkerPayloadRequest",
+        type_url="/emissions.v10.InsertWorkerPayloadRequest",
         msgs=[Mock()],
         fee_tier=FeeTier.STANDARD,
     )
 
     # Current behavior: simulation errors are swallowed and gas falls back to defaults.
-    assert pending.type_url == "/emissions.v9.InsertWorkerPayloadRequest"
+    assert pending.type_url == "/emissions.v10.InsertWorkerPayloadRequest"
     manager._attempt_submissions.assert_called_once()
     args, kwargs = manager._attempt_submissions.call_args
     assert args[1] is None  # gas_limit
@@ -80,7 +80,7 @@ async def test_submit_transaction_uses_simulated_gas_when_available(monkeypatch:
     monkeypatch.setattr(asyncio, "create_task", _capture_task)
 
     await manager.submit_transaction(
-        type_url="/emissions.v9.InsertWorkerPayloadRequest",
+        type_url="/emissions.v10.InsertWorkerPayloadRequest",
         msgs=[Mock()],
         fee_tier=FeeTier.PRIORITY,
     )

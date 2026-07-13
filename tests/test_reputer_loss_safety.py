@@ -16,10 +16,19 @@ from allora_sdk.worker.reputer import Reputer
 # ---------------------------------------------------------------------------
 
 
+def _make_labeled_value(value: str) -> Mock:
+    lv = Mock()
+    lv.value = value
+    lv.label_id = 0
+    lv.label_name = "y"
+    return lv
+
+
 def _make_value_bundle(combined_value: str, naive_value: str = "0") -> Mock:
     vb = Mock()
-    vb.combined_value = combined_value
-    vb.naive_value = naive_value
+    vb.combined_value = [_make_labeled_value(combined_value)]
+    vb.naive_value = [_make_labeled_value(naive_value)]
+    vb.nonce = 12345
     vb.inferer_values = []
     vb.forecaster_values = []
     vb.one_out_inferer_values = []
@@ -35,8 +44,8 @@ def reputer_with_sqe():
     wallet.address.return_value = Mock(__str__=lambda: "allo1abc")
     client = Mock()
 
-    async def reputer_fn(_ctx, prediction: float) -> float:
-        return squared_error_loss(10.0, prediction)
+    async def reputer_fn(_ctx, prediction: dict[str, float]) -> float:
+        return squared_error_loss(10.0, prediction["y"])
 
     return Reputer(
         wallet=wallet,
@@ -54,15 +63,14 @@ class TestComputeLossBundleNonFinite:
         vb = _make_value_bundle(combined_value="nan", naive_value="0")
         with pytest.raises(ValueError) as exc_info:
             await reputer_with_sqe._compute_loss_bundle(vb)
-        assert "predicted" in str(exc_info.value)
-        assert "finite" in str(exc_info.value).lower()
+        assert "non-finite" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_predicted_inf_in_combined_raises(self, reputer_with_sqe):
         vb = _make_value_bundle(combined_value="inf", naive_value="0")
         with pytest.raises(ValueError) as exc_info:
             await reputer_with_sqe._compute_loss_bundle(vb)
-        assert "predicted" in str(exc_info.value)
+        assert "non-finite" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_finite_values_succeed(self, reputer_with_sqe):

@@ -94,7 +94,7 @@ class EventMarshaler:
 
     e.g.
     {
-        "type": "emissions.v9.EventReputerSubmissionWindowOpened",
+        "type": "emissions.v10.EventReputerSubmissionWindowOpened",
         "attributes": [
             {"key": "topic_id", "value": "42"},
             {"key": "nonce", "value": "12893851"},
@@ -105,7 +105,7 @@ class EventMarshaler:
 
     becomes
 
-    emissions.v9.EventReputerSubmissionWindowOpened(
+    emissions.v10.EventReputerSubmissionWindowOpened(
         topic_id=42,
         nonce=12893851,
         window_start_height=123456,

@@ -19,19 +19,19 @@ from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoReq
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
-from allora_sdk.rpc_client.protos.emissions.v9 import GetTopicRequest
-from allora_sdk.rpc_client.client import AlloraRPCClient
-from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
-from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
+    GetTopicRequest,
     EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventRewardsSettled,
     EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
-    InputValueBundle,
 )
+from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
+from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
@@ -685,7 +685,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         nonces = await self.use_case.get_unfulfilled_nonces()
         new_nonces = { n for n in nonces if n not in self.submitted_nonces }
 
-        if nonce is not None:
+        if nonce is not None and nonce not in self.submitted_nonces:
             new_nonces.add(nonce)
 
         nonces_str     = f"{nonces}" if len(nonces) > 0 else "-"

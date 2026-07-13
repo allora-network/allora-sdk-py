@@ -2,7 +2,7 @@ import hashlib
 import logging
 from typing import Dict, List, Optional
 from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce
-from allora_sdk.rpc_client.protos.emissions.v9 import (
+from allora_sdk.rpc_client.protos.emissions.v10 import (
     AddStakeRequest,
     BulkAddToTopicReputerWhitelistRequest,
     BulkAddToTopicWorkerWhitelistRequest,
@@ -14,21 +14,24 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputWorkerDataBundle,
     InsertWorkerPayloadRequest,
     InsertReputerPayloadRequest,
-    InputReputerValueBundle,
-    InputValueBundle,
     InputForecastElement,
     InputForecast,
     RegisterRequest,
+    InputLabeledValue,
+)
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    InputReputerValueBundle,
+    InputValueBundle,
 )
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxManager, PendingTx, WalletNotConfiguredError
-from allora_sdk.rpc_client.rest import EmissionsV9QueryServiceLike
+from allora_sdk.rpc_client.rest import EmissionsV10QueryServiceLike
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 
 logger = logging.getLogger("allora_sdk")
 
 
 class EmissionsClient:
-    def __init__(self, query_client: EmissionsV9QueryServiceLike, tx_manager: TxManager | None = None):
+    def __init__(self, query_client: EmissionsV10QueryServiceLike, tx_manager: TxManager | None = None):
         self.query = query_client
         if tx_manager is not None:
             self.tx = EmissionsTxs(txs=tx_manager)
@@ -67,7 +70,7 @@ class EmissionsTxs:
         )
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.RegisterRequest",
+            type_url="/emissions.v10.RegisterRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -75,7 +78,7 @@ class EmissionsTxs:
     async def insert_worker_payload(
         self,
         topic_id: int,
-        inference_value: Optional[str],
+        inference_value: Optional[list[InputLabeledValue]],
         nonce: int,
         forecast_elements: Optional[List[Dict[str, str]]] = None,
         extra_data: Optional[bytes] = None,
@@ -88,7 +91,7 @@ class EmissionsTxs:
 
         Args:
             topic_id: The topic ID to submit inference for
-            inference_value: Optional inference value as a string. Set to None for forecast-only payloads.
+            inference_value: Optional inference value. Set to None for forecast-only payloads.
             nonce: Block height/nonce for the inference
             forecast_elements: Optional list of forecast elements
                               [{"inferer": "address", "value": "prediction"}]
@@ -114,7 +117,8 @@ class EmissionsTxs:
                 topic_id=topic_id,
                 block_height=nonce,
                 inferer=worker_address,
-                value=canonicalize_dec(inference_value),
+                value="0",
+                values=inference_value,
                 extra_data=extra_data or b"",
                 proof=proof or "",
             )
@@ -165,7 +169,7 @@ class EmissionsTxs:
         logger.debug(f"   Payload details: nonce={nonce}, forecaster={worker_address}")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.InsertWorkerPayloadRequest",
+            type_url="/emissions.v10.InsertWorkerPayloadRequest",
             msgs=[payload_request],
             fee_tier=fee_tier,
             account_seq=account_seq,
@@ -201,7 +205,7 @@ class EmissionsTxs:
         )
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.DelegateStakeRequest",
+            type_url="/emissions.v10.DelegateStakeRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -237,7 +241,7 @@ class EmissionsTxs:
         logger.debug(f"Adding stake of {amount} uallo to topic {topic_id}")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.AddStakeRequest",
+            type_url="/emissions.v10.AddStakeRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -291,7 +295,7 @@ class EmissionsTxs:
         logger.debug(f"Submitting reputer payload for topic {topic_id}")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.InsertReputerPayloadRequest",
+            type_url="/emissions.v10.InsertReputerPayloadRequest",
             msgs=[payload_request],
             fee_tier=fee_tier,
             account_seq=account_seq,
@@ -367,7 +371,7 @@ class EmissionsTxs:
         logger.debug(f"Creating new topic with metadata: {metadata}")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.CreateNewTopicRequest",
+            type_url="/emissions.v10.CreateNewTopicRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -403,7 +407,7 @@ class EmissionsTxs:
         logger.debug(f"Funding topic {topic_id} with {amount} uallo")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.FundTopicRequest",
+            type_url="/emissions.v10.FundTopicRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -439,7 +443,7 @@ class EmissionsTxs:
         logger.debug(f"Adding {len(addresses)} addresses to topic {topic_id} worker whitelist")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.BulkAddToTopicWorkerWhitelistRequest",
+            type_url="/emissions.v10.BulkAddToTopicWorkerWhitelistRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
@@ -475,7 +479,7 @@ class EmissionsTxs:
         logger.debug(f"Adding {len(addresses)} addresses to topic {topic_id} reputer whitelist")
 
         return await self._txs.submit_transaction(
-            type_url="/emissions.v9.BulkAddToTopicReputerWhitelistRequest",
+            type_url="/emissions.v10.BulkAddToTopicReputerWhitelistRequest",
             msgs=[msg],
             fee_tier=fee_tier,
         )
