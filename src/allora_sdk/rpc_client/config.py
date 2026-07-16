@@ -88,6 +88,7 @@ class AlloraNetworkConfig:
         congestion_aware_fees=False,
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
+        gas_adjustment=1.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -102,6 +103,7 @@ class AlloraNetworkConfig:
             congestion_aware_fees=congestion_aware_fees,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
+            gas_adjustment=gas_adjustment,
         )
 
     @classmethod
@@ -118,6 +120,7 @@ class AlloraNetworkConfig:
         congestion_aware_fees=False,
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
+        gas_adjustment=1.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -131,6 +134,7 @@ class AlloraNetworkConfig:
             congestion_aware_fees=congestion_aware_fees,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
+            gas_adjustment=gas_adjustment,
         )
 
     @classmethod
@@ -149,6 +153,7 @@ class AlloraNetworkConfig:
         grpc_drain_window_secs=5,
         port: int = 9090,
         url: str | None = None,
+        gas_adjustment=1.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -163,6 +168,7 @@ class AlloraNetworkConfig:
             query_timeout_secs=query_timeout_secs,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
+            gas_adjustment=gas_adjustment,
         )
 
     @classmethod
@@ -174,6 +180,7 @@ class AlloraNetworkConfig:
             faucet_url=require_env((env_prefix or "") + "FAUCET_URL"),
             fee_denom=require_env((env_prefix or "") + "FEE_DENOM"),
             fee_minimum_gas_price=float(require_env((env_prefix or "") + "FEE_MIN_GAS_PRICE")),
+            gas_adjustment=float(os.getenv((env_prefix or "") + "GAS_ADJUSTMENT", "1.0")),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
