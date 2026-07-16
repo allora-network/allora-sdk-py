@@ -65,6 +65,13 @@ class AlloraNetworkConfig:
     query_timeout_secs: int = 10
     grpc_max_connection_age_secs: int = 1800
     grpc_drain_window_secs: int = 5
+    # Multiplier applied to the simulated gas estimate on the first broadcast
+    # attempt. Execution can consume slightly more gas than simulation reports
+    # (state-dependent writes), so broadcasting at exactly the estimate
+    # (adjustment 1.0, as before) risks out-of-gas — with no room to recover if
+    # the caller disables retries. 1.4 is standard cosmos-client headroom;
+    # raise it for payloads with variable execution cost.
+    gas_adjustment: float = 1.4
 
     @classmethod
     def testnet(

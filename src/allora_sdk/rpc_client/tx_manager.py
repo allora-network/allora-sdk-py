@@ -164,6 +164,10 @@ class TxManager:
         self._cached_gas_price: Optional[Decimal] = None
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
+        # Base gas headroom applied to the simulated estimate on the first
+        # attempt (see AlloraNetworkConfig.gas_adjustment). getattr keeps older
+        # externally-constructed configs working.
+        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.4)
 
     async def submit_transaction(
         self,
@@ -319,7 +323,7 @@ class TxManager:
 
                 pending.attempt = attempt
 
-                gas_multiplier = 1.0 + (attempt * 0.3)
+                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
@@ -349,7 +353,7 @@ class TxManager:
                 return
 
             except OutOfGasError as oog_err:
-                gas_multiplier = 1.0 + (attempt * 0.3)
+                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
 
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     pending._final_future.set_exception(oog_err)
