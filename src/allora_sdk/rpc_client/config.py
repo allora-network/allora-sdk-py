@@ -66,12 +66,12 @@ class AlloraNetworkConfig:
     grpc_max_connection_age_secs: int = 1800
     grpc_drain_window_secs: int = 5
     # Multiplier applied to the simulated gas estimate on the first broadcast
-    # attempt. Execution can consume slightly more gas than simulation reports
-    # (state-dependent writes), so broadcasting at exactly the estimate
-    # (adjustment 1.0, as before) risks out-of-gas — with no room to recover if
-    # the caller disables retries. 1.4 is standard cosmos-client headroom;
-    # raise it for payloads with variable execution cost.
-    gas_adjustment: float = 1.4
+    # attempt. Default 1.0 preserves existing behavior (broadcast at exactly the
+    # estimate). Since execution can consume slightly more gas than simulation
+    # reports (state-dependent writes), broadcasting at exactly the estimate
+    # risks out-of-gas — with no room to recover if the caller disables retries;
+    # set this above 1.0 (e.g. 1.4, standard cosmos headroom) to add margin.
+    gas_adjustment: float = 1.0
 
     @classmethod
     def testnet(

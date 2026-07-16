@@ -165,9 +165,10 @@ class TxManager:
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
         # Base gas headroom applied to the simulated estimate on the first
-        # attempt (see AlloraNetworkConfig.gas_adjustment). getattr keeps older
-        # externally-constructed configs working.
-        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.4)
+        # attempt (see AlloraNetworkConfig.gas_adjustment). Default 1.0 = no
+        # change from prior behavior. getattr keeps older externally-constructed
+        # configs working.
+        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.0)
 
     async def submit_transaction(
         self,
