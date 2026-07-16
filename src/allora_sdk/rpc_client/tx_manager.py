@@ -395,6 +395,17 @@ class TxManager:
                 continue
 
             except AccountSequenceMismatchError:
+                # Before treating this as a genuine sequence conflict, check
+                # whether our own last broadcast actually landed (e.g. a prior
+                # timeout-path retry re-broadcast at the same sequence and the
+                # original silently landed in between). If it did, resolve via
+                # the future instead of resetting the sequence and re-landing.
+                if pending.last_tx_hash:
+                    landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
+                    if landed_resp is not None:
+                        self._resolve_landed(pending, landed_resp)
+                        return
+
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
@@ -408,18 +419,16 @@ class TxManager:
                 # (slow to index on a load-balanced endpoint). Re-broadcasting a
                 # tx that actually landed wastes a fee and is rejected as a
                 # duplicate. Guard against that in two ways:
-                #   1. Re-query the hash; if it landed, resolve success.
+                #   1. Re-query the hash; if it landed, resolve success (or the
+                #      landed tx's own failure) via the future — never raise
+                #      out of this handler, since _attempt_submissions runs as
+                #      a detached task and an escaping exception would leave
+                #      pending._final_future unresolved forever.
                 if pending.last_tx_hash:
-                    try:
-                        resp = await self._get_tx(pending.last_tx_hash)
-                        if resp is not None and resp.tx_response is not None:
-                            self._log_tx_response(resp.tx_response)
-                            next_account_seq = used_sequence + 1
-                            self._raise_for_status(resp.tx_response)
-                            pending._final_future.set_result(resp.tx_response)
-                            return
-                    except TxNotFoundError:
-                        pass
+                    landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
+                    if landed_resp is not None:
+                        self._resolve_landed(pending, landed_resp)
+                        return
                 #   2. Retry WITHOUT resetting the account sequence. If the
                 #      original silently landed after all, re-broadcasting at the
                 #      same sequence is rejected at CheckTx (sequence mismatch,
@@ -565,6 +574,36 @@ class TxManager:
         err = self._exception_from_tx_response(resp)
         if err is not None:
             raise err
+
+    async def _try_confirm_landed(self, tx_hash: str) -> Optional[TxResponse]:
+        """Re-query a tx by hash. Returns the tx_response if found, None if not
+        found or if the query itself failed transiently (e.g. a flaky endpoint
+        during a failover). Never raises — callers rely on this to safely
+        fall through to normal retry logic instead of hanging or crashing the
+        detached submission task.
+        """
+        try:
+            resp = await self._get_tx(tx_hash)
+        except Exception:
+            return None
+        if resp is None or resp.tx_response is None:
+            return None
+        return resp.tx_response
+
+    def _resolve_landed(self, pending: "PendingTx", tx_response: TxResponse) -> None:
+        """Resolve pending's future for a confirmed-landed tx. If the landed
+        tx itself failed on-chain (non-zero code), that error is set on the
+        future rather than raised — this may be called from within an except
+        handler, and raising here would escape _attempt_submissions (a
+        detached asyncio task), leaving the future unresolved forever.
+        """
+        self._log_tx_response(tx_response)
+        try:
+            self._raise_for_status(tx_response)
+        except Exception as err:
+            pending._final_future.set_exception(err)
+            return
+        pending._final_future.set_result(tx_response)
 
     def _classify_error_from_message(self, error_msg: str) -> type[Exception]:
         """
