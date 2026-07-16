@@ -403,7 +403,28 @@ class TxManager:
                 continue
 
             except TxTimeoutError:
-                next_account_seq = None
+                # wait_for_tx timed out — but the tx may still have landed
+                # (slow to index on a load-balanced endpoint). Re-broadcasting a
+                # tx that actually landed wastes a fee and is rejected as a
+                # duplicate. Guard against that in two ways:
+                #   1. Re-query the hash; if it landed, resolve success.
+                if pending.last_tx_hash:
+                    try:
+                        resp = await self._get_tx(pending.last_tx_hash)
+                        if resp is not None and resp.tx_response is not None:
+                            self._log_tx_response(resp.tx_response)
+                            next_account_seq = used_sequence + 1
+                            self._raise_for_status(resp.tx_response)
+                            pending._final_future.set_result(resp.tx_response)
+                            return
+                    except TxNotFoundError:
+                        pass
+                #   2. Retry WITHOUT resetting the account sequence. If the
+                #      original silently landed after all, re-broadcasting at the
+                #      same sequence is rejected at CheckTx (sequence mismatch,
+                #      no fee) rather than acquiring a fresh sequence and landing
+                #      a second time. A genuinely-lost tx still re-lands (its
+                #      sequence was never consumed).
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
