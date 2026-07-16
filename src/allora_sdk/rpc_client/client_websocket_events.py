@@ -18,6 +18,14 @@ from .event_utils import EventMarshaler, EventRegistry
 
 logger = logging.getLogger("allora_sdk")
 
+# recv() timeout for the event loop. Short enough to detect a silently-deaf
+# subscription promptly, long enough to avoid busy-looping between blocks.
+_EVENT_RECV_TIMEOUT_SECS = 25.0
+# If no message arrives for this long, treat the subscription as dead (the
+# TCP/ping layer can stay alive while the server stops pushing events) and
+# force a full reconnect + resubscribe.
+_MAX_EVENT_SILENCE_SECS = 60.0
+
 
 @runtime_checkable
 class WebSocketLike(Protocol):
@@ -369,24 +377,49 @@ class AlloraWebsocketSubscriber:
             logger.error(f"Failed to unsubscribe {subscription_id}: {e}")
     
     async def _event_loop(self):
-        """Main event processing loop."""
+        """Main event processing loop.
+
+        Uses a finite recv timeout plus a max-silence threshold: if no message
+        arrives for ``_MAX_EVENT_SILENCE_SECS`` the subscription is treated as
+        silently dead (the connection can stay alive at the ping/pong layer
+        while the server stops pushing events) and a full reconnect +
+        resubscribe is forced. Without this, a deaf subscription blocks forever.
+        """
+        last_msg = time.monotonic()
         while self.running:
             try:
                 if not self.websocket or self.websocket.close_code:
                     logger.debug("Reconnecting...")
                     await self._connect()
                     logger.debug("Websocket connected")
+                    last_msg = time.monotonic()
                     continue
-                
+
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=30,
+                        timeout=_EVENT_RECV_TIMEOUT_SECS,
                     )
                     await self._handle_message(str(message))
-                    
+                    last_msg = time.monotonic()
+
                 except asyncio.TimeoutError:
-                    # Send ping to keep connection alive
+                    silent = time.monotonic() - last_msg
+                    if silent >= _MAX_EVENT_SILENCE_SECS:
+                        # Alive at the ping/pong layer but no events arriving —
+                        # force a full reconnect; _connect() re-sends every
+                        # subscription.
+                        logger.warning(
+                            "event stream silent for %.0fs — forcing websocket "
+                            "reconnect+resubscribe", silent,
+                        )
+                        try:
+                            await self.websocket.close()
+                        except Exception:
+                            pass
+                        self.websocket = None
+                        continue
+                    # Not stale yet — probe liveness with a ping.
                     if not self.websocket.close_code:
                         await self.websocket.ping()
                     continue
