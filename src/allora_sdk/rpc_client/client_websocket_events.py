@@ -191,10 +191,26 @@ class AlloraWebsocketSubscriber:
     filtering, and callback management.
     """
     
-    def __init__(self, url: str, connect_fn: ConnectFn = default_websocket_connect):
-        """Initialize event subscriber with Allora client."""
+    def __init__(
+        self,
+        url: str,
+        connect_fn: ConnectFn = default_websocket_connect,
+        event_recv_timeout_secs: float = _EVENT_RECV_TIMEOUT_SECS,
+        max_event_silence_secs: float = _MAX_EVENT_SILENCE_SECS,
+    ):
+        """Initialize event subscriber with Allora client.
+
+        ``max_event_silence_secs`` gates the deaf-subscription watchdog: after
+        this long with no message the loop forces a reconnect+resubscribe.
+        The default suits subscriptions that receive a message roughly per block
+        (e.g. NewBlock-based queries). Raise it for subscriptions that can be
+        legitimately idle longer than the default, to avoid reconnecting a
+        healthy-but-quiet stream.
+        """
         self.url = url
         self.connect_fn = connect_fn
+        self._event_recv_timeout_secs = event_recv_timeout_secs
+        self._max_event_silence_secs = max_event_silence_secs
         self.websocket: Optional['WebSocketLike'] = None
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
         self.callbacks: Dict[str, List[Callable]] = {}
@@ -398,14 +414,14 @@ class AlloraWebsocketSubscriber:
                 try:
                     message = await asyncio.wait_for(
                         self.websocket.recv(),
-                        timeout=_EVENT_RECV_TIMEOUT_SECS,
+                        timeout=self._event_recv_timeout_secs,
                     )
                     await self._handle_message(str(message))
                     last_msg = time.monotonic()
 
                 except asyncio.TimeoutError:
                     silent = time.monotonic() - last_msg
-                    if silent >= _MAX_EVENT_SILENCE_SECS:
+                    if silent >= self._max_event_silence_secs:
                         # Alive at the ping/pong layer but no events arriving —
                         # force a full reconnect; _connect() re-sends every
                         # subscription.
