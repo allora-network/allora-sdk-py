@@ -329,6 +329,13 @@ worker = AlloraWorker.inferer(
 )
 ```
 
+> **Security boundary:** `FORGE_API_KEY` is a managed-wallet signing credential, not a
+> transaction-scoped permission. The remote signer can submit arbitrary SignDoc bytes and
+> 32-byte digests to Forge, so possession of the key authorizes any transaction the managed
+> wallet can sign. Disabling Forge's optional `/transfer` convenience route does not prevent a
+> caller from building, signing, and broadcasting a transfer through `/sign`. Store, rotate, and
+> revoke this API key with the same care as a private wallet key.
+
 Worker gas can be subsidized by a master-wallet feegrant: set `fee_granter` to the master
 wallet address (which must hold an on-chain feegrant allowance for the signing wallet) and
 transactions are broadcast with that granter as the fee payer, so the signing wallet needs
