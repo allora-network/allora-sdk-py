@@ -18,9 +18,10 @@ from .event_utils import EventMarshaler, EventRegistry
 
 logger = logging.getLogger("allora_sdk")
 
-# recv() timeout for the event loop. Short enough to detect a silently-deaf
-# subscription promptly, long enough to avoid busy-looping between blocks.
-_EVENT_RECV_TIMEOUT_SECS = 25.0
+# recv() timeout for the event loop. Matches the historical hardcoded value so
+# per-recv behavior is unchanged; the deaf-subscription watchdog below is what
+# adds the new silence detection.
+_EVENT_RECV_TIMEOUT_SECS = 30.0
 # If no message arrives for this long, treat the subscription as dead (the
 # TCP/ping layer can stay alive while the server stops pushing events) and
 # force a full reconnect + resubscribe.
