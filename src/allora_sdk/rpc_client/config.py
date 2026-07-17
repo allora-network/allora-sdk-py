@@ -1,8 +1,11 @@
+import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
 from cosmpy.aerial.config import NetworkConfig
 from cosmpy.aerial.wallet import Wallet
+
+logger = logging.getLogger("allora_sdk")
 
 
 @dataclass
@@ -72,6 +75,23 @@ class AlloraNetworkConfig:
     # risks out-of-gas — with no room to recover if the caller disables retries;
     # set this above 1.0 (e.g. 1.4, standard cosmos headroom) to add margin.
     gas_adjustment: float = 1.0
+
+    def __post_init__(self):
+        # A non-positive multiplier (a bad caller value or a GAS_ADJUSTMENT
+        # typo read by from_env) would produce a zero/negative first-attempt
+        # gas limit and guarantee out-of-gas — fail loudly instead of silently
+        # broadcasting an unusable tx. Values in (0, 1.0) are allowed but shrink
+        # the estimate, so warn.
+        if self.gas_adjustment <= 0:
+            raise ValueError(
+                f"gas_adjustment must be > 0, got {self.gas_adjustment!r}"
+            )
+        if self.gas_adjustment < 1.0:
+            logger.warning(
+                "gas_adjustment=%s is below 1.0; the first broadcast will be sized "
+                "below the simulated estimate and may run out of gas.",
+                self.gas_adjustment,
+            )
 
     @classmethod
     def testnet(
