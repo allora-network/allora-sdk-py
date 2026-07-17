@@ -19,6 +19,7 @@ from allora_sdk.rpc_client.tx_manager import (
     AccountSequenceMismatchError,
     FeeTier,
     OutOfGasError,
+    _LandedOutcome,
     PendingTx,
     TxError,
     TxManager,
@@ -208,7 +209,7 @@ async def test_bail_if_landed_finalizes_landed_success() -> None:
     pending.attempt = 0
     pending.last_tx_hash = "HASH1"
 
-    assert await manager._bail_if_landed(pending) is True
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.FINALIZED
     assert await pending.wait() is manager._get_tx.return_value.tx_response
 
 
@@ -224,7 +225,7 @@ async def test_bail_if_landed_skips_retryable_landed_failure_with_retries_left()
     pending.attempt = 0
     pending.last_tx_hash = "HASH1"
 
-    assert await manager._bail_if_landed(pending) is False
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.RETRY_NEW_SEQUENCE
     assert not pending._final_future.done()
 
 
@@ -237,7 +238,7 @@ async def test_bail_if_landed_finalizes_retryable_failure_when_retries_exhausted
     pending.attempt = 1  # last attempt — no retries remain
     pending.last_tx_hash = "HASH1"
 
-    assert await manager._bail_if_landed(pending) is True
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.FINALIZED
     with pytest.raises(OutOfGasError):
         await pending.wait()
 
@@ -253,7 +254,7 @@ async def test_bail_if_landed_finalizes_non_retryable_landed_failure_immediately
     pending.attempt = 0
     pending.last_tx_hash = "HASH1"
 
-    assert await manager._bail_if_landed(pending) is True
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.FINALIZED
     with pytest.raises(TxError):
         await pending.wait()
 
@@ -266,3 +267,34 @@ def test_exception_from_tx_response_classification_for_broadcast_guard() -> None
     assert manager._exception_from_tx_response(_landed(0).tx_response) is None
     err = manager._exception_from_tx_response(_landed(32, "account sequence mismatch").tx_response)
     assert isinstance(err, AccountSequenceMismatchError)
+
+
+@pytest.mark.asyncio
+async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() -> None:
+    """Timeout handler: if the tx is confirmed landed with a *retryable* failure
+    (out-of-gas), the retry must use a FRESH sequence (None) — the landed tx
+    already consumed its sequence, so reusing it would just seq-mismatch and
+    waste a cycle (cubic P2). Contrast test_timeout_retry_preserves_account_sequence,
+    where the tx was NOT confirmed landed and the same sequence is intentionally kept."""
+    manager = _make_manager()
+    manager._pre_flight_checks = AsyncMock()
+    manager._log_tx_response = Mock()
+
+    seqs: list = []
+
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+        seqs.append(seq)
+        return ("HASH1", 200_000, Mock(), 7)
+
+    manager._build_and_broadcast = fake_build
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+    manager._get_tx = AsyncMock(return_value=_landed(11, "out of gas"))  # landed OOG
+
+    pending = _pending(manager, max_retries=1)
+    await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=None)
+
+    with pytest.raises(OutOfGasError):
+        await pending.wait()
+
+    # attempt 0 seq None; retry must be None (fresh), NOT the consumed 7.
+    assert seqs == [None, None]

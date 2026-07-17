@@ -119,6 +119,13 @@ class TxTimeoutError(Exception):
 _RETRYABLE_TX_ERRORS = (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError)
 
 
+class _LandedOutcome(Enum):
+    """Result of checking whether the last broadcast already landed."""
+    FINALIZED = "finalized"                    # future resolved; caller must return
+    RETRY_NEW_SEQUENCE = "retry_new_sequence"  # landed retryably; retry with a fresh sequence
+    NOT_LANDED = "not_landed"                  # not landed / unconfirmed; caller's normal path
+
+
 class TxManager:
     def __init__(
         self,
@@ -415,9 +422,11 @@ class TxManager:
                 # timeout-path retry re-broadcast at the same sequence and the
                 # original silently landed in between). If it did, resolve via
                 # the future instead of resetting the sequence and re-landing.
-                if await self._bail_if_landed(pending):
+                if await self._bail_if_landed(pending) is _LandedOutcome.FINALIZED:
                     return
 
+                # Genuine mismatch (or a landed-retryable tx whose sequence is
+                # now consumed): fetch a fresh sequence for the retry.
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
@@ -436,14 +445,21 @@ class TxManager:
                 #      out of this handler, since _attempt_submissions runs as
                 #      a detached task and an escaping exception would leave
                 #      pending._final_future unresolved forever.
-                if await self._bail_if_landed(pending):
+                outcome = await self._bail_if_landed(pending)
+                if outcome is _LandedOutcome.FINALIZED:
                     return
-                #   2. Retry WITHOUT resetting the account sequence. If the
-                #      original silently landed after all, re-broadcasting at the
-                #      same sequence is rejected at CheckTx (sequence mismatch,
-                #      no fee) rather than acquiring a fresh sequence and landing
-                #      a second time. A genuinely-lost tx still re-lands (its
-                #      sequence was never consumed).
+                if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                    # It landed but failed retryably — its sequence is consumed,
+                    # so retry with a fresh one instead of the stale sequence
+                    # below (which would only seq-mismatch and burn a cycle).
+                    next_account_seq = None
+                #   2. Otherwise (not confirmed landed) retry WITHOUT resetting
+                #      the account sequence. If the original silently landed
+                #      after all, re-broadcasting at the same sequence is
+                #      rejected at CheckTx (sequence mismatch, no fee) rather
+                #      than acquiring a fresh sequence and landing a second time.
+                #      A genuinely-lost tx still re-lands (its sequence was
+                #      never consumed).
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
@@ -617,30 +633,35 @@ class TxManager:
             return None
         return resp.tx_response
 
-    async def _bail_if_landed(self, pending: "PendingTx") -> bool:
-        """If pending's last broadcast already landed, resolve its future from
-        that tx and return True — the caller must then return without retrying.
+    async def _bail_if_landed(self, pending: "PendingTx") -> "_LandedOutcome":
+        """Check whether pending's last broadcast already landed and decide what
+        the retry handler should do:
 
-        Returns False (so the caller falls through to its normal retry logic)
-        when there is no last hash, it hasn't landed, OR it landed with a
-        *retryable* failure (out-of-gas / sequence mismatch / insufficient fees)
-        and retries remain — those should be re-attempted with corrected
-        gas/sequence/fee, not finalized. A landed success or a landed
-        non-retryable failure is finalized here. Never raises.
+        - FINALIZED: it landed with a success, or a non-retryable failure, or a
+          retryable failure with no retries left — the future is resolved here
+          and the caller must return.
+        - RETRY_NEW_SEQUENCE: it landed with a *retryable* failure (out-of-gas /
+          sequence mismatch / insufficient fees) and retries remain. It consumed
+          its on-chain sequence, so the caller must retry with a FRESH sequence
+          (reusing the old one would just seq-mismatch and waste a cycle).
+        - NOT_LANDED: no last hash, not landed, or the re-query failed — the
+          caller falls through to its normal retry path.
+
+        Never raises.
         """
         if not pending.last_tx_hash:
-            return False
+            return _LandedOutcome.NOT_LANDED
         landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
         if landed_resp is None:
-            return False
+            return _LandedOutcome.NOT_LANDED
         err = self._exception_from_tx_response(landed_resp)
         if (
             isinstance(err, _RETRYABLE_TX_ERRORS)
             and pending.attempt < pending.max_retries
         ):
-            return False
+            return _LandedOutcome.RETRY_NEW_SEQUENCE
         self._resolve_landed(pending, landed_resp)
-        return True
+        return _LandedOutcome.FINALIZED
 
     def _resolve_landed(self, pending: "PendingTx", tx_response: TxResponse) -> None:
         """Resolve pending's future for a confirmed-landed tx. If the landed
