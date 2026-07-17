@@ -208,6 +208,20 @@ class AlloraWebsocketSubscriber:
         legitimately idle longer than the default, to avoid reconnecting a
         healthy-but-quiet stream.
         """
+        # A non-positive recv timeout would make recv() return instantly and
+        # ping-storm the loop; a silence threshold at/below the recv timeout
+        # would trip the deaf-subscription watchdog on every idle recv cycle
+        # and reconnect-storm. Fail loudly on a misconfiguration.
+        if event_recv_timeout_secs <= 0:
+            raise ValueError(
+                f"event_recv_timeout_secs must be > 0, got {event_recv_timeout_secs!r}"
+            )
+        if max_event_silence_secs <= event_recv_timeout_secs:
+            raise ValueError(
+                "max_event_silence_secs must be greater than event_recv_timeout_secs "
+                f"({max_event_silence_secs!r} <= {event_recv_timeout_secs!r})"
+            )
+
         self.url = url
         self.connect_fn = connect_fn
         self._event_recv_timeout_secs = event_recv_timeout_secs
