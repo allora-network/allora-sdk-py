@@ -16,7 +16,9 @@ import pytest
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import (
+    AccountSequenceMismatchError,
     FeeTier,
+    OutOfGasError,
     PendingTx,
     TxError,
     TxManager,
@@ -183,3 +185,84 @@ async def test_timeout_transient_query_error_degrades_to_retry() -> None:
     # Degrades to a normal retry preserving the used sequence, same as the
     # TxNotFoundError case.
     assert seqs == [None, 7]
+
+
+# ── _bail_if_landed: don't finalize a landed *retryable* failure (cubic/Fable P1) ──
+
+
+def _landed(code: int, raw_log: str = "") -> Mock:
+    resp = Mock()
+    resp.tx_response = Mock(
+        code=code, codespace="sdk", txhash="HASH1", raw_log=raw_log,
+        gas_wanted=100, gas_used=200,
+    )
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_bail_if_landed_finalizes_landed_success() -> None:
+    manager = _make_manager()
+    manager._log_tx_response = Mock()
+    manager._get_tx = AsyncMock(return_value=_landed(0))
+    pending = _pending(manager, max_retries=2)
+    pending.attempt = 0
+    pending.last_tx_hash = "HASH1"
+
+    assert await manager._bail_if_landed(pending) is True
+    assert await pending.wait() is manager._get_tx.return_value.tx_response
+
+
+@pytest.mark.asyncio
+async def test_bail_if_landed_skips_retryable_landed_failure_with_retries_left() -> None:
+    """A tx that landed out-of-gas with retries remaining must NOT be finalized —
+    the loop should re-attempt with more gas (regression guard for the
+    _bail_if_landed extraction killing seq/gas retries)."""
+    manager = _make_manager()
+    manager._log_tx_response = Mock()
+    manager._get_tx = AsyncMock(return_value=_landed(11, "out of gas"))
+    pending = _pending(manager, max_retries=2)
+    pending.attempt = 0
+    pending.last_tx_hash = "HASH1"
+
+    assert await manager._bail_if_landed(pending) is False
+    assert not pending._final_future.done()
+
+
+@pytest.mark.asyncio
+async def test_bail_if_landed_finalizes_retryable_failure_when_retries_exhausted() -> None:
+    manager = _make_manager()
+    manager._log_tx_response = Mock()
+    manager._get_tx = AsyncMock(return_value=_landed(11, "out of gas"))
+    pending = _pending(manager, max_retries=1)
+    pending.attempt = 1  # last attempt — no retries remain
+    pending.last_tx_hash = "HASH1"
+
+    assert await manager._bail_if_landed(pending) is True
+    with pytest.raises(OutOfGasError):
+        await pending.wait()
+
+
+@pytest.mark.asyncio
+async def test_bail_if_landed_finalizes_non_retryable_landed_failure_immediately() -> None:
+    """A landed non-retryable failure (e.g. bad message, code 5) is final even
+    with retries remaining — retrying can't help."""
+    manager = _make_manager()
+    manager._log_tx_response = Mock()
+    manager._get_tx = AsyncMock(return_value=_landed(5, "invalid request"))
+    pending = _pending(manager, max_retries=3)
+    pending.attempt = 0
+    pending.last_tx_hash = "HASH1"
+
+    assert await manager._bail_if_landed(pending) is True
+    with pytest.raises(TxError):
+        await pending.wait()
+
+
+def test_exception_from_tx_response_classification_for_broadcast_guard() -> None:
+    """The CheckTx-rejection guard in _build_and_broadcast relies on this
+    classification: code 0 -> no error; a sequence-mismatch raw_log -> the
+    retryable AccountSequenceMismatchError."""
+    manager = _make_manager()
+    assert manager._exception_from_tx_response(_landed(0).tx_response) is None
+    err = manager._exception_from_tx_response(_landed(32, "account sequence mismatch").tx_response)
+    assert isinstance(err, AccountSequenceMismatchError)

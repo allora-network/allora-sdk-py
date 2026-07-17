@@ -113,6 +113,12 @@ class TxTimeoutError(Exception):
     pass
 
 
+# Errors the submission loop recovers from by re-attempting (fresh sequence /
+# higher gas / refreshed fee). A tx that *landed* with one of these should be
+# retried, not finalized — see TxManager._bail_if_landed.
+_RETRYABLE_TX_ERRORS = (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError)
+
+
 class TxManager:
     def __init__(
         self,
@@ -154,6 +160,10 @@ class TxManager:
             FeeTier.STANDARD: 1.5,   # 50% higher than minimum
             FeeTier.PRIORITY: 2.5,   # 150% higher than minimum
         }
+
+        # Strong references to in-flight submission tasks (see submit()) so the
+        # event loop can't garbage-collect them mid-flight.
+        self._inflight_tasks: set[asyncio.Task] = set()
 
         # Pending tx hash watchers monitored by a background task
         self._pending_attempts: Dict[str, Dict[str, Any]] = {}
@@ -209,10 +219,15 @@ class TxManager:
             timeout=timeout,
         )
 
-        # Kick off processing as a background task; caller can await the PendingTx
-        asyncio.create_task(
+        # Kick off processing as a background task; caller can await the PendingTx.
+        # Keep a strong reference until it finishes — asyncio holds only a weak
+        # reference to bare tasks, so an unreferenced one can be garbage-collected
+        # mid-flight, leaving pending._final_future unresolved forever.
+        task = asyncio.create_task(
             self._attempt_submissions(pending, estimated_gas_limit, account_seq=account_seq)
         )
+        self._inflight_tasks.add(task)
+        task.add_done_callback(self._inflight_tasks.discard)
 
         return pending
     
@@ -504,6 +519,19 @@ class TxManager:
             raise Exception('broadcast_tx returned None - check network connectivity')
 
         tx_hash = broadcast_result.tx_response.txhash
+
+        # SYNC broadcast: a non-zero code here is a CheckTx rejection (bad
+        # sequence, insufficient fees, ...). The tx was NOT accepted into the
+        # mempool and will never be indexed, so raise the classified error now
+        # instead of returning a hash that wait_for_tx would only time out on.
+        # This is also what makes the idempotency path work: a same-sequence
+        # re-broadcast of an already-landed tx is rejected here (sequence
+        # mismatch), and because we raise before setting pending.last_tx_hash,
+        # the caller's already-landed check still points at the original hash.
+        err = self._exception_from_tx_response(broadcast_result.tx_response)
+        if err is not None:
+            raise err
+
         logger.debug("⏳ Waiting for transaction to be included in block...")
 
         return tx_hash, gas_limit, fee, resolved_seq
@@ -592,13 +620,24 @@ class TxManager:
     async def _bail_if_landed(self, pending: "PendingTx") -> bool:
         """If pending's last broadcast already landed, resolve its future from
         that tx and return True — the caller must then return without retrying.
-        Returns False when there is no last hash or it hasn't landed, so the
-        caller falls through to normal retry. Never raises.
+
+        Returns False (so the caller falls through to its normal retry logic)
+        when there is no last hash, it hasn't landed, OR it landed with a
+        *retryable* failure (out-of-gas / sequence mismatch / insufficient fees)
+        and retries remain — those should be re-attempted with corrected
+        gas/sequence/fee, not finalized. A landed success or a landed
+        non-retryable failure is finalized here. Never raises.
         """
         if not pending.last_tx_hash:
             return False
         landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
         if landed_resp is None:
+            return False
+        err = self._exception_from_tx_response(landed_resp)
+        if (
+            isinstance(err, _RETRYABLE_TX_ERRORS)
+            and pending.attempt < pending.max_retries
+        ):
             return False
         self._resolve_landed(pending, landed_resp)
         return True
