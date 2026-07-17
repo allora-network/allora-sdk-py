@@ -400,11 +400,8 @@ class TxManager:
                 # timeout-path retry re-broadcast at the same sequence and the
                 # original silently landed in between). If it did, resolve via
                 # the future instead of resetting the sequence and re-landing.
-                if pending.last_tx_hash:
-                    landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
-                    if landed_resp is not None:
-                        self._resolve_landed(pending, landed_resp)
-                        return
+                if await self._bail_if_landed(pending):
+                    return
 
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
@@ -424,11 +421,8 @@ class TxManager:
                 #      out of this handler, since _attempt_submissions runs as
                 #      a detached task and an escaping exception would leave
                 #      pending._final_future unresolved forever.
-                if pending.last_tx_hash:
-                    landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
-                    if landed_resp is not None:
-                        self._resolve_landed(pending, landed_resp)
-                        return
+                if await self._bail_if_landed(pending):
+                    return
                 #   2. Retry WITHOUT resetting the account sequence. If the
                 #      original silently landed after all, re-broadcasting at the
                 #      same sequence is rejected at CheckTx (sequence mismatch,
@@ -584,11 +578,30 @@ class TxManager:
         """
         try:
             resp = await self._get_tx(tx_hash)
-        except Exception:
+        except Exception as exc:
+            # A "not found" here is expected (the tx genuinely didn't land), but
+            # a transient RPC error or a real bug looks identical to the caller
+            # — log at debug so it's diagnosable without spamming the normal
+            # not-yet-indexed case.
+            logger.debug("confirm-landed re-query for %s failed: %r", tx_hash, exc)
             return None
         if resp is None or resp.tx_response is None:
             return None
         return resp.tx_response
+
+    async def _bail_if_landed(self, pending: "PendingTx") -> bool:
+        """If pending's last broadcast already landed, resolve its future from
+        that tx and return True — the caller must then return without retrying.
+        Returns False when there is no last hash or it hasn't landed, so the
+        caller falls through to normal retry. Never raises.
+        """
+        if not pending.last_tx_hash:
+            return False
+        landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
+        if landed_resp is None:
+            return False
+        self._resolve_landed(pending, landed_resp)
+        return True
 
     def _resolve_landed(self, pending: "PendingTx", tx_response: TxResponse) -> None:
         """Resolve pending's future for a confirmed-landed tx. If the landed
