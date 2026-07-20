@@ -5,8 +5,45 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from cosmpy.aerial.wallet import Wallet
+
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxManager
+
+
+class _StubWallet(Wallet):
+    """Minimal `Wallet` ABC subclass standing in for a custodial/remote signer."""
+
+    def __init__(self) -> None:
+        # Wallet exposes `data` as a read-only property, so UserString.__init__
+        # (which assigns self.data) must be bypassed.
+        pass
+
+    def address(self):
+        return "allo1stub"
+
+    def public_key(self):
+        return Mock()
+
+    def signer(self):
+        return Mock()
+
+
+def test_tx_manager_accepts_wallet_abc_subclass() -> None:
+    """An injected signer only satisfying the `Wallet` ABC must construct cleanly."""
+    wallet = _StubWallet()
+
+    manager = TxManager(
+        wallet=wallet,
+        tx_client=Mock(),
+        auth_client=Mock(),
+        bank_client=Mock(),
+        feemarket_client=Mock(),
+        config=AlloraNetworkConfig.testnet(),
+    )
+
+    assert manager.wallet is wallet
+    assert isinstance(manager.wallet, Wallet)
 
 
 def _make_manager() -> TxManager:
