@@ -8,7 +8,7 @@ import logging
 from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import Wallet
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
@@ -116,7 +116,9 @@ class TxTimeoutError(Exception):
 class TxManager:
     def __init__(
         self,
-        wallet: LocalWallet,
+        # Abstract cosmpy Wallet, not only LocalWallet, so a custodial/remote
+        # signer (e.g. a Privy-backed wallet) can be injected and used here.
+        wallet: Wallet,
         tx_client: CosmosTxV1Beta1ServiceLike,
         auth_client: CosmosAuthV1Beta1QueryLike,
         bank_client: CosmosBankV1Beta1QueryLike,
