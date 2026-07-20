@@ -75,6 +75,14 @@ class AlloraNetworkConfig:
     # risks out-of-gas — with no room to recover if the caller disables retries;
     # set this above 1.0 (e.g. 1.4, standard cosmos headroom) to add margin.
     gas_adjustment: float = 1.0
+    # Websocket subscription tuning (previously only settable by constructing
+    # AlloraWebsocketSubscriber directly). event_recv_timeout_secs bounds a single
+    # recv(); max_event_silence_secs gates the deaf-subscription watchdog (force a
+    # reconnect+resubscribe after this long with no message). Defaults match the
+    # subscriber's own, so behavior is unchanged unless overridden. Raise
+    # max_event_silence_secs for subscriptions that are legitimately idle longer.
+    event_recv_timeout_secs: float = 30.0
+    max_event_silence_secs: float = 60.0
 
     def __post_init__(self):
         # A non-positive multiplier (a bad caller value or a GAS_ADJUSTMENT
@@ -91,6 +99,17 @@ class AlloraNetworkConfig:
                 "gas_adjustment=%s is below 1.0; the first broadcast will be sized "
                 "below the simulated estimate and may run out of gas.",
                 self.gas_adjustment,
+            )
+        # Same invariants the subscriber enforces — fail fast at config
+        # construction rather than when the websocket loop starts.
+        if self.event_recv_timeout_secs <= 0:
+            raise ValueError(
+                f"event_recv_timeout_secs must be > 0, got {self.event_recv_timeout_secs!r}"
+            )
+        if self.max_event_silence_secs <= self.event_recv_timeout_secs:
+            raise ValueError(
+                "max_event_silence_secs must be greater than event_recv_timeout_secs "
+                f"({self.max_event_silence_secs!r} <= {self.event_recv_timeout_secs!r})"
             )
 
     @classmethod

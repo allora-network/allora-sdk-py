@@ -176,10 +176,11 @@ class AlloraRPCClient:
         self.feemarket  = FeemarketClient(query_client=feemarket_query)
 
         if self.network.websocket_url is not None:
-            # event_recv_timeout_secs / max_event_silence_secs are not exposed
-            # via AlloraNetworkConfig or AlloraClient — only settable by
-            # constructing AlloraWebsocketSubscriber directly.
-            self.events = AlloraWebsocketSubscriber(self.network.websocket_url)
+            self.events = AlloraWebsocketSubscriber(
+                self.network.websocket_url,
+                event_recv_timeout_secs=self.network.event_recv_timeout_secs,
+                max_event_silence_secs=self.network.max_event_silence_secs,
+            )
 
         logger.debug(f"Initialized Allora client for {self.network.chain_id}")
 

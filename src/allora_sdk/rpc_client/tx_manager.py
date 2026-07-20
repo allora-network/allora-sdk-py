@@ -119,11 +119,15 @@ class TxTimeoutError(Exception):
 _RETRYABLE_TX_ERRORS = (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError)
 
 
-class _LandedOutcome(Enum):
+class LandedOutcome(Enum):
     """Result of checking whether the last broadcast already landed."""
     FINALIZED = "finalized"                    # future resolved; caller must return
     RETRY_NEW_SEQUENCE = "retry_new_sequence"  # landed retryably; retry with a fresh sequence
     NOT_LANDED = "not_landed"                  # not landed / unconfirmed; caller's normal path
+
+
+# Backwards-compatible alias for the previously-private name.
+_LandedOutcome = LandedOutcome
 
 
 class TxManager:
@@ -237,7 +241,25 @@ class TxManager:
         task.add_done_callback(self._inflight_tasks.discard)
 
         return pending
-    
+
+    async def close(self) -> None:
+        """Cancel any in-flight submission tasks and wait for them to unwind.
+
+        Gives the manager the same shutdown discipline the websocket subscriber
+        has: if the client is dropped without awaiting pending transactions, the
+        detached submission tasks would otherwise keep running. Idempotent.
+        """
+        tasks = list(self._inflight_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._inflight_tasks.clear()
+
+    async def stop(self) -> None:
+        """Alias for close() — matches the websocket subscriber's lifecycle name."""
+        await self.close()
+
     async def simulate_transaction(
         self,
         type_url: str,
@@ -460,6 +482,12 @@ class TxManager:
                 #      than acquiring a fresh sequence and landing a second time.
                 #      A genuinely-lost tx still re-lands (its sequence was
                 #      never consumed).
+                #
+                #      There is an inherent TOCTOU window: the original tx could
+                #      land between the _bail_if_landed check above and this
+                #      re-broadcast. That is fine — the same-sequence CheckTx
+                #      rejection is the backstop, so this check is a fast-path
+                #      optimization, not the correctness guarantee.
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
@@ -484,6 +512,14 @@ class TxManager:
         gas_multiplier: float,
         account_seq: Optional[int] = None,
     ) -> tuple[str, int, Coin, int]:
+        """Build, sign, and SYNC-broadcast the tx; return (hash, gas, fee, seq).
+
+        This is the *broadcast* half only. A non-zero CheckTx code raises the
+        classified error here (the tx never entered the mempool), so callers get
+        an exception instead of a hash that will never index. Confirmation
+        (waiting for the tx to land) is a separate step the caller performs via
+        wait_for_tx — broadcast and confirm are already distinct phases.
+        """
         any_messages = [ self._create_any_message(msg, type_url) for msg in msgs ]
 
         tx = Transaction()
@@ -674,6 +710,11 @@ class TxManager:
         try:
             self._raise_for_status(tx_response)
         except Exception as err:
+            # Bare Exception is deliberate: this resolves the future for a
+            # DETACHED task, so ANY error must land on the future — letting one
+            # escape would leave the caller awaiting forever. asyncio.CancelledError
+            # and KeyboardInterrupt are BaseException (py>=3.10), so cancellation
+            # still propagates correctly and is not swallowed here.
             pending._final_future.set_exception(err)
             return
         pending._final_future.set_result(tx_response)
