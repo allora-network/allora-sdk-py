@@ -59,6 +59,9 @@ class PendingTx:
 
         # Final outcome future: resolves to TxResponse or raises
         self._final_future: asyncio.Future[TxResponse] = asyncio.get_running_loop().create_future()
+        # The detached submission task driving this tx (set by submit_transaction),
+        # kept so TxManager.close() can cancel it and resolve the future.
+        self._task: Optional["asyncio.Task"] = None
 
     async def wait(self) -> TxResponse:
         return await self._final_future
@@ -174,7 +177,7 @@ class TxManager:
 
         # Strong references to in-flight submission tasks (see submit()) so the
         # event loop can't garbage-collect them mid-flight.
-        self._inflight_tasks: set[asyncio.Task] = set()
+        self._inflight: set[PendingTx] = set()
 
         # Pending tx hash watchers monitored by a background task
         self._pending_attempts: Dict[str, Dict[str, Any]] = {}
@@ -237,8 +240,9 @@ class TxManager:
         task = asyncio.create_task(
             self._attempt_submissions(pending, estimated_gas_limit, account_seq=account_seq)
         )
-        self._inflight_tasks.add(task)
-        task.add_done_callback(self._inflight_tasks.discard)
+        pending._task = task
+        self._inflight.add(pending)
+        task.add_done_callback(lambda _: self._inflight.discard(pending))
 
         return pending
 
@@ -249,12 +253,21 @@ class TxManager:
         has: if the client is dropped without awaiting pending transactions, the
         detached submission tasks would otherwise keep running. Idempotent.
         """
-        tasks = list(self._inflight_tasks)
+        pendings = list(self._inflight)
+        tasks = [ p._task for p in pendings if p._task is not None ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        self._inflight_tasks.clear()
+        # Cancelling a submission task raises CancelledError inside
+        # _attempt_submissions; being BaseException it bypasses the result-setting
+        # handlers, so _final_future would be left unresolved and any caller
+        # awaiting the PendingTx would hang forever. Resolve them explicitly so
+        # awaiters get a CancelledError instead.
+        for pending in pendings:
+            if not pending._final_future.done():
+                pending._final_future.cancel()
+        self._inflight.clear()
 
     async def stop(self) -> None:
         """Alias for close() — matches the websocket subscriber's lifecycle name."""

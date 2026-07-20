@@ -298,3 +298,39 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
 
     # attempt 0 seq None; retry must be None (fresh), NOT the consumed 7.
     assert seqs == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_close_resolves_inflight_future_instead_of_hanging() -> None:
+    """close() must cancel in-flight submission tasks AND resolve their futures.
+
+    Cancelling the task raises CancelledError inside _attempt_submissions, which
+    (being BaseException) bypasses the result-setting handlers. Without explicit
+    resolution the PendingTx future would stay pending and any awaiter would hang
+    forever. close() must leave the future cancelled so awaiters get a
+    CancelledError.
+    """
+    manager = _make_manager()
+    manager._pre_flight_checks = AsyncMock()
+
+    started = asyncio.Event()
+
+    async def never_finishes(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+        started.set()
+        await asyncio.sleep(3600)  # simulate a long broadcast; cancelled by close()
+
+    manager._build_and_broadcast = never_finishes
+    manager.simulate_transaction = AsyncMock(return_value=200_000)
+    manager._calculate_optimal_fee = AsyncMock(return_value=Mock(amount=1, denom="uallo"))
+
+    pending = await manager.submit_transaction(
+        "/emissions.v10.InsertWorkerPayloadRequest", [Mock()]
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    await manager.close()
+
+    assert pending._final_future.done()
+    with pytest.raises(asyncio.CancelledError):
+        await pending.wait()
+    assert len(manager._inflight) == 0

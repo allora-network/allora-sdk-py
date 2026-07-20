@@ -128,6 +128,8 @@ class AlloraNetworkConfig:
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
         gas_adjustment=1.0,
+        event_recv_timeout_secs=30.0,
+        max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -143,6 +145,8 @@ class AlloraNetworkConfig:
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
             gas_adjustment=gas_adjustment,
+            event_recv_timeout_secs=event_recv_timeout_secs,
+            max_event_silence_secs=max_event_silence_secs,
         )
 
     @classmethod
@@ -160,6 +164,8 @@ class AlloraNetworkConfig:
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
         gas_adjustment=1.0,
+        event_recv_timeout_secs=30.0,
+        max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -174,6 +180,8 @@ class AlloraNetworkConfig:
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
             gas_adjustment=gas_adjustment,
+            event_recv_timeout_secs=event_recv_timeout_secs,
+            max_event_silence_secs=max_event_silence_secs,
         )
 
     @classmethod
@@ -193,6 +201,8 @@ class AlloraNetworkConfig:
         port: int = 9090,
         url: str | None = None,
         gas_adjustment=1.0,
+        event_recv_timeout_secs=30.0,
+        max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -208,6 +218,8 @@ class AlloraNetworkConfig:
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
             gas_adjustment=gas_adjustment,
+            event_recv_timeout_secs=event_recv_timeout_secs,
+            max_event_silence_secs=max_event_silence_secs,
         )
 
     @classmethod
@@ -220,6 +232,8 @@ class AlloraNetworkConfig:
             fee_denom=require_env((env_prefix or "") + "FEE_DENOM"),
             fee_minimum_gas_price=float(require_env((env_prefix or "") + "FEE_MIN_GAS_PRICE")),
             gas_adjustment=float(os.getenv((env_prefix or "") + "GAS_ADJUSTMENT", "1.0")),
+            event_recv_timeout_secs=float(os.getenv((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", "30.0")),
+            max_event_silence_secs=float(os.getenv((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", "60.0")),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
