@@ -242,7 +242,7 @@ class AlloraRPCClient:
         logger.debug("Closing Allora client")
         if hasattr(self, "events") and self.events:
             await self.events.stop()
-        if self.tx_manager:
+        if hasattr(self, "tx_manager") and self.tx_manager:
             await self.tx_manager.close()
         if hasattr(self, "grpc_client") and self.grpc_client:
             self.grpc_client.close()

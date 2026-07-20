@@ -301,6 +301,48 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
 
 
 @pytest.mark.asyncio
+async def test_checktx_rejection_leaves_last_tx_hash_unset(monkeypatch) -> None:
+    """End-to-end guard: a non-zero SYNC (CheckTx) response must raise inside the
+    real _build_and_broadcast BEFORE pending.last_tx_hash is set. Keeping the
+    hash None is what makes the same-sequence idempotency backstop point at the
+    original landed tx rather than a rejected re-broadcast."""
+    import allora_sdk.rpc_client.tx_manager as txm
+
+    manager = _make_manager()
+    manager._pre_flight_checks = AsyncMock()
+    manager._create_any_message = Mock(return_value=Mock())
+    manager._calculate_optimal_fee = AsyncMock(return_value=Mock(amount=1, denom="uallo"))
+
+    # Neutralize the real cosmpy tx-building machinery — this test exercises the
+    # broadcast/classification guard, not signing.
+    fake_tx = Mock()
+    fake_tx.tx = Mock()
+    fake_tx.tx.SerializeToString = Mock(return_value=b"txbytes")
+    monkeypatch.setattr(txm, "Transaction", Mock(return_value=fake_tx))
+    monkeypatch.setattr(txm, "SigningCfg", Mock())
+    monkeypatch.setattr(txm, "TxFee", Mock())
+
+    account = Mock()
+    account.info = Mock(sequence=7, account_number=3)
+    manager.auth_client.account_info = AsyncMock(return_value=account)
+
+    rejected = Mock()
+    rejected.tx_response = Mock(
+        code=5, codespace="sdk", txhash="HASHX", raw_log="invalid request: bad message",
+    )
+    manager.tx_client.broadcast_tx = AsyncMock(return_value=rejected)
+
+    pending = _pending(manager, max_retries=0)
+    await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=None)
+
+    with pytest.raises(TxError):
+        await pending.wait()
+
+    assert pending.last_tx_hash is None          # never set — raised before line 393
+    manager.tx_client.broadcast_tx.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_close_resolves_inflight_future_instead_of_hanging() -> None:
     """close() must cancel in-flight submission tasks AND resolve their futures.
 

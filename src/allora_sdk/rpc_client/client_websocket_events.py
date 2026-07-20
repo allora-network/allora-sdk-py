@@ -431,8 +431,11 @@ class AlloraWebsocketSubscriber:
                         self.websocket.recv(),
                         timeout=self._event_recv_timeout_secs,
                     )
-                    await self._handle_message(str(message))
+                    # Reset the silence timer on the wire-receive event itself,
+                    # not after handling — a message arriving over the wire is
+                    # the true liveness signal regardless of parse outcome.
                     last_msg = time.monotonic()
+                    await self._handle_message(str(message))
 
                 except asyncio.TimeoutError:
                     silent = time.monotonic() - last_msg
