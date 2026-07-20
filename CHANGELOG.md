@@ -2,6 +2,25 @@
 
 # CHANGELOG
 
+## v1.2.0
+
+- New worker types (#37)
+    - `ReputerWorker` for submitting losses, with a configurable loss-methods subpackage (`absolute_error`, `squared_error`, `huber`, `log_cosh`, `poisson`, `binary_cross_entropy`, `ztae`, `zptae`)
+    - `ForecasterWorker` for submitting forecasts
+    - Auto-stake support for inferers, forecasters, and reputers
+    - Callback API reworked to use a `RunContext` and `reputer_fn`
+- Multi-value (multi-output) topic support, updated to `emissions.v10` protos (#71)
+- Worker event handling and gRPC reliability (#72)
+    - gRPC connection now auto-reconnects every 30 minutes to work around a GCP limitation
+    - Window opened/closed event handling reworked to avoid races
+- Loss function argument order changed (#77)
+- Fixed a float/decimal Go-vs-Python ser-de bug via decimal canonicalization (#62)
+- Gas estimation/simulation is now required for all transactions
+- Added staking RPC client and new emissions API endpoints
+- Removed `ml_workflow` and other unused dependencies (#73)
+- Follow-up hardening: tx concurrency/caching, sequence/nonce safety, autostake idempotence, reputer loss safety, and added simulation/loss tests (#45–#56)
+- Dependency bumps: `aiohttp` (#58), `pytest` (#60), `pygments` (#63), `requests` (#64), `protobuf` (#65)
+
 ## v1.1.0
 
 - `AlloraWorker`
