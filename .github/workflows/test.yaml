@@ -55,9 +55,75 @@ jobs:
       - name: Generate RPC client code
         run:  make codegen
 
-      - name: Run tests
-        run:  uv run pytest tests
+      - name: Run unit tests
+        run: uv run pytest tests -m "not integration"
+
+  integration:
+    name: integration tests (non-blocking)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate RPC client code
+        run: make codegen
+
+      - name: Run integration tests
+        id: integration
+        continue-on-error: true
+        run: uv run pytest tests -m integration -v
         env:
           ALLORA_API_KEY: ${{ secrets.ALLORA_API_KEY }}
+
+      # Report integration results as a separate check: green when they pass,
+      # gray/neutral (non-blocking) when they fail. Skipped on forked PRs, whose
+      # read-only GITHUB_TOKEN cannot create checks.
+      - name: Publish integration status check
+        # Best-effort: a failure to post the check must not fail this
+        # non-blocking job. The API error stays visible in the step log.
+        if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ steps.integration.outcome }}';
+            const conclusion = outcome === 'success' ? 'success' : 'neutral';
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'integration-tests',
+              head_sha: sha,
+              status: 'completed',
+              conclusion,
+              output: {
+                title: outcome === 'success'
+                  ? 'Integration tests passed'
+                  : 'Integration tests failed (non-blocking)',
+                summary: outcome === 'success'
+                  ? 'Live-network integration tests passed.'
+                  : 'Live-network integration tests failed. Merge/deploy is not blocked; check live API availability at https://api.allora.network/v2',
+              },
+            });
 
 

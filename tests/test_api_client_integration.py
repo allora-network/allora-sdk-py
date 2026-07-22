@@ -10,6 +10,8 @@ from allora_sdk.api_client import (
 
 DEFAULT_TEST_TIMEOUT = 30  # 30 seconds
 
+pytestmark = pytest.mark.integration
+
 requires_api_key = pytest.mark.skipif(
     not os.getenv("ALLORA_API_KEY"),
     reason="ALLORA_API_KEY environment variable not set",
