@@ -23,6 +23,14 @@ def test_non_positive_gas_adjustment_raises(bad):
         _cfg(bad)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_gas_adjustment_raises(bad):
+    # NaN bypasses the plain range checks (both comparisons are false) and inf
+    # would overflow int(); reject non-finite values outright.
+    with pytest.raises(ValueError, match="gas_adjustment must be > 0"):
+        _cfg(bad)
+
+
 def test_gas_adjustment_below_one_warns_but_allowed(caplog):
     with caplog.at_level(logging.WARNING, logger="allora_sdk"):
         cfg = _cfg(0.5)

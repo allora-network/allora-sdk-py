@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -88,11 +89,13 @@ class AlloraNetworkConfig:
         # A non-positive multiplier (a bad caller value or a GAS_ADJUSTMENT
         # typo read by from_env) would produce a zero/negative first-attempt
         # gas limit and guarantee out-of-gas — fail loudly instead of silently
-        # broadcasting an unusable tx. Values in (0, 1.0) are allowed but shrink
+        # broadcasting an unusable tx. NaN/inf bypass the plain range checks
+        # (both comparisons are false for NaN; inf is a valid float), so gate
+        # on finiteness first. Values in (0, 1.0) are allowed but shrink
         # the estimate, so warn.
-        if self.gas_adjustment <= 0:
+        if not math.isfinite(self.gas_adjustment) or self.gas_adjustment <= 0:
             raise ValueError(
-                f"gas_adjustment must be > 0, got {self.gas_adjustment!r}"
+                f"gas_adjustment must be > 0 and finite, got {self.gas_adjustment!r}"
             )
         if self.gas_adjustment < 1.0:
             logger.warning(
