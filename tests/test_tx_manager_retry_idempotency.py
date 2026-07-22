@@ -327,19 +327,22 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
 
 @pytest.mark.asyncio
 async def test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rejection() -> None:
-    """Double-execution edge case (known limitation, pinned as characterization).
+    """Residual double-execution edge case (known limitation, pinned as
+    characterization).
 
     attempt 0 broadcasts HASH1 and wait_for_tx times out. The tx actually
-    landed, but the hash stays unqueryable across BOTH _bail_if_landed lookups
-    (unusually long indexing delay). The same-sequence retry is then rejected
-    at CheckTx with AccountSequenceMismatchError — indistinguishable from a
-    genuine sequence conflict, so the handler resets to a fresh sequence and
-    the retry can land the same operation twice. A fresh-sequence retry is
-    required for genuine mismatches, so there is no safe local fix; this test
-    pins the behavior so any future change (e.g. longer confirmation windows)
-    shows up as a deliberate diff.
+    landed, but the hash stays unqueryable across the timeout handler's
+    recheck AND the ASM handler's bounded grace window (indexer lag exceeding
+    timeout + grace). The same-sequence re-broadcast is rejected at CheckTx
+    with AccountSequenceMismatchError, and only after the grace window is
+    exhausted does the handler fall back to a fresh sequence — which can land
+    the same operation twice. A fresh-sequence retry remains necessary for
+    genuine mismatches, so there is no safe local fix beyond shrinking the
+    window; this test pins the behavior so any future change shows up as a
+    deliberate diff.
     """
     manager = _make_manager()
+    manager.query_interval_secs = 0  # keep the grace-window polls instant
     manager._pre_flight_checks = AsyncMock()
     manager._log_tx_response = Mock()
     manager._raise_for_status = Mock()
@@ -365,9 +368,48 @@ async def test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rej
         await pending.wait()
 
     # attempt 0: fresh (None) → used 7; attempt 1: same seq 7 (idempotency
-    # backstop), rejected at CheckTx; attempt 2: fresh (None) again — the
-    # double-execution-prone path this test documents.
+    # backstop), rejected at CheckTx; grace window exhausts unconfirmed;
+    # attempt 2: fresh (None) again — the double-execution-prone path this
+    # test documents.
     assert seqs == [None, 7, None]
+
+
+@pytest.mark.asyncio
+async def test_same_seq_rebroadcast_asm_confirms_original_during_grace_window() -> None:
+    """The fix for the double-execution window: attempt 0 lands but is
+    unindexed → timeout → same-seq re-broadcast → CheckTx ASM rejection. The
+    ASM handler must NOT immediately reset to a fresh sequence — it polls the
+    original hash through a bounded grace window, and when the indexer catches
+    up mid-window it finalizes from the confirmed tx. No fresh-sequence
+    broadcast, no second landing."""
+    manager = _make_manager()
+    manager.query_interval_secs = 0  # keep the grace-window polls instant
+    manager._pre_flight_checks = AsyncMock()
+    manager._log_tx_response = Mock()
+
+    seqs: list = []
+
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+        seqs.append(seq)
+        if len(seqs) == 2:
+            raise AccountSequenceMismatchError("Sequence mismatch: account sequence mismatch")
+        return ("HASH1", 200_000, Mock(), 7)
+
+    manager._build_and_broadcast = fake_build
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+
+    # Not found for the timeout handler's recheck and the ASM handler's first
+    # recheck; the indexer catches up during the grace window.
+    landed = _landed(0)
+    manager._get_tx = AsyncMock(
+        side_effect=[TxNotFoundError(), TxNotFoundError(), landed]
+    )
+
+    pending = _pending(manager, max_retries=2)
+    await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=None)
+
+    assert await pending.wait() is landed.tx_response
+    assert seqs == [None, 7]  # no fresh-sequence third broadcast
 
 
 @pytest.mark.asyncio

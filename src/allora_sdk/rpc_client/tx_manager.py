@@ -68,6 +68,11 @@ class PendingTx:
         # The detached submission task driving this tx (set by submit_transaction),
         # kept so TxManager.close() can cancel it and resolve the future.
         self._task: Optional["asyncio.Task"] = None
+        # Set by the TxTimeoutError handler when it retries WITHOUT resetting the
+        # account sequence (a deliberate same-sequence idempotency re-broadcast).
+        # An AccountSequenceMismatchError rejection of such a re-broadcast is
+        # near-certain proof the original tx landed — see that handler.
+        self._same_seq_rebroadcast: bool = False
 
     async def wait(self) -> TxResponse:
         return await self._final_future
@@ -466,6 +471,33 @@ class TxManager:
                 if await self._bail_if_landed(pending) is _LandedOutcome.FINALIZED:
                     return
 
+                if pending._same_seq_rebroadcast:
+                    # This attempt was a deliberate same-sequence idempotency
+                    # re-broadcast (set by the timeout handler), so an ASM
+                    # rejection of it is near-certain proof the ORIGINAL tx
+                    # landed and consumed the sequence — not a genuine conflict.
+                    # Resetting to a fresh sequence here would land the same
+                    # operation twice, so first give the indexer a bounded grace
+                    # window to catch up and confirm the original hash.
+                    pending._same_seq_rebroadcast = False
+                    outcome = await self._confirm_landed_with_grace(pending)
+                    if outcome is _LandedOutcome.FINALIZED:
+                        return
+                    if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                        # Landed retryably — its sequence is consumed, so retry
+                        # with a fresh one (and better gas if it ran out).
+                        next_account_seq = None
+                        seeded = self._consume_landed_gas_seed(pending)
+                        if seeded is not None:
+                            current_gas_limit = seeded
+                        logger.debug("Account sequence mismatch, retrying...")
+                        continue
+                    # Still unconfirmed after the grace window — indexer lag
+                    # exceeded timeout + grace. Fall through to the
+                    # fresh-sequence retry as a last resort; the residual
+                    # double-execution risk is pinned by
+                    # test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rejection.
+
                 # Genuine mismatch (or a landed-retryable tx whose sequence is
                 # now consumed): fetch a fresh sequence for the retry.
                 next_account_seq = None
@@ -494,13 +526,16 @@ class TxManager:
                     # so retry with a fresh one instead of the stale sequence
                     # below (which would only seq-mismatch and burn a cycle).
                     next_account_seq = None
-                    # If it landed out-of-gas, seed the retry from the landed
-                    # tx's gas_wanted (same bump the OutOfGasError handler
-                    # applies) — reusing current_gas_limit would retry at the
-                    # limit that just proved too small.
-                    landed_err, pending.last_landed_error = pending.last_landed_error, None
-                    if isinstance(landed_err, OutOfGasError) and landed_err.gas_wanted:
-                        current_gas_limit = int(landed_err.gas_wanted * 1.2)
+                    seeded = self._consume_landed_gas_seed(pending)
+                    if seeded is not None:
+                        current_gas_limit = seeded
+                else:
+                    # NOT_LANDED — the retry below keeps the same sequence (a
+                    # deliberate same-sequence idempotency re-broadcast). Flag
+                    # it so the AccountSequenceMismatchError handler treats a
+                    # rejection of this attempt as near-certain proof the
+                    # original landed, not a genuine sequence conflict.
+                    pending._same_seq_rebroadcast = True
                 #   2. Otherwise (not confirmed landed) retry WITHOUT resetting
                 #      the account sequence. If the original silently landed
                 #      after all, re-broadcasting at the same sequence is
@@ -553,6 +588,10 @@ class TxManager:
             tx.add_message(msg)
 
         if gas_limit is None:
+            # Simulation failed upstream — fall back to the static default.
+            # The gas_multiplier headroom below applies on this path too, so
+            # the first-attempt OOG protection (gas_adjustment) holds even
+            # without a simulated estimate.
             gas_limit = await self._estimate_gas(type_url)
 
         gas_limit = int(gas_limit * gas_multiplier)
@@ -726,6 +765,33 @@ class TxManager:
             return _LandedOutcome.RETRY_NEW_SEQUENCE
         self._resolve_landed(pending, landed_resp)
         return _LandedOutcome.FINALIZED
+
+    async def _confirm_landed_with_grace(self, pending: "PendingTx", max_attempts: int = 3) -> "_LandedOutcome":
+        """Re-check pending's last hash a bounded number of times, giving the
+        indexer a grace window (query_interval_secs between checks) to catch up.
+        Returns the first non-NOT_LANDED outcome, or NOT_LANDED once the window
+        is exhausted. Used when a same-sequence idempotency re-broadcast is
+        rejected at CheckTx — near-certain proof the original landed but is not
+        yet indexed.
+        """
+        for _ in range(max_attempts):
+            await asyncio.sleep(self.query_interval_secs)
+            outcome = await self._bail_if_landed(pending)
+            if outcome is not _LandedOutcome.NOT_LANDED:
+                return outcome
+        return _LandedOutcome.NOT_LANDED
+
+    @staticmethod
+    def _consume_landed_gas_seed(pending: "PendingTx") -> Optional[int]:
+        """Read-and-clear pending.last_landed_error; if the landed tx ran out
+        of gas, return a retry gas limit seeded from its gas_wanted (same bump
+        the OutOfGasError handler applies) — reusing the gas limit that just
+        proved too small would only fail again. None otherwise.
+        """
+        landed_err, pending.last_landed_error = pending.last_landed_error, None
+        if isinstance(landed_err, OutOfGasError) and landed_err.gas_wanted:
+            return int(landed_err.gas_wanted * 1.2)
+        return None
 
     def _resolve_landed(self, pending: "PendingTx", tx_response: TxResponse) -> None:
         """Resolve pending's future for a confirmed-landed tx. If the landed
