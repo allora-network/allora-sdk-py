@@ -55,9 +55,19 @@ jobs:
       - name: Generate RPC client code
         run:  make codegen
 
-      - name: Run tests
-        run:  uv run pytest tests
+      - name: Run unit tests
+        run: uv run pytest tests -m "not integration"
+
+      - name: Run integration tests (non-blocking)
+        id: integration
+        continue-on-error: true
+        run: uv run pytest tests -m integration -v
         env:
           ALLORA_API_KEY: ${{ secrets.ALLORA_API_KEY }}
+
+      - name: Warn on integration test failures
+        if: steps.integration.outcome == 'failure'
+        run: |
+          echo "::warning::Integration tests failed. Deployment is not blocked; check live API availability at https://api.allora.network/v2"
 
 
