@@ -281,9 +281,11 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
     manager._log_tx_response = Mock()
 
     seqs: list = []
+    gas_limits: list = []
 
     async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
         seqs.append(seq)
+        gas_limits.append(gas_limit)
         return ("HASH1", 200_000, Mock(), 7)
 
     manager._build_and_broadcast = fake_build
@@ -298,6 +300,54 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
 
     # attempt 0 seq None; retry must be None (fresh), NOT the consumed 7.
     assert seqs == [None, None]
+    # The retry is seeded from the landed tx's gas_wanted (100 * 1.2), not the
+    # gas limit that just ran out of gas.
+    assert gas_limits == [200_000, 120]
+
+
+@pytest.mark.asyncio
+async def test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rejection() -> None:
+    """Double-execution edge case (known limitation, pinned as characterization).
+
+    attempt 0 broadcasts HASH1 and wait_for_tx times out. The tx actually
+    landed, but the hash stays unqueryable across BOTH _bail_if_landed lookups
+    (unusually long indexing delay). The same-sequence retry is then rejected
+    at CheckTx with AccountSequenceMismatchError — indistinguishable from a
+    genuine sequence conflict, so the handler resets to a fresh sequence and
+    the retry can land the same operation twice. A fresh-sequence retry is
+    required for genuine mismatches, so there is no safe local fix; this test
+    pins the behavior so any future change (e.g. longer confirmation windows)
+    shows up as a deliberate diff.
+    """
+    manager = _make_manager()
+    manager._pre_flight_checks = AsyncMock()
+    manager._log_tx_response = Mock()
+    manager._raise_for_status = Mock()
+
+    seqs: list = []
+
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+        seqs.append(seq)
+        if len(seqs) == 2:
+            # Same-sequence re-broadcast rejected at CheckTx — the original
+            # silently landed and consumed the sequence.
+            raise AccountSequenceMismatchError("Sequence mismatch: account sequence mismatch")
+        return ("HASH1", 200_000, Mock(), 7)
+
+    manager._build_and_broadcast = fake_build
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+    manager._get_tx = AsyncMock(side_effect=TxNotFoundError())  # never queryable
+
+    pending = _pending(manager, max_retries=2)
+    await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=None)
+
+    with pytest.raises(TxTimeoutError):
+        await pending.wait()
+
+    # attempt 0: fresh (None) → used 7; attempt 1: same seq 7 (idempotency
+    # backstop), rejected at CheckTx; attempt 2: fresh (None) again — the
+    # double-execution-prone path this test documents.
+    assert seqs == [None, 7, None]
 
 
 @pytest.mark.asyncio

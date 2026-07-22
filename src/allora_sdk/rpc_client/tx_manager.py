@@ -53,6 +53,10 @@ class PendingTx:
         self.last_tx_hash: Optional[str] = None
         self.last_gas_limit: Optional[int] = None
         self.last_fee: Optional[Coin] = None
+        # Classified error of the last confirmed-landed tx when _bail_if_landed
+        # returns RETRY_NEW_SEQUENCE — lets the retry handler reuse details
+        # (e.g. gas_wanted) without re-querying the hash.
+        self.last_landed_error: Optional[Exception] = None
         self.start = datetime.now()
         self.timeout = timeout
         self.attempt: int = 0
@@ -488,6 +492,15 @@ class TxManager:
                     # so retry with a fresh one instead of the stale sequence
                     # below (which would only seq-mismatch and burn a cycle).
                     next_account_seq = None
+                    # If it landed out-of-gas, seed the retry from the landed
+                    # tx's gas_wanted (same bump the OutOfGasError handler
+                    # applies) — reusing current_gas_limit would retry at the
+                    # limit that just proved too small.
+                    if (
+                        isinstance(pending.last_landed_error, OutOfGasError)
+                        and pending.last_landed_error.gas_wanted
+                    ):
+                        current_gas_limit = int(pending.last_landed_error.gas_wanted * 1.2)
                 #   2. Otherwise (not confirmed landed) retry WITHOUT resetting
                 #      the account sequence. If the original silently landed
                 #      after all, re-broadcasting at the same sequence is
@@ -708,6 +721,7 @@ class TxManager:
             isinstance(err, _RETRYABLE_TX_ERRORS)
             and pending.attempt < pending.max_retries
         ):
+            pending.last_landed_error = err
             return _LandedOutcome.RETRY_NEW_SEQUENCE
         self._resolve_landed(pending, landed_resp)
         return _LandedOutcome.FINALIZED
