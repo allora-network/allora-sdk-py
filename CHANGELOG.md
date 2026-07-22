@@ -2,6 +2,7 @@
 
 # CHANGELOG
 
+<<<<<<< HEAD
 ## v1.2.0
 
 - New worker types (#37)
@@ -20,6 +21,7 @@
 - Removed `ml_workflow` and other unused dependencies (#73)
 - Follow-up hardening: tx concurrency/caching, sequence/nonce safety, autostake idempotence, reputer loss safety, and added simulation/loss tests (#45–#56)
 - Dependency bumps: `aiohttp` (#58), `pytest` (#60), `pygments` (#63), `requests` (#64), `protobuf` (#65)
+- Transaction submission: a non-zero CheckTx response on broadcast now raises the classified error immediately (e.g. `AccountSequenceMismatchError`, `InsufficientFeesError`) instead of returning a tx hash that would never be indexed and only fail later with a timeout. Callers that previously caught `TxTimeoutError` for broadcast rejections should now expect the specific error type.
 
 ## v1.1.0
 

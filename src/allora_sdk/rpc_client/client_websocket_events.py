@@ -411,10 +411,11 @@ class AlloraWebsocketSubscriber:
         """Main event processing loop.
 
         Uses a finite recv timeout plus a max-silence threshold: if no message
-        arrives for ``_MAX_EVENT_SILENCE_SECS`` the subscription is treated as
-        silently dead (the connection can stay alive at the ping/pong layer
-        while the server stops pushing events) and a full reconnect +
-        resubscribe is forced. Without this, a deaf subscription blocks forever.
+        arrives for the configured ``max_event_silence_secs`` the subscription
+        is treated as silently dead (the connection can stay alive at the
+        ping/pong layer while the server stops pushing events) and a full
+        reconnect + resubscribe is forced. Without this, a deaf subscription
+        blocks forever.
         """
         last_msg = time.monotonic()
         while self.running:
