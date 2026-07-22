@@ -53,9 +53,11 @@ class PendingTx:
         self.last_tx_hash: Optional[str] = None
         self.last_gas_limit: Optional[int] = None
         self.last_fee: Optional[Coin] = None
-        # Classified error of the last confirmed-landed tx when _bail_if_landed
-        # returns RETRY_NEW_SEQUENCE — lets the retry handler reuse details
-        # (e.g. gas_wanted) without re-querying the hash.
+        # Classified error of the last confirmed-landed tx, valid only when the
+        # most recent _bail_if_landed call returned RETRY_NEW_SEQUENCE — lets the
+        # retry handler reuse details (e.g. gas_wanted) without re-querying the
+        # hash. Cleared at the start of every _bail_if_landed call and after
+        # being consumed, so it can never be mistaken for a fresh result.
         self.last_landed_error: Optional[Exception] = None
         self.start = datetime.now()
         self.timeout = timeout
@@ -496,11 +498,9 @@ class TxManager:
                     # tx's gas_wanted (same bump the OutOfGasError handler
                     # applies) — reusing current_gas_limit would retry at the
                     # limit that just proved too small.
-                    if (
-                        isinstance(pending.last_landed_error, OutOfGasError)
-                        and pending.last_landed_error.gas_wanted
-                    ):
-                        current_gas_limit = int(pending.last_landed_error.gas_wanted * 1.2)
+                    landed_err, pending.last_landed_error = pending.last_landed_error, None
+                    if isinstance(landed_err, OutOfGasError) and landed_err.gas_wanted:
+                        current_gas_limit = int(landed_err.gas_wanted * 1.2)
                 #   2. Otherwise (not confirmed landed) retry WITHOUT resetting
                 #      the account sequence. If the original silently landed
                 #      after all, re-broadcasting at the same sequence is
@@ -711,6 +711,7 @@ class TxManager:
 
         Never raises.
         """
+        pending.last_landed_error = None
         if not pending.last_tx_hash:
             return _LandedOutcome.NOT_LANDED
         landed_resp = await self._try_confirm_landed(pending.last_tx_hash)

@@ -259,6 +259,26 @@ async def test_bail_if_landed_finalizes_non_retryable_landed_failure_immediately
         await pending.wait()
 
 
+@pytest.mark.asyncio
+async def test_bail_if_landed_clears_stale_landed_error() -> None:
+    """last_landed_error reflects only the most recent landed-check: a later
+    not-landed result clears it, so no stale error can be consumed by a future
+    reader that doesn't re-verify the outcome."""
+    manager = _make_manager()
+    manager._log_tx_response = Mock()
+    manager._get_tx = AsyncMock(return_value=_landed(11, "out of gas"))
+    pending = _pending(manager, max_retries=2)
+    pending.attempt = 0
+    pending.last_tx_hash = "HASH1"
+
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.RETRY_NEW_SEQUENCE
+    assert pending.last_landed_error is not None
+
+    manager._get_tx = AsyncMock(side_effect=TxNotFoundError())
+    assert await manager._bail_if_landed(pending) is _LandedOutcome.NOT_LANDED
+    assert pending.last_landed_error is None
+
+
 def test_exception_from_tx_response_classification_for_broadcast_guard() -> None:
     """The CheckTx-rejection guard in _build_and_broadcast relies on this
     classification: code 0 -> no error; a sequence-mismatch raw_log -> the
