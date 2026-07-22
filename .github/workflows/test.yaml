@@ -99,7 +99,10 @@ jobs:
       # gray/neutral (non-blocking) when they fail. Skipped on forked PRs, whose
       # read-only GITHUB_TOKEN cannot create checks.
       - name: Publish integration status check
+        # Best-effort: a failure to post the check must not fail this
+        # non-blocking job. The API error stays visible in the step log.
         if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
