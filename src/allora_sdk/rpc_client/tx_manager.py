@@ -490,6 +490,14 @@ class TxManager:
                         seeded = self._consume_landed_gas_seed(pending)
                         if seeded is not None:
                             current_gas_limit = seeded
+                        # Same retry-or-stop policy as the sibling paths —
+                        # _bail_if_landed only returns RETRY_NEW_SEQUENCE with
+                        # attempts remaining, but the caller's timeout may have
+                        # expired during the grace window.
+                        if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                            err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
+                            pending._final_future.set_exception(err)
+                            return
                         logger.debug("Account sequence mismatch, retrying...")
                         continue
                     # Still unconfirmed after the grace window — indexer lag

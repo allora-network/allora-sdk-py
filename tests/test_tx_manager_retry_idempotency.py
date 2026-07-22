@@ -9,6 +9,7 @@ the tx hash and, if it landed, resolve success without a second broadcast.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from unittest.mock import AsyncMock, Mock
 
 import grpc
@@ -42,7 +43,7 @@ def _make_manager() -> TxManager:
     )
 
 
-def _pending(manager: TxManager, max_retries: int = 2) -> PendingTx:
+def _pending(manager: TxManager, max_retries: int = 2, timeout: timedelta | None = None) -> PendingTx:
     return PendingTx(
         manager,
         parent_tx_id=1,
@@ -50,7 +51,7 @@ def _pending(manager: TxManager, max_retries: int = 2) -> PendingTx:
         msgs=[Mock()],
         fee_tier=FeeTier.STANDARD,
         max_retries=max_retries,
-        timeout=None,
+        timeout=timeout,
     )
 
 
@@ -410,6 +411,39 @@ async def test_same_seq_rebroadcast_asm_confirms_original_during_grace_window() 
 
     assert await pending.wait() is landed.tx_response
     assert seqs == [None, 7]  # no fresh-sequence third broadcast
+
+
+@pytest.mark.asyncio
+async def test_same_seq_asm_landed_retryable_respects_caller_timeout() -> None:
+    """If the caller's timeout expires while the grace window confirms the
+    original landed retryably, the ASM handler must resolve the future with an
+    error instead of retrying past the deadline (same retry-or-stop policy as
+    every sibling path)."""
+    manager = _make_manager()
+    manager.query_interval_secs = 0.2  # one grace sleep blows the 50ms deadline
+    manager._pre_flight_checks = AsyncMock()
+    manager._log_tx_response = Mock()
+
+    seqs: list = []
+
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+        seqs.append(seq)
+        if len(seqs) == 2:
+            raise AccountSequenceMismatchError("Sequence mismatch: account sequence mismatch")
+        return ("HASH1", 200_000, Mock(), 7)
+
+    manager._build_and_broadcast = fake_build
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+    manager._get_tx = AsyncMock(
+        side_effect=[TxNotFoundError(), TxNotFoundError(), _landed(11, "out of gas")]
+    )
+
+    pending = _pending(manager, max_retries=2, timeout=timedelta(milliseconds=50))
+    await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=None)
+
+    with pytest.raises(AccountSequenceMismatchError):
+        await pending.wait()
+    assert seqs == [None, 7]  # stopped at the deadline — no third broadcast
 
 
 @pytest.mark.asyncio
