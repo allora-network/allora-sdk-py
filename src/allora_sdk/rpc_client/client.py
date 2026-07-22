@@ -18,7 +18,7 @@ from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
 from cosmpy.aerial.client import LedgerClient
 from cosmpy.aerial.urls import Protocol, parse_url
-from cosmpy.aerial.wallet import LocalWallet
+from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.crypto.keypairs import PrivateKey
 
 import allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 as tendermint_v1beta1
@@ -96,7 +96,7 @@ class AlloraRPCClient:
     including queries, transactions, and event subscriptions.
     """
 
-    wallet: Optional[LocalWallet] = None
+    wallet: Optional[Wallet] = None
     tx_manager: Optional[TxManager] = None
 
     def __init__(
@@ -187,9 +187,9 @@ class AlloraRPCClient:
             return
 
         try:
-            if wallet.wallet:
+            if wallet.wallet is not None:
                 self.wallet = wallet.wallet
-                logger.debug("Wallet initialized from LocalWallet")
+                logger.debug("Wallet initialized from injected Wallet instance (%s)", type(self.wallet).__name__)
             elif wallet.private_key:
                 pk = PrivateKey(bytes.fromhex(wallet.private_key))
                 self.wallet = LocalWallet(pk, prefix="allo")

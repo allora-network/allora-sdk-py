@@ -82,14 +82,12 @@ include = [
     "src/allora_sdk/**/*"
 ]
 artifacts = [
-    "src/allora_sdk/protos/**/*",
-    "src/allora_sdk/rest/**/*",
+    "src/allora_sdk/rpc_client/**/*",
 ]
 
 [tool.hatch.build.targets.sdist]
 artifacts = [
-    "src/allora_sdk/protos/**/*",
-    "src/allora_sdk/rest/**/*",
+    "src/allora_sdk/rpc_client/**/*",
 ]
 exclude = [
     "/.github",
