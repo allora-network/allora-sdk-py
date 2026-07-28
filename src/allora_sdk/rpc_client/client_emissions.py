@@ -18,6 +18,8 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     InputForecast,
     RegisterRequest,
     InputLabeledValue,
+    TopicOutputArity,
+    TopicType,
 )
 from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputReputerValueBundle,
@@ -318,6 +320,15 @@ class EmissionsTxs:
         active_reputer_quantile: str = "0.2",
         enable_worker_whitelist: bool = False,
         enable_reputer_whitelist: bool = False,
+        c_norm: str = "0.75",
+        topic_type: TopicType = TopicType(TopicType.REGRESSION),
+        output_arity: TopicOutputArity = TopicOutputArity(TopicOutputArity.SINGLE),
+        require_unity: bool = False,
+        unity_tolerance: str = "0",
+        max_labels_per_submission: int = 0,
+        label_whitelist: Optional[List[str]] = None,
+        label_default_value: str = "",
+        label_case_sensitive: bool = False,
         fee_tier: FeeTier = FeeTier.STANDARD,
     ) -> PendingTx:
         """
@@ -339,6 +350,23 @@ class EmissionsTxs:
             active_reputer_quantile: Active reputer quantile threshold (default "0.2")
             enable_worker_whitelist: Require whitelist for workers (default False)
             enable_reputer_whitelist: Require whitelist for reputers (default False)
+            c_norm: C-norm value for loss calculation (default "0.75")
+            topic_type: Whether the topic is REGRESSION or CLASSIFICATION
+                (default REGRESSION)
+            output_arity: Whether workers submit a SINGLE value or MULTI-label
+                output (default SINGLE)
+            require_unity: For MULTI-label topics, require submitted label values
+                to sum to unity (default False)
+            unity_tolerance: Allowed deviation from unity when require_unity is set
+                (decimal string, default "0")
+            max_labels_per_submission: Per-topic cap on labels per worker submission;
+                0 leaves it to the network default (default 0)
+            label_whitelist: Per-topic canonical label allowlist for MULTI topics;
+                None/empty means unrestricted (default None)
+            label_default_value: Default value for missing MULTI label slots; submitted
+                labels equal to this value are treated as absent (default "")
+            label_case_sensitive: Preserve label casing when True; when False labels are
+                lowercased during canonicalization. Immutable after creation (default False)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
 
         Returns:
@@ -366,6 +394,15 @@ class EmissionsTxs:
             active_reputer_quantile=active_reputer_quantile,
             enable_worker_whitelist=enable_worker_whitelist,
             enable_reputer_whitelist=enable_reputer_whitelist,
+            c_norm=c_norm,
+            topic_type=topic_type,
+            output_arity=output_arity,
+            require_unity=require_unity,
+            unity_tolerance=unity_tolerance,
+            max_labels_per_submission=max_labels_per_submission,
+            label_whitelist=label_whitelist or [],
+            label_default_value=label_default_value,
+            label_case_sensitive=label_case_sensitive,
         )
 
         logger.debug(f"Creating new topic with metadata: {metadata}")
