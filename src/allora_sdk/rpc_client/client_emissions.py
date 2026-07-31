@@ -325,9 +325,9 @@ class EmissionsTxs:
         output_arity: TopicOutputArity = TopicOutputArity(TopicOutputArity.SINGLE),
         require_unity: bool = False,
         unity_tolerance: str = "0",
-        max_labels_per_submission: int = 0,
+        max_labels_per_submission: int = 1,
         label_whitelist: Optional[List[str]] = None,
-        label_default_value: str = "",
+        label_default_value: str = "0",
         label_case_sensitive: bool = False,
         fee_tier: FeeTier = FeeTier.STANDARD,
     ) -> PendingTx:
@@ -351,22 +351,15 @@ class EmissionsTxs:
             enable_worker_whitelist: Require whitelist for workers (default False)
             enable_reputer_whitelist: Require whitelist for reputers (default False)
             c_norm: C-norm value for loss calculation (default "0.75")
-            topic_type: Whether the topic is REGRESSION or CLASSIFICATION
-                (default REGRESSION)
-            output_arity: Whether workers submit a SINGLE value or MULTI-label
-                output (default SINGLE)
-            require_unity: For MULTI-label topics, require submitted label values
-                to sum to unity (default False)
-            unity_tolerance: Allowed deviation from unity when require_unity is set
-                (decimal string, default "0")
-            max_labels_per_submission: Per-topic cap on labels per worker submission;
-                0 leaves it to the network default (default 0)
-            label_whitelist: Per-topic canonical label allowlist for MULTI topics;
-                None/empty means unrestricted (default None)
-            label_default_value: Default value for missing MULTI label slots; submitted
-                labels equal to this value are treated as absent (default "")
-            label_case_sensitive: Preserve label casing when True; when False labels are
-                lowercased during canonicalization. Immutable after creation (default False)
+            topic_type: Whether the topic is REGRESSION or CLASSIFICATION (default REGRESSION)
+            output_arity: Whether workers submit a SINGLE value or MULTI-label output (default SINGLE)
+            require_unity: For MULTI-label topics, require submitted label values to sum to unity (default False)
+            unity_tolerance: Allowed deviation from unity when require_unity is set (decimal string, default "0")
+            max_labels_per_submission: Cap on labels per worker submission (for MULTI topics, default 1)
+            label_whitelist: Label allowlist for MULTI topics; None/empty means unrestricted (default None)
+            label_default_value: Default value for labels missing in an inference (decimal string, default "0")
+            label_case_sensitive: Preserve label casing when True; when False labels are lowercased
+                during canonicalization (default False)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
 
         Returns:
