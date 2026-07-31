@@ -50,11 +50,8 @@ async def test_get_all_topics(client):
 @requires_api_key
 @pytest.mark.asyncio
 async def test_get_inference_by_topic_id(client):
-    topics = await client.get_all_topics()
-    if not topics:
-        pytest.skip("No topics available for testing")
-
-    inference = await client.get_inference_by_topic_id(topics[0].topic_id)
+    # Hardcoding topic 13 as it's one of the most reliable topics
+    inference = await client.get_inference_by_topic_id(13)
 
     assert isinstance(inference, Inference)
     assert isinstance(inference.signature, str)
@@ -81,4 +78,3 @@ async def test_get_price_inference_different_assets(client):
         assert isinstance(inference, Inference)
         assert inference.inference_data.network_inference.isdigit()
         assert float(inference.inference_data.network_inference_normalized) > 0
-
