@@ -10,9 +10,9 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitReputerPayloadRequest,
     EventReputerSubmissionWindowOpened,
     GetNetworkInferencesAtBlockRequest,
+    GetOpenReputerSubmissionWindowsRequest,
     GetStakeFromReputerInTopicInSelfRequest,
     GetTopicRequest,
-    GetUnfulfilledReputerNoncesRequest,
     IsReputerRegisteredInTopicIdRequest,
     NetworkInferenceBundle,
     LabeledValue,
@@ -118,12 +118,14 @@ class Reputer:
 
 
     async def get_unfulfilled_nonces(self) -> set[int]:
-
         # GetUnfulfilledReputerNonces gives all epochs in flight, which is not what we want here
-        # GetOpenReputerSubmissionWindows would be the more appropriate RPC call, but
-        # it doesn't seem to be implemented in the rpc client
-        # Returning [] here means we only react to EventReputerSubmissionWindowOpened
-        return set()
+        # So we use GetOpenReputerSubmissionWindows instead
+        resp = await self.client.emissions.query.get_open_reputer_submission_windows(
+            GetOpenReputerSubmissionWindowsRequest(topic_id=self.topic_id)
+        )
+        if resp.nonces is None:
+            return set[int]()
+        return {x.reputer_nonce.block_height for x in resp.nonces.nonces}
 
 
     async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
