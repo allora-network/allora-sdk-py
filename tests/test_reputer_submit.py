@@ -97,9 +97,9 @@ async def test_submit_returns_error_when_network_inferences_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_unfulfilled_nonces_uses_reputer_request_nonces() -> None:
+async def test_get_unfulfilled_nonces_uses_open_submission_windows() -> None:
     client = _make_client()
-    client.emissions.query.get_unfulfilled_reputer_nonces = AsyncMock(
+    client.emissions.query.get_open_reputer_submission_windows = AsyncMock(
         return_value=Mock(
             nonces=Mock(
                 nonces=[
@@ -108,6 +108,18 @@ async def test_get_unfulfilled_nonces_uses_reputer_request_nonces() -> None:
                 ]
             )
         )
+    )
+
+    reputer = _make_reputer(client)
+
+    assert await reputer.get_unfulfilled_nonces() == {101, 202}
+
+
+@pytest.mark.asyncio
+async def test_get_unfulfilled_nonces_empty_when_no_windows_open() -> None:
+    client = _make_client()
+    client.emissions.query.get_open_reputer_submission_windows = AsyncMock(
+        return_value=Mock(nonces=None)
     )
 
     reputer = _make_reputer(client)
