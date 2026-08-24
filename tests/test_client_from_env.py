@@ -5,7 +5,8 @@ invisible to every test that builds a TxManager directly.
 """
 import pytest
 
-from allora_sdk.rpc_client.client import _env_bool, _env_number
+from allora_sdk.rpc_client.client import AlloraRPCClient, _env_bool, _env_number
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -51,3 +52,41 @@ def test_env_number_names_the_variable_on_garbage(monkeypatch):
     monkeypatch.setenv("MAX_FEES", "1.5x")
     with pytest.raises(ValueError, match="MAX_FEES"):
         _env_number("MAX_FEES", int)
+
+
+# --- FEE_GRANTER ---
+
+MNEMONIC = "abandon " * 11 + "about"
+
+
+def _fee_granter_from_env(monkeypatch, raw):
+    """Run from_env far enough to capture the fee_granter it would pass along."""
+    captured = {}
+
+    def _fake_init(self, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(AlloraRPCClient, "__init__", _fake_init)
+    if raw is None:
+        monkeypatch.delenv("FEE_GRANTER", raising=False)
+    else:
+        monkeypatch.setenv("FEE_GRANTER", raw)
+    # network and wallet are passed explicitly so from_env only exercises
+    # the FEE_GRANTER branch under test.
+    AlloraRPCClient.from_env(
+        network=AlloraNetworkConfig.testnet(),
+        wallet=AlloraWalletConfig(mnemonic=MNEMONIC),
+    )
+    return captured["fee_granter"]
+
+
+@pytest.mark.parametrize("raw", ["", "   ", None])
+def test_blank_fee_granter_is_treated_as_unset(monkeypatch, raw):
+    # A templated k8s value that renders empty must not reach bech32
+    # validation, which would reject it and block startup entirely.
+    assert _fee_granter_from_env(monkeypatch, raw) is None
+
+
+def test_fee_granter_is_forwarded_when_set(monkeypatch):
+    granter = "allo1mjkpxd9ejld8kp8qqngrarzp3adfy4q3ts4tvm"
+    assert _fee_granter_from_env(monkeypatch, granter) == granter

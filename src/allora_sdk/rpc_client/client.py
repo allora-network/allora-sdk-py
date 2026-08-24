@@ -405,7 +405,10 @@ class AlloraRPCClient:
         if wallet is None:
             wallet = AlloraWalletConfig.from_env()
         if fee_granter is None:
-            fee_granter = os.getenv("FEE_GRANTER")
+            # Blank is unset, matching _env_number/_env_bool: a k8s manifest
+            # that renders `value: ""` for an unconfigured granter must not
+            # fail bech32 validation and block startup entirely.
+            fee_granter = os.getenv("FEE_GRANTER", "").strip() or None
         if max_fees is None:
             max_fees = _env_number("MAX_FEES", int)
         if account_sequence_retry_delay is None:
