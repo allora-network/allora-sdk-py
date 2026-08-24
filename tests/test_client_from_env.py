@@ -59,7 +59,7 @@ def test_env_number_names_the_variable_on_garbage(monkeypatch):
 MNEMONIC = "abandon " * 11 + "about"
 # Synthetic addresses: tests must not carry real fleet addresses into a public repo.
 GRANTER = "allo18m98xemapflq86kh9j6v358l5n5rp2ahfaekth"
-OTHER_GRANTER = "allo1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu"
+OTHER_GRANTER = "allo1n8jhl6gnk8ha7epyqeft6vgp6clgrnujkl6980"
 
 
 def _fee_granter_from_env(monkeypatch, raw):

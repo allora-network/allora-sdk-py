@@ -9,14 +9,15 @@ import logging
 
 import pytest
 
-from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 
 
 def test_network_config_has_no_gas_multiplier():
     assert not hasattr(AlloraNetworkConfig.testnet(), "gas_adjustment")
 
 
-def test_gas_adjustment_env_var_is_read_exactly_once(monkeypatch):
+def test_gas_adjustment_env_var_has_exactly_one_consumer(monkeypatch):
     reads: list[str] = []
     import os
 
@@ -38,6 +39,18 @@ def test_gas_adjustment_env_var_is_read_exactly_once(monkeypatch):
 
     AlloraNetworkConfig.from_env()
     assert reads == [], "AlloraNetworkConfig must not consume GAS_ADJUSTMENT"
+
+    # The real consumer: from_env must read it once and hand it to exactly one
+    # place. A second reader here is the 2.25x regression coming back.
+    captured = {}
+    monkeypatch.setattr(AlloraRPCClient, "__init__", lambda self, **kw: captured.update(kw))
+    AlloraRPCClient.from_env(
+        network=AlloraNetworkConfig.testnet(),
+        wallet=AlloraWalletConfig(mnemonic="abandon " * 11 + "about"),
+    )
+    assert reads == ["GAS_ADJUSTMENT"], f"GAS_ADJUSTMENT read {len(reads)} times, expected once"
+    assert captured["gas_adjustment"] == 1.5
+    assert not hasattr(captured["network"], "gas_adjustment")
 
 
 @pytest.mark.asyncio
