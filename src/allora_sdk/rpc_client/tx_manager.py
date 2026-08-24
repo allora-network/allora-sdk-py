@@ -207,6 +207,14 @@ class TxManager:
             raise ValueError(f"account_sequence_retry_delay must be a finite value >= 0, got {account_sequence_retry_delay}")
         if gas_adjustment is not None and (not math.isfinite(gas_adjustment) or gas_adjustment <= 0):
             raise ValueError(f"gas_adjustment must be a finite value > 0, got {gas_adjustment}")
+        if gas_adjustment is not None and gas_adjustment < 1.0:
+            # Allowed, but it sizes the broadcast below the simulated estimate,
+            # which is a reliable way to run out of gas.
+            logger.warning(
+                "gas_adjustment=%s is below 1.0; transactions will be sized below "
+                "the simulated estimate and may run out of gas.",
+                gas_adjustment,
+            )
         if base_gas is not None and base_gas <= 0:
             raise ValueError(f"base_gas must be a positive integer, got {base_gas}")
 
@@ -214,10 +222,10 @@ class TxManager:
         self.fee_granter: Optional[Address] = _parse_fee_granter(fee_granter)
         self.max_fees = max_fees
         self.account_sequence_retry_delay = account_sequence_retry_delay
-        # Applies to the initial gas estimate only. The per-attempt retry
-        # escalation (gas_multiplier / fee_multiplier in _attempt_submissions)
-        # is deliberately independent: raising gas_adjustment shifts the
-        # starting point, it does not widen the retry ladder on top of it.
+        # The single gas multiplier in the SDK. It sizes the gas estimate, and
+        # nothing else multiplies on top of it: the retry ladder in
+        # _attempt_submissions is 1.0 + attempt*0.3, so attempt 0 broadcasts
+        # exactly this estimate and later attempts only add escalation.
         self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
         # gas_adjustment is applied on top of this too, so BASE_GAS=500000
         # with the default 1.2 adjustment yields gasWanted 600000.
@@ -263,11 +271,6 @@ class TxManager:
         self._cached_gas_price: Optional[Decimal] = None
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
-        # Base gas headroom applied to the simulated estimate on the first
-        # attempt (see AlloraNetworkConfig.gas_adjustment). Default 1.0 = no
-        # change from prior behavior. getattr keeps older externally-constructed
-        # configs working.
-        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.0)
 
     async def submit_transaction(
         self,
@@ -445,10 +448,35 @@ class TxManager:
                 logger.error(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
                 raise err
 
+    async def _await_sequence_retry_delay(self, pending, start) -> bool:
+        """Honour account_sequence_retry_delay before an ASM retry.
+
+        Returns True if the caller should stop: the deadline was reached during
+        (or by) the wait, in which case the pending future is already failed.
+        """
+        if self.account_sequence_retry_delay is None:
+            return False
+        delay = self.account_sequence_retry_delay
+        expired = False
+        if pending.timeout:
+            # Never sleep past the deadline — the extra wait would buy nothing
+            # but a failed recheck. Clamping makes the post-sleep comparison
+            # land exactly on the deadline, so record the overrun here rather
+            # than re-deriving it from a timestamp that may or may not have
+            # tipped over.
+            remaining = (start + pending.timeout - datetime.now()).total_seconds()
+            if delay >= remaining:
+                delay, expired = max(0.0, remaining), True
+        await asyncio.sleep(delay)
+        if expired or (pending.timeout and start + pending.timeout < datetime.now()):
+            err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
+            pending._final_future.set_exception(err)
+            return True
+        return False
+
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
         start = datetime.now()
 
-        gas_multiplier = 1.0
         fee_multiplier = self._fee_multipliers[pending.fee_tier]
         current_gas_limit = gas_limit
         next_account_seq = account_seq
@@ -459,7 +487,7 @@ class TxManager:
 
                 pending.attempt = attempt
 
-                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
+                gas_multiplier = 1.0 + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
@@ -489,7 +517,7 @@ class TxManager:
                 return
 
             except OutOfGasError as oog_err:
-                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
+                gas_multiplier = 1.0 + (attempt * 0.3)
 
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     pending._final_future.set_exception(oog_err)
@@ -566,6 +594,8 @@ class TxManager:
                             pending._final_future.set_exception(err)
                             return
                         logger.debug("Account sequence mismatch, retrying...")
+                        if await self._await_sequence_retry_delay(pending, start):
+                            return
                         continue
                     # Still unconfirmed after the grace window — indexer lag
                     # exceeded timeout + grace. Fall through to the
@@ -581,23 +611,8 @@ class TxManager:
                     pending._final_future.set_exception(err)
                     return
                 logger.debug("Account sequence mismatch, retrying...")
-                if self.account_sequence_retry_delay is not None:
-                    delay = self.account_sequence_retry_delay
-                    expired = False
-                    if pending.timeout:
-                        # Never sleep past the deadline — the extra wait would
-                        # buy nothing but a failed recheck. Clamping makes the
-                        # post-sleep comparison land exactly on the deadline,
-                        # so record the overrun here rather than re-deriving it
-                        # from a timestamp that may or may not have tipped over.
-                        remaining = (start + pending.timeout - datetime.now()).total_seconds()
-                        if delay >= remaining:
-                            delay, expired = max(0.0, remaining), True
-                    await asyncio.sleep(delay)
-                    if expired or (pending.timeout and start + pending.timeout < datetime.now()):
-                        err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
-                        pending._final_future.set_exception(err)
-                        return
+                if await self._await_sequence_retry_delay(pending, start):
+                    return
                 continue
 
             except TxTimeoutError:
@@ -648,6 +663,20 @@ class TxManager:
                 logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
 
+            except MaxFeesExceededError as err:
+                # A hard cap, so retrying is pointless: the ladder only raises
+                # the gas limit, and therefore the fee, from here. Fail fast,
+                # but say that the escalation is what crossed the cap so the
+                # operator does not go looking at the first attempt's fee.
+                logger.error(
+                    "Transaction fee exceeded max_fees on retry attempt %d (gas escalation "
+                    "raises the fee each attempt); giving up: %s",
+                    attempt,
+                    err,
+                )
+                pending._final_future.set_exception(err)
+                return
+
             except Exception as err:
                 pending._final_future.set_exception(err)
                 return
@@ -681,9 +710,8 @@ class TxManager:
 
         if gas_limit is None:
             # Simulation failed upstream — fall back to the static default.
-            # The gas_multiplier headroom below applies on this path too, so
-            # the first-attempt OOG protection (gas_adjustment) holds even
-            # without a simulated estimate.
+            # _estimate_gas applies gas_adjustment itself, so the headroom
+            # holds on this path too, without a simulated estimate.
             gas_limit = await self._estimate_gas(type_url)
 
         gas_limit = int(gas_limit * gas_multiplier)

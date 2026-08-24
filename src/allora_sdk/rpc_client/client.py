@@ -123,6 +123,46 @@ def _env_bool(name: str) -> Optional[bool]:
     )
 
 
+def resolve_tx_settings_from_env(
+    fee_granter: Optional[str] = None,
+    max_fees: Optional[int] = None,
+    account_sequence_retry_delay: Optional[float] = None,
+    gas_adjustment: Optional[float] = None,
+    base_gas: Optional[int] = None,
+    simulate_gas_from_start: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Fill any unset tx setting from the environment.
+
+    Shared by from_env and the AlloraWorker constructors so that a deployment
+    which sets FEE_GRANTER (or any other knob) in the environment gets it
+    honoured no matter which entry point built the client. Explicit arguments
+    always win; only None is looked up.
+    """
+    if fee_granter is None:
+        # Blank is unset, matching _env_number/_env_bool: a k8s manifest that
+        # renders `value: ""` for an unconfigured granter must not fail bech32
+        # validation and block startup entirely.
+        fee_granter = os.getenv("FEE_GRANTER", "").strip() or None
+    if max_fees is None:
+        max_fees = _env_number("MAX_FEES", int)
+    if account_sequence_retry_delay is None:
+        account_sequence_retry_delay = _env_number("ACCOUNT_SEQUENCE_RETRY_DELAY", float)
+    if gas_adjustment is None:
+        gas_adjustment = _env_number("GAS_ADJUSTMENT", float)
+    if base_gas is None:
+        base_gas = _env_number("BASE_GAS", int)
+    if simulate_gas_from_start is None:
+        simulate_gas_from_start = _env_bool("SIMULATE_GAS_FROM_START")
+    return {
+        "fee_granter": fee_granter,
+        "max_fees": max_fees,
+        "account_sequence_retry_delay": account_sequence_retry_delay,
+        "gas_adjustment": gas_adjustment,
+        "base_gas": base_gas,
+        "simulate_gas_from_start": simulate_gas_from_start,
+    }
+
+
 class AlloraRPCClient:
     """
     Main client for interacting with the Allora blockchain.
@@ -404,29 +444,16 @@ class AlloraRPCClient:
             network = AlloraNetworkConfig.from_env()
         if wallet is None:
             wallet = AlloraWalletConfig.from_env()
-        if fee_granter is None:
-            # Blank is unset, matching _env_number/_env_bool: a k8s manifest
-            # that renders `value: ""` for an unconfigured granter must not
-            # fail bech32 validation and block startup entirely.
-            fee_granter = os.getenv("FEE_GRANTER", "").strip() or None
-        if max_fees is None:
-            max_fees = _env_number("MAX_FEES", int)
-        if account_sequence_retry_delay is None:
-            account_sequence_retry_delay = _env_number("ACCOUNT_SEQUENCE_RETRY_DELAY", float)
-        if gas_adjustment is None:
-            gas_adjustment = _env_number("GAS_ADJUSTMENT", float)
-        if base_gas is None:
-            base_gas = _env_number("BASE_GAS", int)
-        if simulate_gas_from_start is None:
-            simulate_gas_from_start = _env_bool("SIMULATE_GAS_FROM_START")
         return cls(
             network=network,
             wallet=wallet,
             debug=debug,
-            fee_granter=fee_granter,
-            max_fees=max_fees,
-            account_sequence_retry_delay=account_sequence_retry_delay,
-            gas_adjustment=gas_adjustment,
-            base_gas=base_gas,
-            simulate_gas_from_start=simulate_gas_from_start,
+            **resolve_tx_settings_from_env(
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
+            ),
         )

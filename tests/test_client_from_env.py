@@ -5,7 +5,7 @@ invisible to every test that builds a TxManager directly.
 """
 import pytest
 
-from allora_sdk.rpc_client.client import AlloraRPCClient, _env_bool, _env_number
+from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env, _env_bool, _env_number
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 
 
@@ -57,6 +57,9 @@ def test_env_number_names_the_variable_on_garbage(monkeypatch):
 # --- FEE_GRANTER ---
 
 MNEMONIC = "abandon " * 11 + "about"
+# Synthetic addresses: tests must not carry real fleet addresses into a public repo.
+GRANTER = "allo18m98xemapflq86kh9j6v358l5n5rp2ahfaekth"
+OTHER_GRANTER = "allo1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu"
 
 
 def _fee_granter_from_env(monkeypatch, raw):
@@ -90,3 +93,37 @@ def test_blank_fee_granter_is_treated_as_unset(monkeypatch, raw):
 def test_fee_granter_is_forwarded_when_set(monkeypatch):
     granter = "allo18m98xemapflq86kh9j6v358l5n5rp2ahfaekth"
     assert _fee_granter_from_env(monkeypatch, granter) == granter
+
+
+def test_resolve_tx_settings_reads_env_for_unset_values(monkeypatch):
+    monkeypatch.setenv("FEE_GRANTER", GRANTER)
+    monkeypatch.setenv("GAS_ADJUSTMENT", "1.4")
+    monkeypatch.setenv("BASE_GAS", "")
+    settings = resolve_tx_settings_from_env()
+    assert settings["fee_granter"] == GRANTER
+    assert settings["gas_adjustment"] == 1.4
+    assert settings["base_gas"] is None
+
+
+def test_resolve_tx_settings_does_not_override_explicit_values(monkeypatch):
+    monkeypatch.setenv("FEE_GRANTER", GRANTER)
+    assert resolve_tx_settings_from_env(fee_granter=OTHER_GRANTER)["fee_granter"] == OTHER_GRANTER
+
+
+def test_network_config_from_env_treats_blank_as_unset(monkeypatch):
+    """A k8s manifest renders `value: ""` for unconfigured knobs."""
+    for name, value in [
+        ("CHAIN_ID", "allora-testnet-1"),
+        ("RPC_ENDPOINT", "grpc+http://localhost:9090"),
+        ("WEBSOCKET_ENDPOINT", "ws://localhost:26657/websocket"),
+        ("FAUCET_URL", "http://localhost:8000"),
+        ("FEE_DENOM", "uallo"),
+        ("FEE_MIN_GAS_PRICE", "10"),
+        ("EVENT_RECV_TIMEOUT_SECS", "   "),
+    ]:
+        monkeypatch.setenv(name, value)
+    assert AlloraNetworkConfig.from_env().event_recv_timeout_secs == 30.0
+
+    monkeypatch.setenv("EVENT_RECV_TIMEOUT_SECS", "not-a-number")
+    with pytest.raises(RuntimeError, match="EVENT_RECV_TIMEOUT_SECS"):
+        AlloraNetworkConfig.from_env()

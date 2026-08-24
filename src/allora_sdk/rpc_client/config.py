@@ -1,5 +1,4 @@
 import logging
-import math
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -69,13 +68,6 @@ class AlloraNetworkConfig:
     query_timeout_secs: int = 10
     grpc_max_connection_age_secs: int = 1800
     grpc_drain_window_secs: int = 5
-    # Multiplier applied to the simulated gas estimate on the first broadcast
-    # attempt. Default 1.0 preserves existing behavior (broadcast at exactly the
-    # estimate). Since execution can consume slightly more gas than simulation
-    # reports (state-dependent writes), broadcasting at exactly the estimate
-    # risks out-of-gas — with no room to recover if the caller disables retries;
-    # set this above 1.0 (e.g. 1.4, standard cosmos headroom) to add margin.
-    gas_adjustment: float = 1.0
     # Websocket subscription tuning (previously only settable by constructing
     # AlloraWebsocketSubscriber directly). event_recv_timeout_secs bounds a single
     # recv(); max_event_silence_secs gates the deaf-subscription watchdog (force a
@@ -86,23 +78,6 @@ class AlloraNetworkConfig:
     max_event_silence_secs: float = 60.0
 
     def __post_init__(self):
-        # A non-positive multiplier (a bad caller value or a GAS_ADJUSTMENT
-        # typo read by from_env) would produce a zero/negative first-attempt
-        # gas limit and guarantee out-of-gas — fail loudly instead of silently
-        # broadcasting an unusable tx. NaN/inf bypass the plain range checks
-        # (both comparisons are false for NaN; inf is a valid float), so gate
-        # on finiteness first. Values in (0, 1.0) are allowed but shrink
-        # the estimate, so warn.
-        if not math.isfinite(self.gas_adjustment) or self.gas_adjustment <= 0:
-            raise ValueError(
-                f"gas_adjustment must be > 0 and finite, got {self.gas_adjustment!r}"
-            )
-        if self.gas_adjustment < 1.0:
-            logger.warning(
-                "gas_adjustment=%s is below 1.0; the first broadcast will be sized "
-                "below the simulated estimate and may run out of gas.",
-                self.gas_adjustment,
-            )
         # Same invariants the subscriber enforces — fail fast at config
         # construction rather than when the websocket loop starts.
         if self.event_recv_timeout_secs <= 0:
@@ -130,7 +105,6 @@ class AlloraNetworkConfig:
         congestion_aware_fees=False,
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
-        gas_adjustment=1.0,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
@@ -147,7 +121,6 @@ class AlloraNetworkConfig:
             congestion_aware_fees=congestion_aware_fees,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
-            gas_adjustment=gas_adjustment,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
         )
@@ -166,7 +139,6 @@ class AlloraNetworkConfig:
         congestion_aware_fees=False,
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
-        gas_adjustment=1.0,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
@@ -182,7 +154,6 @@ class AlloraNetworkConfig:
             congestion_aware_fees=congestion_aware_fees,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
-            gas_adjustment=gas_adjustment,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
         )
@@ -203,7 +174,6 @@ class AlloraNetworkConfig:
         grpc_drain_window_secs=5,
         port: int = 9090,
         url: str | None = None,
-        gas_adjustment=1.0,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
     ) -> 'AlloraNetworkConfig':
@@ -220,7 +190,6 @@ class AlloraNetworkConfig:
             query_timeout_secs=query_timeout_secs,
             grpc_max_connection_age_secs=grpc_max_connection_age_secs,
             grpc_drain_window_secs=grpc_drain_window_secs,
-            gas_adjustment=gas_adjustment,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
         )
@@ -233,10 +202,9 @@ class AlloraNetworkConfig:
             websocket_url=require_env((env_prefix or "") + "WEBSOCKET_ENDPOINT"),
             faucet_url=require_env((env_prefix or "") + "FAUCET_URL"),
             fee_denom=require_env((env_prefix or "") + "FEE_DENOM"),
-            fee_minimum_gas_price=float(require_env((env_prefix or "") + "FEE_MIN_GAS_PRICE")),
-            gas_adjustment=float(os.getenv((env_prefix or "") + "GAS_ADJUSTMENT", "1.0")),
-            event_recv_timeout_secs=float(os.getenv((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", "30.0")),
-            max_event_silence_secs=float(os.getenv((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", "60.0")),
+            fee_minimum_gas_price=_env_float((env_prefix or "") + "FEE_MIN_GAS_PRICE", required=True),
+            event_recv_timeout_secs=_env_float((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", 30.0),
+            max_event_silence_secs=_env_float((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", 60.0),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
@@ -247,6 +215,23 @@ class AlloraNetworkConfig:
             fee_denomination=self.fee_denom,
             staking_denomination=self.fee_denom
         )
+
+
+def _env_float(name: str, default: float | None = None, required: bool = False) -> float:
+    """Read a float env var, treating blank as unset and naming the variable on error.
+
+    k8s manifests render `value: ""` for unconfigured knobs, so a bare float("")
+    would both crash on an empty value and hide which variable was at fault.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        if required or default is None:
+            raise RuntimeError(f"environment variable {name} is required")
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise RuntimeError(f"environment variable {name} must be a number, got {raw!r}") from None
 
 
 def require_env(name: str) -> str:

@@ -28,7 +28,7 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     EventWorkerSubmissionWindowClosed,
 )
 from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
-from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
@@ -111,6 +111,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+                (defaults to $FEE_GRANTER; the other tx settings below likewise fall back to their env vars)
             max_fees: Optional hard cap on the fee of a single transaction (in uallo)
             account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
             gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
@@ -125,12 +126,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
-            fee_granter=fee_granter,
-            max_fees=max_fees,
-            account_sequence_retry_delay=account_sequence_retry_delay,
-            gas_adjustment=gas_adjustment,
-            base_gas=base_gas,
-            simulate_gas_from_start=simulate_gas_from_start,
+            **resolve_tx_settings_from_env(
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
+            ),
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
@@ -193,6 +196,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+                (defaults to $FEE_GRANTER; the other tx settings below likewise fall back to their env vars)
             max_fees: Optional hard cap on the fee of a single transaction (in uallo)
             account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
             gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
@@ -211,12 +215,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
-            fee_granter=fee_granter,
-            max_fees=max_fees,
-            account_sequence_retry_delay=account_sequence_retry_delay,
-            gas_adjustment=gas_adjustment,
-            base_gas=base_gas,
-            simulate_gas_from_start=simulate_gas_from_start,
+            **resolve_tx_settings_from_env(
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
+            ),
         )
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
@@ -280,6 +286,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+                (defaults to $FEE_GRANTER; the other tx settings below likewise fall back to their env vars)
             max_fees: Optional hard cap on the fee of a single transaction (in uallo)
             account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
             gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
@@ -294,12 +301,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
-            fee_granter=fee_granter,
-            max_fees=max_fees,
-            account_sequence_retry_delay=account_sequence_retry_delay,
-            gas_adjustment=gas_adjustment,
-            base_gas=base_gas,
-            simulate_gas_from_start=simulate_gas_from_start,
+            **resolve_tx_settings_from_env(
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
+            ),
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
             use_case=Forecaster(
