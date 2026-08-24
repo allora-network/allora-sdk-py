@@ -1,5 +1,5 @@
 from .worker import AlloraWorker
-from .rpc_client import AlloraRPCClient, AlloraNetworkConfig, AlloraWalletConfig, TxManager, FeeTier
+from .rpc_client import AlloraRPCClient, AlloraNetworkConfig, AlloraWalletConfig, TxManager, FeeTier, MaxFeesExceededError
 from .rpc_client.protos.emissions.v3 import ValueBundle
 from .api_client import AlloraAPIClient
 from .logging_config import setup_sdk_logging
@@ -21,6 +21,7 @@ __all__ = [
     "AlloraWalletConfig",
     "FeeTier",
     "TxManager",
+    "MaxFeesExceededError",
     "setup_sdk_logging",
     "LocalWallet",
     "PrivateKey",
