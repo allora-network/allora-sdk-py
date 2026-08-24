@@ -2,6 +2,11 @@
 
 # CHANGELOG
 
+## v1.4.0
+
+- Optional fee-granter support: `fee_granter` parameter on `TxManager`, `AlloraRPCClient`, and the `AlloraWorker` constructors sets `AuthInfo.Fee.granter` on all built transactions (simulate and broadcast), letting an on-chain fee grant pay transaction fees
+- Tx-level settings ported from `allora-offchain-node`: `max_fees` (hard per-tx fee cap, raises `MaxFeesExceededError`), `account_sequence_retry_delay`, `gas_adjustment` (previously hardcoded 1.2), `base_gas`, and `simulate_gas_from_start`
+
 ## v1.2.0
 
 - New worker types (#37)
