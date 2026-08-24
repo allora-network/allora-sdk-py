@@ -162,7 +162,8 @@ class AlloraRPCClient:
                 account sequence mismatch.
             gas_adjustment: Safety multiplier applied to gas estimates (default 1.2).
             base_gas: Optional gas limit used instead of the per-message-type defaults when
-                gas cannot be (or is not) simulated.
+                gas cannot be (or is not) simulated. gas_adjustment is applied on top of it,
+                so base_gas=500000 with the default 1.2 adjustment yields gasWanted 600000.
             simulate_gas_from_start: Simulate gas before the first submission attempt (default True);
                 set False to start from base_gas / defaults and only rely on retry adjustments.
         """

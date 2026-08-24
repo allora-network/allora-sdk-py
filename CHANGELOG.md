@@ -5,7 +5,8 @@
 ## v1.4.0
 
 - Optional fee-granter support: `fee_granter` parameter on `TxManager`, `AlloraRPCClient`, and the `AlloraWorker` constructors sets `AuthInfo.Fee.granter` on all built transactions (simulate and broadcast), letting an on-chain fee grant pay transaction fees
-- Tx-level settings ported from `allora-offchain-node`: `max_fees` (hard per-tx fee cap, raises `MaxFeesExceededError`), `account_sequence_retry_delay`, `gas_adjustment` (previously hardcoded 1.2), `base_gas`, and `simulate_gas_from_start`
+- Tx-level settings ported from `allora-offchain-node`: `max_fees` (hard per-tx fee cap, raises `MaxFeesExceededError`), `account_sequence_retry_delay`, `gas_adjustment` (previously hardcoded 1.2), `base_gas`, and `simulate_gas_from_start`. Note that `gas_adjustment` is applied on top of `base_gas`, so `base_gas=500000` at the default adjustment yields `gasWanted` 600000
+- All of the above are configurable via `AlloraRPCClient.from_env()`: `FEE_GRANTER`, `MAX_FEES`, `ACCOUNT_SEQUENCE_RETRY_DELAY`, `GAS_ADJUSTMENT`, `BASE_GAS`, `SIMULATE_GAS_FROM_START`
 
 ## v1.3.0
 

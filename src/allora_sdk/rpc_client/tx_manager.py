@@ -219,6 +219,8 @@ class TxManager:
         # is deliberately independent: raising gas_adjustment shifts the
         # starting point, it does not widen the retry ladder on top of it.
         self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
+        # gas_adjustment is applied on top of this too, so BASE_GAS=500000
+        # with the default 1.2 adjustment yields gasWanted 600000.
         self.base_gas = base_gas
         self.simulate_gas_from_start: bool = simulate_gas_from_start if simulate_gas_from_start is not None else True
         self.tx_client = tx_client
