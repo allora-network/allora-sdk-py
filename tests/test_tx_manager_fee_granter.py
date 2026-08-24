@@ -17,7 +17,8 @@ from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import TxManager
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import MsgSend
 
-GRANTER = "allo1mjkpxd9ejld8kp8qqngrarzp3adfy4q3ts4tvm"
+# Synthetic address: tests must not carry real fleet addresses into a public repo.
+GRANTER = "allo18m98xemapflq86kh9j6v358l5n5rp2ahfaekth"
 
 
 def _make_manager(fee_granter=None, signer_balance: int = 10**12) -> TxManager:

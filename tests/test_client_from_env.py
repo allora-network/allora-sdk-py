@@ -88,5 +88,5 @@ def test_blank_fee_granter_is_treated_as_unset(monkeypatch, raw):
 
 
 def test_fee_granter_is_forwarded_when_set(monkeypatch):
-    granter = "allo1mjkpxd9ejld8kp8qqngrarzp3adfy4q3ts4tvm"
+    granter = "allo18m98xemapflq86kh9j6v358l5n5rp2ahfaekth"
     assert _fee_granter_from_env(monkeypatch, granter) == granter
