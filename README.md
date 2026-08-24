@@ -244,6 +244,17 @@ client = AlloraRPCClient.testnet(
 #   - FAUCET_URL
 #   - FEE_DENOM
 #   - FEE_MIN_GAS_PRICE
+#   - FEE_GRANTER                    (bech32 `allo` address that pays fees via an on-chain grant)
+#   - MAX_FEES                       (hard per-tx fee cap in the fee denom)
+#   - ACCOUNT_SEQUENCE_RETRY_DELAY   (seconds to wait before retrying a sequence mismatch)
+#   - GAS_ADJUSTMENT                 (safety multiplier on gas estimates, default 1.2)
+#   - BASE_GAS                       (gas limit replacing the per-message-type defaults;
+#                                     GAS_ADJUSTMENT still applies on top of it)
+#   - SIMULATE_GAS_FROM_START        (true/false, default true)
+#
+# The tx settings above are also read by the AlloraWorker factories, so a
+# deployment can configure them through the environment without going through
+# AlloraRPCClient.from_env. Explicit arguments always win over the env var.
 client = AlloraRPCClient.from_env()
 
 # Query network data

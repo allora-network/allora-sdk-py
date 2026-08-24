@@ -1,5 +1,7 @@
 import asyncio
+import math
 from enum import Enum
+import bech32
 import traceback
 import grpc
 from datetime import datetime, timedelta
@@ -9,6 +11,7 @@ from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
 from cosmpy.aerial.wallet import Wallet
+from cosmpy.crypto.address import Address
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
@@ -120,6 +123,10 @@ class WalletNotConfiguredError(Exception):
     """Raised when a transaction method is called without a configured wallet."""
     pass
 
+class MaxFeesExceededError(Exception):
+    """Raised when a computed transaction fee exceeds the configured max_fees cap."""
+    pass
+
 class TxNotFoundError(Exception):
     pass
 
@@ -143,6 +150,31 @@ class LandedOutcome(Enum):
 # Backwards-compatible alias for the previously-private name.
 _LandedOutcome = LandedOutcome
 
+def _parse_fee_granter(fee_granter: Optional[str]) -> Optional[Address]:
+    """Validate an optional bech32 fee-granter address with the `allo` prefix."""
+    if fee_granter is None:
+        return None
+
+    if fee_granter != fee_granter.lower():
+        raise ValueError(f"fee_granter must be lowercase bech32 (the chain's prefix check is case-sensitive): {fee_granter!r}")
+
+    hrp, data = bech32.bech32_decode(fee_granter)
+    if data is None:
+        raise ValueError(f"fee_granter is not a valid bech32 address: {fee_granter!r}")
+    if hrp != "allo":
+        raise ValueError(f"fee_granter must have the 'allo' bech32 prefix, got {hrp!r}: {fee_granter!r}")
+
+    # bech32_decode only verifies the checksum, so a well-formed but
+    # wrong-length payload (including an empty one) gets this far. Cosmos
+    # addresses are 20 bytes (secp256k1 account) or 32 bytes (module/
+    # multisig). Catching it here beats an opaque fee error at broadcast.
+    payload = bech32.convertbits(data, 5, 8, False)
+    if payload is None or len(payload) not in (20, 32):
+        length = "undecodable" if payload is None else f"{len(payload)} bytes"
+        raise ValueError(f"fee_granter must decode to 20 or 32 bytes, got {length}: {fee_granter!r}")
+
+    return Address(fee_granter)
+
 
 class TxManager:
     def __init__(
@@ -157,8 +189,48 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ):
+        if max_fees is not None and max_fees <= 0:
+            raise ValueError(f"max_fees must be a positive integer, got {max_fees}")
+        # isfinite before the comparison: NaN fails every ordering test, so a
+        # bare `< 0` / `<= 0` waves it through to blow up later inside int()
+        # or asyncio.sleep(). inf gets the same treatment.
+        if account_sequence_retry_delay is not None and (
+            not math.isfinite(account_sequence_retry_delay) or account_sequence_retry_delay < 0
+        ):
+            raise ValueError(f"account_sequence_retry_delay must be a finite value >= 0, got {account_sequence_retry_delay}")
+        if gas_adjustment is not None and (not math.isfinite(gas_adjustment) or gas_adjustment <= 0):
+            raise ValueError(f"gas_adjustment must be a finite value > 0, got {gas_adjustment}")
+        if gas_adjustment is not None and gas_adjustment < 1.0:
+            # Allowed, but it sizes the broadcast below the simulated estimate,
+            # which is a reliable way to run out of gas.
+            logger.warning(
+                "gas_adjustment=%s is below 1.0; transactions will be sized below "
+                "the simulated estimate and may run out of gas.",
+                gas_adjustment,
+            )
+        if base_gas is not None and base_gas <= 0:
+            raise ValueError(f"base_gas must be a positive integer, got {base_gas}")
+
         self.wallet = wallet
+        self.fee_granter: Optional[Address] = _parse_fee_granter(fee_granter)
+        self.max_fees = max_fees
+        self.account_sequence_retry_delay = account_sequence_retry_delay
+        # The single gas multiplier in the SDK. It sizes the gas estimate, and
+        # nothing else multiplies on top of it: the retry ladder in
+        # _attempt_submissions is 1.0 + attempt*0.3, so attempt 0 broadcasts
+        # exactly this estimate and later attempts only add escalation.
+        self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
+        # gas_adjustment is applied on top of this too, so BASE_GAS=500000
+        # with the default 1.2 adjustment yields gasWanted 600000.
+        self.base_gas = base_gas
+        self.simulate_gas_from_start: bool = simulate_gas_from_start if simulate_gas_from_start is not None else True
         self.tx_client = tx_client
         self.auth_client = auth_client
         self.bank_client = bank_client
@@ -199,11 +271,6 @@ class TxManager:
         self._cached_gas_price: Optional[Decimal] = None
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
-        # Base gas headroom applied to the simulated estimate on the first
-        # attempt (see AlloraNetworkConfig.gas_adjustment). Default 1.0 = no
-        # change from prior behavior. getattr keeps older externally-constructed
-        # configs working.
-        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.0)
 
     async def submit_transaction(
         self,
@@ -218,17 +285,20 @@ class TxManager:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
         estimated_gas_limit: Optional[int] = None
-        try:
-            estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
-            logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
-            fee_preview = await self._calculate_optimal_fee(
-                estimated_gas_limit,
-                self._fee_multipliers[fee_tier],
-            )
-            logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
-        except Exception as e:
-            logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
-            estimated_gas_limit = None
+        if self.simulate_gas_from_start:
+            try:
+                estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
+                logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
+                fee_preview = await self._calculate_optimal_fee(
+                    estimated_gas_limit,
+                    self._fee_multipliers[fee_tier],
+                )
+                logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+            except MaxFeesExceededError:
+                raise
+            except Exception as e:
+                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+                estimated_gas_limit = None
 
         async with self._parent_tx_id_lock:
             next_parent_tx_id = self.parent_tx_id
@@ -335,7 +405,7 @@ class TxManager:
 
             tx.seal(
                 signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
-                fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit),
+                fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit, granter=self.fee_granter),
             )
 
             tx.complete()
@@ -361,8 +431,8 @@ class TxManager:
                 gas_used = int(sim_response.gas_info.gas_used)
                 logger.debug(f"Simulation successful after {attempt} attempt(s): estimated gas = {gas_used}")
 
-                # Add a 20% safety margin to the estimate
-                return int(gas_used * 1.2)
+                # Add a safety margin to the estimate
+                return int(gas_used * self.gas_adjustment)
 
             except grpc.RpcError as e:
                 err = self._exception_from_simulation_error(e)
@@ -378,10 +448,35 @@ class TxManager:
                 logger.error(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
                 raise err
 
+    async def _await_sequence_retry_delay(self, pending, start) -> bool:
+        """Honour account_sequence_retry_delay before an ASM retry.
+
+        Returns True if the caller should stop: the deadline was reached during
+        (or by) the wait, in which case the pending future is already failed.
+        """
+        if self.account_sequence_retry_delay is None:
+            return False
+        delay = self.account_sequence_retry_delay
+        expired = False
+        if pending.timeout:
+            # Never sleep past the deadline — the extra wait would buy nothing
+            # but a failed recheck. Clamping makes the post-sleep comparison
+            # land exactly on the deadline, so record the overrun here rather
+            # than re-deriving it from a timestamp that may or may not have
+            # tipped over.
+            remaining = (start + pending.timeout - datetime.now()).total_seconds()
+            if delay >= remaining:
+                delay, expired = max(0.0, remaining), True
+        await asyncio.sleep(delay)
+        if expired or (pending.timeout and start + pending.timeout < datetime.now()):
+            err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
+            pending._final_future.set_exception(err)
+            return True
+        return False
+
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
         start = datetime.now()
 
-        gas_multiplier = 1.0
         fee_multiplier = self._fee_multipliers[pending.fee_tier]
         current_gas_limit = gas_limit
         next_account_seq = account_seq
@@ -392,7 +487,7 @@ class TxManager:
 
                 pending.attempt = attempt
 
-                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
+                gas_multiplier = 1.0 + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
@@ -422,7 +517,7 @@ class TxManager:
                 return
 
             except OutOfGasError as oog_err:
-                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
+                gas_multiplier = 1.0 + (attempt * 0.3)
 
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     pending._final_future.set_exception(oog_err)
@@ -499,6 +594,8 @@ class TxManager:
                             pending._final_future.set_exception(err)
                             return
                         logger.debug("Account sequence mismatch, retrying...")
+                        if await self._await_sequence_retry_delay(pending, start):
+                            return
                         continue
                     # Still unconfirmed after the grace window — indexer lag
                     # exceeded timeout + grace. Fall through to the
@@ -514,6 +611,8 @@ class TxManager:
                     pending._final_future.set_exception(err)
                     return
                 logger.debug("Account sequence mismatch, retrying...")
+                if await self._await_sequence_retry_delay(pending, start):
+                    return
                 continue
 
             except TxTimeoutError:
@@ -564,6 +663,20 @@ class TxManager:
                 logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
 
+            except MaxFeesExceededError as err:
+                # A hard cap, so retrying is pointless: the ladder only raises
+                # the gas limit, and therefore the fee, from here. Fail fast,
+                # but say that the escalation is what crossed the cap so the
+                # operator does not go looking at the first attempt's fee.
+                logger.error(
+                    "Transaction fee exceeded max_fees on retry attempt %d (gas escalation "
+                    "raises the fee each attempt); giving up: %s",
+                    attempt,
+                    err,
+                )
+                pending._final_future.set_exception(err)
+                return
+
             except Exception as err:
                 pending._final_future.set_exception(err)
                 return
@@ -597,9 +710,8 @@ class TxManager:
 
         if gas_limit is None:
             # Simulation failed upstream — fall back to the static default.
-            # The gas_multiplier headroom below applies on this path too, so
-            # the first-attempt OOG protection (gas_adjustment) holds even
-            # without a simulated estimate.
+            # _estimate_gas applies gas_adjustment itself, so the headroom
+            # holds on this path too, without a simulated estimate.
             gas_limit = await self._estimate_gas(type_url)
 
         gas_limit = int(gas_limit * gas_multiplier)
@@ -614,7 +726,7 @@ class TxManager:
 
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self.fee_granter),
         )
 
         tx.sign(
@@ -859,7 +971,7 @@ class TxManager:
         elif error_class == AccountSequenceMismatchError:
             return AccountSequenceMismatchError(f"Sequence mismatch: {resp.raw_log}")
         elif error_class == InsufficientFeesError:
-            return InsufficientFeesError("insufficient fees")
+            return InsufficientFeesError(f"insufficient fees{self._fee_granter_hint()}: {resp.raw_log}")
         else:
             return TxError(
                 codespace=resp.codespace,
@@ -867,6 +979,22 @@ class TxManager:
                 message=resp.raw_log,
                 tx_hash=resp.txhash
             )
+
+    def _fee_granter_hint(self) -> str:
+        """Name the granter in fee errors when one is configured.
+
+        A revoked or missing fee grant surfaces as a plain insufficient-fee
+        error against a signer that was never meant to hold funds, which reads
+        as "the wallet is broke" and sends debugging the wrong way. The
+        allowance itself is not queried here: the feegrant module has no REST
+        wrapper generated, so a check would silently only work in gRPC mode.
+        """
+        if self.fee_granter is None:
+            return ""
+        return (
+            f" (fee granter {self.fee_granter} is configured — verify the grant to "
+            f"{self.wallet.address()} still exists and its spend limit is not exhausted)"
+        )
 
     def _exception_from_simulation_error(self, error: grpc.RpcError) -> Exception:
         """
@@ -890,7 +1018,7 @@ class TxManager:
         elif error_class == AccountSequenceMismatchError:
             return AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_msg}")
         elif error_class == InsufficientFeesError:
-            return InsufficientFeesError(f"Insufficient fees during simulation: {error_msg}")
+            return InsufficientFeesError(f"Insufficient fees during simulation{self._fee_granter_hint()}: {error_msg}")
         else:
             code = error.code() if hasattr(error, 'code') else None
             try:
@@ -906,11 +1034,13 @@ class TxManager:
             )
 
     async def _estimate_gas(self, type_url: str) -> int:
-        # TODO
+        if self.base_gas is not None:
+            return int(self.base_gas * self.gas_adjustment)
+
         base_gas = self._default_gas_limits.get(type_url, 200000)
 
-        # Add 20% safety margin
-        return int(base_gas * 1.2)
+        # Add safety margin
+        return int(base_gas * self.gas_adjustment)
 
 
     async def _get_current_gas_price(self) -> float:
@@ -1032,6 +1162,11 @@ class TxManager:
             logger.debug(f"Applied congestion multiplier: {congestion_multiplier}x")
 
         fee_amount = int(gas_limit * price_with_tier)
+        if self.max_fees is not None and fee_amount > self.max_fees:
+            raise MaxFeesExceededError(
+                f"Computed fee {fee_amount}{self.config.fee_denom} exceeds max_fees cap "
+                f"{self.max_fees}{self.config.fee_denom} (gas_limit={gas_limit})"
+            )
         return Coin(amount=fee_amount, denom=self.config.fee_denom)
 
 
@@ -1044,10 +1179,30 @@ class TxManager:
             _ = await self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
 
             # Check balance (estimate worst-case fee for checks)
+            estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
+
+            if self.fee_granter is not None:
+                # The granter pays the fees, so never reject on the signer's balance.
+                # A low/unreadable granter balance is only warned about - the fee
+                # grant is on chain and the broadcast itself is the real check.
+                resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.fee_granter), denom=self.config.fee_denom))
+                if resp is not None and resp.balance is not None and int(resp.balance.amount) < estimated_fee:
+                    logger.warning(
+                        f"Fee granter {self.fee_granter} balance {resp.balance.amount} {self.config.fee_denom} "
+                        f"is below the estimated fee {estimated_fee} {self.config.fee_denom}"
+                    )
+                # The signer's own balance is not a gate here, but it is the
+                # first thing anyone looks at in the field, so record it.
+                signer_resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
+                if signer_resp is not None and signer_resp.balance is not None:
+                    logger.debug(
+                        f"Fees are paid by granter {self.fee_granter}; signer {self.wallet.address()} "
+                        f"holds {signer_resp.balance.amount} {self.config.fee_denom}"
+                    )
+                return
+
             resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
             if resp is not None and resp.balance is not None:
-                estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
-
                 if int(resp.balance.amount) < estimated_fee:
                     raise InsufficientBalanceError(
                         f"Insufficient balance: need at least {estimated_fee} {self.config.fee_denom}, "

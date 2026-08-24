@@ -10,9 +10,10 @@ provided it is given the appropriate configuration.
 """
 
 import asyncio
+import os
 import logging
 import time
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
@@ -88,6 +89,80 @@ class ReconnectingGRPCChannel(Channel):
         return protocol
 
 
+def _env_number(name: str, cast: Callable[[str], Any]) -> Optional[Any]:
+    """Parse an optional numeric environment variable, naming it on failure.
+
+    A bare int()/float() reports only the offending literal, which in a
+    container with a dozen tuning knobs set does not say which one is wrong.
+    """
+    value = os.getenv(name)
+    if not value:
+        return None
+    try:
+        return cast(value)
+    except ValueError as exc:
+        raise ValueError(f"environment variable {name} must be {cast.__name__}, got {value!r}") from exc
+
+
+def _env_bool(name: str) -> Optional[bool]:
+    """Parse an optional boolean environment variable strictly, raising on unrecognised values."""
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        # Empty is treated as unset, matching _env_number: a k8s manifest that
+        # renders `value: ""` for an unconfigured knob must not be an error.
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes"):
+        return True
+    if normalized in ("0", "false", "no"):
+        return False
+
+    raise ValueError(
+        f"environment variable {name} must be one of true/false/1/0/yes/no (case-insensitive), got {value!r}"
+    )
+
+
+def resolve_tx_settings_from_env(
+    fee_granter: Optional[str] = None,
+    max_fees: Optional[int] = None,
+    account_sequence_retry_delay: Optional[float] = None,
+    gas_adjustment: Optional[float] = None,
+    base_gas: Optional[int] = None,
+    simulate_gas_from_start: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Fill any unset tx setting from the environment.
+
+    Shared by from_env and the AlloraWorker constructors so that a deployment
+    which sets FEE_GRANTER (or any other knob) in the environment gets it
+    honoured no matter which entry point built the client. Explicit arguments
+    always win; only None is looked up.
+    """
+    if fee_granter is None:
+        # Blank is unset, matching _env_number/_env_bool: a k8s manifest that
+        # renders `value: ""` for an unconfigured granter must not fail bech32
+        # validation and block startup entirely.
+        fee_granter = os.getenv("FEE_GRANTER", "").strip() or None
+    if max_fees is None:
+        max_fees = _env_number("MAX_FEES", int)
+    if account_sequence_retry_delay is None:
+        account_sequence_retry_delay = _env_number("ACCOUNT_SEQUENCE_RETRY_DELAY", float)
+    if gas_adjustment is None:
+        gas_adjustment = _env_number("GAS_ADJUSTMENT", float)
+    if base_gas is None:
+        base_gas = _env_number("BASE_GAS", int)
+    if simulate_gas_from_start is None:
+        simulate_gas_from_start = _env_bool("SIMULATE_GAS_FROM_START")
+    return {
+        "fee_granter": fee_granter,
+        "max_fees": max_fees,
+        "account_sequence_retry_delay": account_sequence_retry_delay,
+        "gas_adjustment": gas_adjustment,
+        "base_gas": base_gas,
+        "simulate_gas_from_start": simulate_gas_from_start,
+    }
+
+
 class AlloraRPCClient:
     """
     Main client for interacting with the Allora blockchain.
@@ -103,7 +178,13 @@ class AlloraRPCClient:
         self,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
-        debug: bool = False
+        debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ):
         """
         Initialize the Allora blockchain client.
@@ -113,6 +194,18 @@ class AlloraRPCClient:
             private_key: Hex-encoded private key for signing transactions.
             mnemonic: Mnemonic phrase for generating wallet.
             debug: Enable debug logging.
+            fee_granter: Optional bech32 `allo` address that pays transaction fees
+                via an on-chain fee grant. When unset, the wallet pays its own fees.
+            max_fees: Optional hard cap on the fee of a single transaction (in the fee denom);
+                a computed fee above this raises MaxFeesExceededError instead of submitting.
+            account_sequence_retry_delay: Optional delay in seconds before retrying after an
+                account sequence mismatch.
+            gas_adjustment: Safety multiplier applied to gas estimates (default 1.2).
+            base_gas: Optional gas limit used instead of the per-message-type defaults when
+                gas cannot be (or is not) simulated. gas_adjustment is applied on top of it,
+                so base_gas=500000 with the default 1.2 adjustment yields gasWanted 600000.
+            simulate_gas_from_start: Simulate gas before the first submission attempt (default True);
+                set False to start from base_gas / defaults and only rely on retry adjustments.
         """
         if debug:
             logging.basicConfig(level=logging.DEBUG)
@@ -164,6 +257,12 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)
@@ -254,12 +353,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
             network=network or AlloraNetworkConfig.testnet(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
 
@@ -269,12 +380,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
             network=network or AlloraNetworkConfig.mainnet(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
     @classmethod
@@ -283,12 +406,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
             network=network or AlloraNetworkConfig.local(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
     @classmethod
@@ -297,10 +432,28 @@ class AlloraRPCClient:
         network: Optional[AlloraNetworkConfig] = None,
         wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client using environment variables."""
         if network is None:
             network = AlloraNetworkConfig.from_env()
         if wallet is None:
             wallet = AlloraWalletConfig.from_env()
-        return cls(network=network, wallet=wallet, debug=debug)
+        return cls(
+            network=network,
+            wallet=wallet,
+            debug=debug,
+            **resolve_tx_settings_from_env(
+                fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
+            ),
+        )

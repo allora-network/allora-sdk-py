@@ -2,6 +2,20 @@
 
 # CHANGELOG
 
+## v1.4.0
+
+- Optional fee-granter support: `fee_granter` parameter on `TxManager`, `AlloraRPCClient`, and the `AlloraWorker` constructors sets `AuthInfo.Fee.granter` on all built transactions (simulate and broadcast), letting an on-chain fee grant pay transaction fees
+- Tx-level settings ported from `allora-offchain-node`: `max_fees` (hard per-tx fee cap, raises `MaxFeesExceededError`), `account_sequence_retry_delay`, `gas_adjustment` (previously hardcoded 1.2), `base_gas`, and `simulate_gas_from_start`. Note that `gas_adjustment` is applied on top of `base_gas`, so `base_gas=500000` at the default adjustment yields `gasWanted` 600000
+- All of the above are configurable via the environment whether the client is built with `AlloraRPCClient.from_env()` or an `AlloraWorker` factory: `FEE_GRANTER`, `MAX_FEES`, `ACCOUNT_SEQUENCE_RETRY_DELAY`, `GAS_ADJUSTMENT`, `BASE_GAS`, `SIMULATE_GAS_FROM_START`
+- Consolidated gas sizing on the single `AlloraRPCClient`/`TxManager` `gas_adjustment` setting. `AlloraNetworkConfig` no longer has a second multiplier, preventing `GAS_ADJUSTMENT` from being applied twice; retries add only their attempt-specific escalation
+
+## v1.3.0
+
+- Injectable cosmpy `Wallet` (custodial/remote signer support) via `AlloraWalletConfig.wallet` (#85)
+- `create_topic` updated with new v10 topic parameters and defaults (#92)
+- Packaging fix: include generated rpc_client protobufs in wheel/sdist artifacts
+- Integration test fixes (#93)
+
 ## v1.2.0
 
 - New worker types (#37)
@@ -21,7 +35,7 @@
 - Follow-up hardening: tx concurrency/caching, sequence/nonce safety, autostake idempotence, reputer loss safety, and added simulation/loss tests (#45–#56)
 - Dependency bumps: `aiohttp` (#58), `pytest` (#60), `pygments` (#63), `requests` (#64), `protobuf` (#65)
 - Transaction submission: a non-zero CheckTx response on broadcast now raises the classified error immediately (e.g. `AccountSequenceMismatchError`, `InsufficientFeesError`) instead of returning a tx hash that would never be indexed and only fail later with a timeout. Callers that previously caught `TxTimeoutError` for broadcast rejections should now expect the specific error type.
-- New opt-in gas headroom: `AlloraNetworkConfig.gas_adjustment` (default `1.0`; also settable via the `GAS_ADJUSTMENT` env var) multiplies the simulated gas estimate on the first broadcast attempt. Set it above `1.0` (e.g. `1.4`) to protect against execution consuming slightly more gas than simulation reports.
+- New opt-in gas headroom: `AlloraNetworkConfig.gas_adjustment` (default `1.0`; also settable via the `GAS_ADJUSTMENT` env var) multiplies the simulated gas estimate on the first broadcast attempt. Set it above `1.0` (e.g. `1.4`) to protect against execution consuming slightly more gas than simulation reports. (Superseded in v1.4.0: this setting moved to `AlloraRPCClient`/`TxManager` and defaults to `1.2`.)
 - New websocket tuning knobs on `AlloraNetworkConfig` (also via env vars): `event_recv_timeout_secs` (`EVENT_RECV_TIMEOUT_SECS`, default `30.0`) bounds a single `recv()`, and `max_event_silence_secs` (`MAX_EVENT_SILENCE_SECS`, default `60.0`) gates the deaf-subscription watchdog that forces a reconnect + resubscribe after prolonged silence. Defaults preserve previous behavior.
 - Transaction retry robustness: a `wait_for_tx` timeout no longer blindly re-broadcasts — the tx hash is re-queried first, a confirmed-landed tx is resolved from the chain result, and an unconfirmed retry keeps the same account sequence so a silently-landed original is rejected cheaply at CheckTx instead of landing twice.
 

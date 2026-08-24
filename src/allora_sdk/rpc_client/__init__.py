@@ -1,6 +1,6 @@
 from .client import AlloraRPCClient
 from .config import AlloraNetworkConfig, AlloraWalletConfig
-from .tx_manager import FeeTier, TxManager
+from .tx_manager import FeeTier, MaxFeesExceededError, TxManager
 
 
 __all__ = [
@@ -9,4 +9,5 @@ __all__ = [
     "AlloraWalletConfig",
     "TxManager",
     "FeeTier",
+    "MaxFeesExceededError",
 ]
