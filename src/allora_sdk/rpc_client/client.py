@@ -10,6 +10,7 @@ provided it is given the appropriate configuration.
 """
 
 import asyncio
+import os
 import logging
 import time
 from typing import Any, Optional, cast
@@ -277,12 +278,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for testnet."""
         return cls(
             network=network or AlloraNetworkConfig.testnet(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
 
@@ -292,12 +305,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for mainnet."""
         return cls(
             network=network or AlloraNetworkConfig.mainnet(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
     @classmethod
@@ -306,12 +331,24 @@ class AlloraRPCClient:
         wallet: Optional[AlloraWalletConfig] = None,
         network: Optional[AlloraNetworkConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client for local development."""
         return cls(
             network=network or AlloraNetworkConfig.local(),
             wallet=wallet,
-            debug=debug
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
 
     @classmethod
@@ -320,10 +357,38 @@ class AlloraRPCClient:
         network: Optional[AlloraNetworkConfig] = None,
         wallet: Optional[AlloraWalletConfig] = None,
         debug: bool = False,
+        fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> 'AlloraRPCClient':
         """Create client using environment variables."""
         if network is None:
             network = AlloraNetworkConfig.from_env()
         if wallet is None:
             wallet = AlloraWalletConfig.from_env()
-        return cls(network=network, wallet=wallet, debug=debug)
+        if fee_granter is None:
+            fee_granter = os.getenv("FEE_GRANTER")
+        if max_fees is None:
+            max_fees = int(v) if (v := os.getenv("MAX_FEES")) else None
+        if account_sequence_retry_delay is None:
+            account_sequence_retry_delay = float(v) if (v := os.getenv("ACCOUNT_SEQUENCE_RETRY_DELAY")) else None
+        if gas_adjustment is None:
+            gas_adjustment = float(v) if (v := os.getenv("GAS_ADJUSTMENT")) else None
+        if base_gas is None:
+            base_gas = int(v) if (v := os.getenv("BASE_GAS")) else None
+        if simulate_gas_from_start is None:
+            simulate_gas_from_start = v.strip().lower() in ("1", "true", "yes") if (v := os.getenv("SIMULATE_GAS_FROM_START")) else None
+        return cls(
+            network=network,
+            wallet=wallet,
+            debug=debug,
+            fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
+        )

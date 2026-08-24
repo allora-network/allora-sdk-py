@@ -1103,10 +1103,22 @@ class TxManager:
             _ = await self.auth_client.account(QueryAccountRequest(address=str(self.wallet.address())))
 
             # Check balance (estimate worst-case fee for checks)
+            estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
+
+            if self.fee_granter is not None:
+                # The granter pays the fees, so never reject on the signer's balance.
+                # A low/unreadable granter balance is only warned about - the fee
+                # grant is on chain and the broadcast itself is the real check.
+                resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.fee_granter), denom=self.config.fee_denom))
+                if resp is not None and resp.balance is not None and int(resp.balance.amount) < estimated_fee:
+                    logger.warning(
+                        f"Fee granter {self.fee_granter} balance {resp.balance.amount} {self.config.fee_denom} "
+                        f"is below the estimated fee {estimated_fee} {self.config.fee_denom}"
+                    )
+                return
+
             resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
             if resp is not None and resp.balance is not None:
-                estimated_fee = int(300000 * self.config.fee_minimum_gas_price * self._fee_multipliers[FeeTier.PRIORITY])
-
                 if int(resp.balance.amount) < estimated_fee:
                     raise InsufficientBalanceError(
                         f"Insufficient balance: need at least {estimated_fee} {self.config.fee_denom}, "

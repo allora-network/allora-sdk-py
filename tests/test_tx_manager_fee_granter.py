@@ -20,12 +20,18 @@ from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import MsgSend
 GRANTER = "allo1mjkpxd9ejld8kp8qqngrarzp3adfy4q3ts4tvm"
 
 
-def _make_manager(fee_granter=None) -> TxManager:
+def _make_manager(fee_granter=None, signer_balance: int = 10**12) -> TxManager:
     wallet = LocalWallet(PrivateKey(), prefix="allo")
 
     auth_client = Mock()
     auth_client.account_info = AsyncMock(
         return_value=Mock(info=Mock(sequence=0, account_number=1))
+    )
+    auth_client.account = AsyncMock(return_value=Mock())
+
+    bank_client = Mock()
+    bank_client.balance = AsyncMock(
+        return_value=Mock(balance=Mock(amount=str(signer_balance)))
     )
 
     tx_client = Mock()
@@ -44,7 +50,7 @@ def _make_manager(fee_granter=None) -> TxManager:
         wallet=wallet,
         tx_client=tx_client,
         auth_client=auth_client,
-        bank_client=Mock(),
+        bank_client=bank_client,
         feemarket_client=feemarket_client,
         config=config,
         fee_granter=fee_granter,
@@ -159,3 +165,54 @@ async def test_simulate_and_broadcast_paths_agree_on_granter():
     sim_granter = _granter_from_tx_bytes(sim_request.tx_bytes)
     broadcast_granter = _granter_from_tx_bytes(broadcast_request.tx_bytes)
     assert sim_granter == broadcast_granter == GRANTER
+
+
+# --- pre-flight balance checks with a granter ---
+
+@pytest.mark.asyncio
+async def test_preflight_does_not_reject_drained_signer_when_granter_set():
+    # Signer balance far below the worst-case fee estimate: with a granter
+    # configured this must NOT raise, and the balance queried is the granter's.
+    manager = _make_manager(fee_granter=GRANTER, signer_balance=200)
+
+    await manager._pre_flight_checks()
+
+    request = manager.bank_client.balance.call_args.args[0]
+    assert request.address == GRANTER
+
+
+@pytest.mark.asyncio
+async def test_preflight_still_rejects_drained_signer_without_granter():
+    from allora_sdk.rpc_client.tx_manager import InsufficientBalanceError
+
+    manager = _make_manager(signer_balance=200)
+
+    with pytest.raises(InsufficientBalanceError):
+        await manager._pre_flight_checks()
+
+
+@pytest.mark.asyncio
+async def test_tx_broadcasts_with_drained_signer_when_granter_set():
+    from datetime import timedelta
+    from allora_sdk.rpc_client.tx_manager import FeeTier, PendingTx
+
+    manager = _make_manager(fee_granter=GRANTER, signer_balance=200)
+    manager.wait_for_tx = AsyncMock(return_value=Mock(tx_response=Mock(code=0)))
+    manager._log_tx_response = Mock()
+    manager._raise_for_status = Mock()
+
+    pending = PendingTx(
+        manager=manager,
+        parent_tx_id=0,
+        type_url="/cosmos.bank.v1beta1.MsgSend",
+        msgs=[_msg()],
+        fee_tier=FeeTier.STANDARD,
+        max_retries=0,
+        timeout=timedelta(seconds=10),
+    )
+    await manager._attempt_submissions(pending, gas_limit=200000)
+    await pending  # resolves, i.e. the tx was broadcast and accepted
+
+    manager.tx_client.broadcast_tx.assert_called_once()
+    broadcast_request = manager.tx_client.broadcast_tx.call_args.args[0]
+    assert _granter_from_tx_bytes(broadcast_request.tx_bytes) == GRANTER
