@@ -251,6 +251,10 @@ client = AlloraRPCClient.testnet(
 #   - BASE_GAS                       (gas limit replacing the per-message-type defaults;
 #                                     GAS_ADJUSTMENT still applies on top of it)
 #   - SIMULATE_GAS_FROM_START        (true/false, default true)
+#
+# The tx settings above are also read by the AlloraWorker factories, so a
+# deployment can configure them through the environment without going through
+# AlloraRPCClient.from_env. Explicit arguments always win over the env var.
 client = AlloraRPCClient.from_env()
 
 # Query network data
