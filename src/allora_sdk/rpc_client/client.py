@@ -103,7 +103,8 @@ class AlloraRPCClient:
         self,
         wallet: Optional[AlloraWalletConfig] = None,
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
-        debug: bool = False
+        debug: bool = False,
+        fee_granter: Optional[str] = None,
     ):
         """
         Initialize the Allora blockchain client.
@@ -113,6 +114,8 @@ class AlloraRPCClient:
             private_key: Hex-encoded private key for signing transactions.
             mnemonic: Mnemonic phrase for generating wallet.
             debug: Enable debug logging.
+            fee_granter: Optional bech32 `allo` address that pays transaction fees
+                via an on-chain fee grant. When unset, the wallet pays its own fees.
         """
         if debug:
             logging.basicConfig(level=logging.DEBUG)
@@ -164,6 +167,7 @@ class AlloraRPCClient:
                 feemarket_client=feemarket_query,
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
+                fee_granter=fee_granter,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)

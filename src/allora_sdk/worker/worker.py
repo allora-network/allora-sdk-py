@@ -86,6 +86,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         sanity_check: SanityCheckConfig | None = None,
         debug: bool = False,
         show_banner: bool = True,
+        fee_granter: Optional[str] = None,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -104,6 +105,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
+            fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
 
         Returns:
             An instance of AlloraWorker configured as an inferer
@@ -113,6 +115,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
+            fee_granter=fee_granter,
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
@@ -151,6 +154,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
         show_banner: bool = True,
+        fee_granter: Optional[str] = None,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -168,6 +172,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
+            fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
 
         Returns:
             An instance of AlloraWorker configured as a reputer
@@ -181,6 +186,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
+            fee_granter=fee_granter,
         )
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
@@ -218,6 +224,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         autostake: AutoStakeConfig | None = None,
         debug: bool = False,
         show_banner: bool = True,
+        fee_granter: Optional[str] = None,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -237,6 +244,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
+            fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
 
         Returns:
             An instance of AlloraWorker configured as a forecaster
@@ -246,6 +254,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             wallet=AlloraWalletConfig(wallet=wallet_initialized),
             network=network,
             debug=debug,
+            fee_granter=fee_granter,
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
             use_case=Forecaster(

@@ -1,5 +1,6 @@
 import asyncio
 from enum import Enum
+import bech32
 import traceback
 import grpc
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from typing import Any, Optional, Union, Dict, cast
 from google.protobuf.message import Message
 
 from cosmpy.aerial.wallet import Wallet
+from cosmpy.crypto.address import Address
 from cosmpy.aerial.tx import SigningCfg, Transaction, TxFee
 from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
@@ -143,6 +145,19 @@ class LandedOutcome(Enum):
 # Backwards-compatible alias for the previously-private name.
 _LandedOutcome = LandedOutcome
 
+def _parse_fee_granter(fee_granter: Optional[str]) -> Optional[Address]:
+    """Validate an optional bech32 fee-granter address with the `allo` prefix."""
+    if fee_granter is None:
+        return None
+
+    hrp, data = bech32.bech32_decode(fee_granter)
+    if data is None:
+        raise ValueError(f"fee_granter is not a valid bech32 address: {fee_granter!r}")
+    if hrp != "allo":
+        raise ValueError(f"fee_granter must have the 'allo' bech32 prefix, got {hrp!r}: {fee_granter!r}")
+
+    return Address(fee_granter)
+
 
 class TxManager:
     def __init__(
@@ -157,8 +172,10 @@ class TxManager:
         config: AlloraNetworkConfig,
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
+        fee_granter: Optional[str] = None,
     ):
         self.wallet = wallet
+        self.fee_granter: Optional[Address] = _parse_fee_granter(fee_granter)
         self.tx_client = tx_client
         self.auth_client = auth_client
         self.bank_client = bank_client
@@ -335,7 +352,7 @@ class TxManager:
 
             tx.seal(
                 signing_cfgs=[SigningCfg.direct(self.wallet.public_key(), sequence_num=info.sequence)],
-                fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit),
+                fee=TxFee(amount=[dummy_fee], gas_limit=current_gas_limit, granter=self.fee_granter),
             )
 
             tx.complete()
@@ -614,7 +631,7 @@ class TxManager:
 
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
-            fee=TxFee(amount=[ fee ], gas_limit=gas_limit),
+            fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self.fee_granter),
         )
 
         tx.sign(
