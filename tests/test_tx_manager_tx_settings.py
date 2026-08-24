@@ -60,6 +60,26 @@ def test_invalid_base_gas_rejected():
         _make_manager(base_gas=-5)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_gas_adjustment_rejected(bad):
+    # NaN fails every ordering comparison, so a bare `<= 0` guard lets it
+    # through to explode later inside int().
+    with pytest.raises(ValueError, match="finite"):
+        _make_manager(gas_adjustment=bad)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_account_sequence_retry_delay_rejected(bad):
+    with pytest.raises(ValueError, match="finite"):
+        _make_manager(account_sequence_retry_delay=bad)
+
+
+def test_zero_account_sequence_retry_delay_is_accepted_and_distinct_from_unset():
+    manager = _make_manager(account_sequence_retry_delay=0.0)
+    assert manager.account_sequence_retry_delay == 0.0
+    assert _make_manager().account_sequence_retry_delay is None
+
+
 # --- max_fees ---
 
 @pytest.mark.asyncio
@@ -109,6 +129,43 @@ async def test_no_max_fees_means_no_cap():
     manager = _make_manager()
     fee = await manager._calculate_optimal_fee(200000, 1000.0)
     assert fee.amount == 2_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_max_fees_enforced_on_retry_escalation():
+    # First attempt is under the cap; the insufficient-fee retry escalates the
+    # fee multiplier, and the cap must bite on the escalated fee rather than
+    # being applied only to the initial estimate.
+    manager = _make_manager(max_fees=2_500_000)
+    manager._pre_flight_checks = AsyncMock(return_value=None)
+    manager.simulate_transaction = AsyncMock(return_value=200000)
+
+    calls = []
+
+    async def _broadcast(type_url, msgs, gas_limit, fee_multiplier, *args, **kwargs):
+        calls.append(fee_multiplier)
+        # _calculate_optimal_fee is the real one, so the cap is exercised here.
+        await manager._calculate_optimal_fee(gas_limit, fee_multiplier)
+        raise InsufficientFeesError("insufficient fees")
+
+    manager._build_and_broadcast = _broadcast
+
+    pending = PendingTx(
+        manager=manager,
+        parent_tx_id=0,
+        type_url="/cosmos.bank.v1beta1.MsgSend",
+        msgs=[Mock()],
+        fee_tier=FeeTier.ECO,
+        max_retries=3,
+        timeout=timedelta(seconds=60),
+    )
+    await manager._attempt_submissions(pending, gas_limit=200000)
+
+    with pytest.raises(MaxFeesExceededError):
+        await pending
+    # 1.0x costs 2_000_000 and stays under the cap; the escalated 1.5x
+    # attempt costs 3_000_000 and must be rejected before broadcast.
+    assert calls == [1.0, 1.0, 1.5]
 
 
 # --- gas_adjustment / base_gas ---

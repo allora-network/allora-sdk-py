@@ -95,6 +95,25 @@ def test_wrong_prefix_fee_granter_rejected_at_construction():
         _make_manager(fee_granter="cosmos1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu")
 
 
+@pytest.mark.parametrize("payload_len", [0, 19, 21, 31, 33])
+def test_wrong_length_fee_granter_rejected_at_construction(payload_len):
+    # Valid checksum, valid `allo` hrp, wrong decoded length: bech32_decode
+    # alone waves these through, so the length gate is what catches them.
+    import bech32
+
+    encoded = bech32.bech32_encode("allo", bech32.convertbits(b"\x01" * payload_len, 8, 5))
+    with pytest.raises(ValueError, match="20 or 32 bytes"):
+        _make_manager(fee_granter=encoded)
+
+
+def test_correct_length_fee_granter_accepted():
+    import bech32
+
+    for payload_len in (20, 32):
+        encoded = bech32.bech32_encode("allo", bech32.convertbits(b"\x02" * payload_len, 8, 5))
+        assert _make_manager(fee_granter=encoded).fee_granter is not None
+
+
 @pytest.mark.asyncio
 async def test_simulate_path_sets_granter():
     manager = _make_manager(fee_granter=GRANTER)
@@ -177,8 +196,11 @@ async def test_preflight_does_not_reject_drained_signer_when_granter_set():
 
     await manager._pre_flight_checks()
 
-    request = manager.bank_client.balance.call_args.args[0]
-    assert request.address == GRANTER
+    # The granter is the address whose funds matter; the signer is queried too,
+    # but only to log it — neither lookup may reject.
+    queried = [c.args[0].address for c in manager.bank_client.balance.call_args_list]
+    assert queried[0] == GRANTER
+    assert str(manager.wallet.address()) in queried
 
 
 @pytest.mark.asyncio

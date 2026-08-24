@@ -13,7 +13,7 @@ import asyncio
 import os
 import logging
 import time
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 from grpclib.client import Channel
 from grpclib.protocol import H2Protocol
@@ -89,10 +89,27 @@ class ReconnectingGRPCChannel(Channel):
         return protocol
 
 
+def _env_number(name: str, cast: Callable[[str], Any]) -> Optional[Any]:
+    """Parse an optional numeric environment variable, naming it on failure.
+
+    A bare int()/float() reports only the offending literal, which in a
+    container with a dozen tuning knobs set does not say which one is wrong.
+    """
+    value = os.getenv(name)
+    if not value:
+        return None
+    try:
+        return cast(value)
+    except ValueError as exc:
+        raise ValueError(f"environment variable {name} must be {cast.__name__}, got {value!r}") from exc
+
+
 def _env_bool(name: str) -> Optional[bool]:
     """Parse an optional boolean environment variable strictly, raising on unrecognised values."""
     value = os.getenv(name)
-    if value is None:
+    if value is None or not value.strip():
+        # Empty is treated as unset, matching _env_number: a k8s manifest that
+        # renders `value: ""` for an unconfigured knob must not be an error.
         return None
 
     normalized = value.strip().lower()
@@ -389,13 +406,13 @@ class AlloraRPCClient:
         if fee_granter is None:
             fee_granter = os.getenv("FEE_GRANTER")
         if max_fees is None:
-            max_fees = int(v) if (v := os.getenv("MAX_FEES")) else None
+            max_fees = _env_number("MAX_FEES", int)
         if account_sequence_retry_delay is None:
-            account_sequence_retry_delay = float(v) if (v := os.getenv("ACCOUNT_SEQUENCE_RETRY_DELAY")) else None
+            account_sequence_retry_delay = _env_number("ACCOUNT_SEQUENCE_RETRY_DELAY", float)
         if gas_adjustment is None:
-            gas_adjustment = float(v) if (v := os.getenv("GAS_ADJUSTMENT")) else None
+            gas_adjustment = _env_number("GAS_ADJUSTMENT", float)
         if base_gas is None:
-            base_gas = int(v) if (v := os.getenv("BASE_GAS")) else None
+            base_gas = _env_number("BASE_GAS", int)
         if simulate_gas_from_start is None:
             simulate_gas_from_start = _env_bool("SIMULATE_GAS_FROM_START")
         return cls(

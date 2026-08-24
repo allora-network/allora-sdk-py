@@ -1,4 +1,5 @@
 import asyncio
+import math
 from enum import Enum
 import bech32
 import traceback
@@ -163,6 +164,15 @@ def _parse_fee_granter(fee_granter: Optional[str]) -> Optional[Address]:
     if hrp != "allo":
         raise ValueError(f"fee_granter must have the 'allo' bech32 prefix, got {hrp!r}: {fee_granter!r}")
 
+    # bech32_decode only verifies the checksum, so a well-formed but
+    # wrong-length payload (including an empty one) gets this far. Cosmos
+    # addresses are 20 bytes (secp256k1 account) or 32 bytes (module/
+    # multisig). Catching it here beats an opaque fee error at broadcast.
+    payload = bech32.convertbits(data, 5, 8, False)
+    if payload is None or len(payload) not in (20, 32):
+        length = "undecodable" if payload is None else f"{len(payload)} bytes"
+        raise ValueError(f"fee_granter must decode to 20 or 32 bytes, got {length}: {fee_granter!r}")
+
     return Address(fee_granter)
 
 
@@ -188,10 +198,15 @@ class TxManager:
     ):
         if max_fees is not None and max_fees <= 0:
             raise ValueError(f"max_fees must be a positive integer, got {max_fees}")
-        if account_sequence_retry_delay is not None and account_sequence_retry_delay < 0:
-            raise ValueError(f"account_sequence_retry_delay must be >= 0, got {account_sequence_retry_delay}")
-        if gas_adjustment is not None and gas_adjustment <= 0:
-            raise ValueError(f"gas_adjustment must be > 0, got {gas_adjustment}")
+        # isfinite before the comparison: NaN fails every ordering test, so a
+        # bare `< 0` / `<= 0` waves it through to blow up later inside int()
+        # or asyncio.sleep(). inf gets the same treatment.
+        if account_sequence_retry_delay is not None and (
+            not math.isfinite(account_sequence_retry_delay) or account_sequence_retry_delay < 0
+        ):
+            raise ValueError(f"account_sequence_retry_delay must be a finite value >= 0, got {account_sequence_retry_delay}")
+        if gas_adjustment is not None and (not math.isfinite(gas_adjustment) or gas_adjustment <= 0):
+            raise ValueError(f"gas_adjustment must be a finite value > 0, got {gas_adjustment}")
         if base_gas is not None and base_gas <= 0:
             raise ValueError(f"base_gas must be a positive integer, got {base_gas}")
 
@@ -199,6 +214,10 @@ class TxManager:
         self.fee_granter: Optional[Address] = _parse_fee_granter(fee_granter)
         self.max_fees = max_fees
         self.account_sequence_retry_delay = account_sequence_retry_delay
+        # Applies to the initial gas estimate only. The per-attempt retry
+        # escalation (gas_multiplier / fee_multiplier in _attempt_submissions)
+        # is deliberately independent: raising gas_adjustment shifts the
+        # starting point, it does not widen the retry ladder on top of it.
         self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
         self.base_gas = base_gas
         self.simulate_gas_from_start: bool = simulate_gas_from_start if simulate_gas_from_start is not None else True
@@ -560,9 +579,20 @@ class TxManager:
                     pending._final_future.set_exception(err)
                     return
                 logger.debug("Account sequence mismatch, retrying...")
-                if self.account_sequence_retry_delay:
-                    await asyncio.sleep(self.account_sequence_retry_delay)
-                    if pending.timeout and start + pending.timeout < datetime.now():
+                if self.account_sequence_retry_delay is not None:
+                    delay = self.account_sequence_retry_delay
+                    expired = False
+                    if pending.timeout:
+                        # Never sleep past the deadline — the extra wait would
+                        # buy nothing but a failed recheck. Clamping makes the
+                        # post-sleep comparison land exactly on the deadline,
+                        # so record the overrun here rather than re-deriving it
+                        # from a timestamp that may or may not have tipped over.
+                        remaining = (start + pending.timeout - datetime.now()).total_seconds()
+                        if delay >= remaining:
+                            delay, expired = max(0.0, remaining), True
+                    await asyncio.sleep(delay)
+                    if expired or (pending.timeout and start + pending.timeout < datetime.now()):
                         err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
                         pending._final_future.set_exception(err)
                         return
@@ -911,7 +941,7 @@ class TxManager:
         elif error_class == AccountSequenceMismatchError:
             return AccountSequenceMismatchError(f"Sequence mismatch: {resp.raw_log}")
         elif error_class == InsufficientFeesError:
-            return InsufficientFeesError("insufficient fees")
+            return InsufficientFeesError(f"insufficient fees{self._fee_granter_hint()}: {resp.raw_log}")
         else:
             return TxError(
                 codespace=resp.codespace,
@@ -919,6 +949,22 @@ class TxManager:
                 message=resp.raw_log,
                 tx_hash=resp.txhash
             )
+
+    def _fee_granter_hint(self) -> str:
+        """Name the granter in fee errors when one is configured.
+
+        A revoked or missing fee grant surfaces as a plain insufficient-fee
+        error against a signer that was never meant to hold funds, which reads
+        as "the wallet is broke" and sends debugging the wrong way. The
+        allowance itself is not queried here: the feegrant module has no REST
+        wrapper generated, so a check would silently only work in gRPC mode.
+        """
+        if self.fee_granter is None:
+            return ""
+        return (
+            f" (fee granter {self.fee_granter} is configured — verify the grant to "
+            f"{self.wallet.address()} still exists and its spend limit is not exhausted)"
+        )
 
     def _exception_from_simulation_error(self, error: grpc.RpcError) -> Exception:
         """
@@ -942,7 +988,7 @@ class TxManager:
         elif error_class == AccountSequenceMismatchError:
             return AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_msg}")
         elif error_class == InsufficientFeesError:
-            return InsufficientFeesError(f"Insufficient fees during simulation: {error_msg}")
+            return InsufficientFeesError(f"Insufficient fees during simulation{self._fee_granter_hint()}: {error_msg}")
         else:
             code = error.code() if hasattr(error, 'code') else None
             try:
@@ -1114,6 +1160,14 @@ class TxManager:
                     logger.warning(
                         f"Fee granter {self.fee_granter} balance {resp.balance.amount} {self.config.fee_denom} "
                         f"is below the estimated fee {estimated_fee} {self.config.fee_denom}"
+                    )
+                # The signer's own balance is not a gate here, but it is the
+                # first thing anyone looks at in the field, so record it.
+                signer_resp = await self.bank_client.balance(QueryBalanceRequest(address=str(self.wallet.address()), denom=self.config.fee_denom))
+                if signer_resp is not None and signer_resp.balance is not None:
+                    logger.debug(
+                        f"Fees are paid by granter {self.fee_granter}; signer {self.wallet.address()} "
+                        f"holds {signer_resp.balance.amount} {self.config.fee_denom}"
                     )
                 return
 
