@@ -33,6 +33,21 @@ The Allora Network Python SDK is a comprehensive async client library for intera
 - betterproto-based message serialization with cosmpy integration
 - Type-safe event marshaling from JSON to protobuf instances
 
+## This Is a Public Repository
+
+Everything written here is published: PR titles and descriptions, review comments, commit messages, code, and test fixtures. Assume anything committed or posted is permanent and indexed.
+
+Never include, anywhere in this repo or its PRs:
+
+- **Real addresses** — wallet, fee-granter, or validator bech32 addresses. Use synthetic ones in tests and docs (generate with `bech32.bech32_encode("allo", bech32.convertbits(<20 bytes>, 8, 5))`).
+- **Fleet topology or scale** — how many workloads, wallets, grants, topics, reputers, or forecasters are operated, and their ratios.
+- **Incident detail** — outage dates and durations, which participants stopped submitting, observed gas/fee figures from production.
+- **Infrastructure identifiers** — cluster names, namespaces, internal hostnames, secret paths, production topic IDs.
+
+Some of this is derivable from a chain indexer, which is not a reason to publish it: an indexer holds anonymous rows, whereas a PR that labels an address, states the fleet size around it, and dates an outage window assembles those rows into an operational map.
+
+Motivate changes by the **class** of defect, not by the internal incident that exposed it. "A missing fee-granter field means migrated workloads pay their own fees and can drain" justifies the change completely, with nothing operational attached. Incident specifics belong in internal reports and private repos.
+
 ## Common Development Commands
 
 ### Testing
