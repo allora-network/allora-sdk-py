@@ -89,6 +89,23 @@ class ReconnectingGRPCChannel(Channel):
         return protocol
 
 
+def _env_bool(name: str) -> Optional[bool]:
+    """Parse an optional boolean environment variable strictly, raising on unrecognised values."""
+    value = os.getenv(name)
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes"):
+        return True
+    if normalized in ("0", "false", "no"):
+        return False
+
+    raise ValueError(
+        f"environment variable {name} must be one of true/false/1/0/yes/no (case-insensitive), got {value!r}"
+    )
+
+
 class AlloraRPCClient:
     """
     Main client for interacting with the Allora blockchain.
@@ -380,7 +397,7 @@ class AlloraRPCClient:
         if base_gas is None:
             base_gas = int(v) if (v := os.getenv("BASE_GAS")) else None
         if simulate_gas_from_start is None:
-            simulate_gas_from_start = v.strip().lower() in ("1", "true", "yes") if (v := os.getenv("SIMULATE_GAS_FROM_START")) else None
+            simulate_gas_from_start = _env_bool("SIMULATE_GAS_FROM_START")
         return cls(
             network=network,
             wallet=wallet,

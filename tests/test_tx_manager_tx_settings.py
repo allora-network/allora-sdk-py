@@ -3,11 +3,12 @@ Test the tx-level settings ported from allora-offchain-node: max_fees,
 account_sequence_retry_delay, gas_adjustment, base_gas, simulate_gas_from_start.
 """
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import allora_sdk.rpc_client.tx_manager as tx_manager_module
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import (
     AccountSequenceMismatchError,
@@ -236,10 +237,27 @@ async def test_retry_delay_not_applied_to_other_retry_paths(error):
 
 
 @pytest.mark.asyncio
-async def test_deadline_rechecked_after_account_sequence_retry_sleep():
-    manager = _make_manager(account_sequence_retry_delay=0.05)
+async def test_deadline_rechecked_after_account_sequence_retry_sleep(monkeypatch):
+    manager = _make_manager(account_sequence_retry_delay=5.0)
     manager._pre_flight_checks = AsyncMock(return_value=None)
     manager._build_and_broadcast = AsyncMock(side_effect=AccountSequenceMismatchError("mismatch"))
+
+    # Drive the clock from the retry sleep instead of wall time, so the deadline
+    # expires exactly once, during the sleep, on any machine.
+    now = datetime(2026, 1, 1)
+
+    class _FakeDatetime:
+        @staticmethod
+        def now():
+            return now
+
+    monkeypatch.setattr(tx_manager_module, "datetime", _FakeDatetime)
+
+    async def _fake_sleep(delay):
+        nonlocal now
+        now = now + timedelta(seconds=delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
 
     pending = PendingTx(
         manager=manager,
@@ -248,7 +266,7 @@ async def test_deadline_rechecked_after_account_sequence_retry_sleep():
         msgs=[Mock()],
         fee_tier=FeeTier.STANDARD,
         max_retries=5,
-        timeout=timedelta(seconds=0.01),  # expires during the retry sleep
+        timeout=timedelta(seconds=1),  # expires during the 5s retry sleep
     )
     await manager._attempt_submissions(pending, gas_limit=200000)
     with pytest.raises(AccountSequenceMismatchError, match="deadline"):
