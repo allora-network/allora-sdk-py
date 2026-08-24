@@ -20,6 +20,10 @@
 - Removed `ml_workflow` and other unused dependencies (#73)
 - Follow-up hardening: tx concurrency/caching, sequence/nonce safety, autostake idempotence, reputer loss safety, and added simulation/loss tests (#45–#56)
 - Dependency bumps: `aiohttp` (#58), `pytest` (#60), `pygments` (#63), `requests` (#64), `protobuf` (#65)
+- Transaction submission: a non-zero CheckTx response on broadcast now raises the classified error immediately (e.g. `AccountSequenceMismatchError`, `InsufficientFeesError`) instead of returning a tx hash that would never be indexed and only fail later with a timeout. Callers that previously caught `TxTimeoutError` for broadcast rejections should now expect the specific error type.
+- New opt-in gas headroom: `AlloraNetworkConfig.gas_adjustment` (default `1.0`; also settable via the `GAS_ADJUSTMENT` env var) multiplies the simulated gas estimate on the first broadcast attempt. Set it above `1.0` (e.g. `1.4`) to protect against execution consuming slightly more gas than simulation reports.
+- New websocket tuning knobs on `AlloraNetworkConfig` (also via env vars): `event_recv_timeout_secs` (`EVENT_RECV_TIMEOUT_SECS`, default `30.0`) bounds a single `recv()`, and `max_event_silence_secs` (`MAX_EVENT_SILENCE_SECS`, default `60.0`) gates the deaf-subscription watchdog that forces a reconnect + resubscribe after prolonged silence. Defaults preserve previous behavior.
+- Transaction retry robustness: a `wait_for_tx` timeout no longer blindly re-broadcasts — the tx hash is re-queried first, a confirmed-landed tx is resolved from the chain result, and an unconfirmed retry keeps the same account sequence so a silently-landed original is rejected cheaply at CheckTx instead of landing twice.
 
 ## v1.1.0
 

@@ -53,12 +53,26 @@ class PendingTx:
         self.last_tx_hash: Optional[str] = None
         self.last_gas_limit: Optional[int] = None
         self.last_fee: Optional[Coin] = None
+        # Classified error of the last confirmed-landed tx, valid only when the
+        # most recent _bail_if_landed call returned RETRY_NEW_SEQUENCE — lets the
+        # retry handler reuse details (e.g. gas_wanted) without re-querying the
+        # hash. Cleared at the start of every _bail_if_landed call and after
+        # being consumed, so it can never be mistaken for a fresh result.
+        self.last_landed_error: Optional[Exception] = None
         self.start = datetime.now()
         self.timeout = timeout
         self.attempt: int = 0
 
         # Final outcome future: resolves to TxResponse or raises
         self._final_future: asyncio.Future[TxResponse] = asyncio.get_running_loop().create_future()
+        # The detached submission task driving this tx (set by submit_transaction),
+        # kept so TxManager.close() can cancel it and resolve the future.
+        self._task: Optional["asyncio.Task"] = None
+        # Set by the TxTimeoutError handler when it retries WITHOUT resetting the
+        # account sequence (a deliberate same-sequence idempotency re-broadcast).
+        # An AccountSequenceMismatchError rejection of such a re-broadcast is
+        # near-certain proof the original tx landed — see that handler.
+        self._same_seq_rebroadcast: bool = False
 
     async def wait(self) -> TxResponse:
         return await self._final_future
@@ -113,6 +127,23 @@ class TxTimeoutError(Exception):
     pass
 
 
+# Errors the submission loop recovers from by re-attempting (fresh sequence /
+# higher gas / refreshed fee). A tx that *landed* with one of these should be
+# retried, not finalized — see TxManager._bail_if_landed.
+_RETRYABLE_TX_ERRORS = (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError)
+
+
+class LandedOutcome(Enum):
+    """Result of checking whether the last broadcast already landed."""
+    FINALIZED = "finalized"                    # future resolved; caller must return
+    RETRY_NEW_SEQUENCE = "retry_new_sequence"  # landed retryably; retry with a fresh sequence
+    NOT_LANDED = "not_landed"                  # not landed / unconfirmed; caller's normal path
+
+
+# Backwards-compatible alias for the previously-private name.
+_LandedOutcome = LandedOutcome
+
+
 class TxManager:
     def __init__(
         self,
@@ -155,6 +186,10 @@ class TxManager:
             FeeTier.PRIORITY: 2.5,   # 150% higher than minimum
         }
 
+        # Strong references to in-flight submission tasks (see submit()) so the
+        # event loop can't garbage-collect them mid-flight.
+        self._inflight: set[PendingTx] = set()
+
         # Pending tx hash watchers monitored by a background task
         self._pending_attempts: Dict[str, Dict[str, Any]] = {}
         self._monitor_task: Optional[asyncio.Task] = None
@@ -164,6 +199,11 @@ class TxManager:
         self._cached_gas_price: Optional[Decimal] = None
         self._gas_price_cache_time: Optional[datetime] = None
         self._gas_price_cache_ttl_secs: int = config.gas_price_cache_ttl_secs
+        # Base gas headroom applied to the simulated estimate on the first
+        # attempt (see AlloraNetworkConfig.gas_adjustment). Default 1.0 = no
+        # change from prior behavior. getattr keeps older externally-constructed
+        # configs working.
+        self._gas_adjustment: float = getattr(config, "gas_adjustment", 1.0)
 
     async def submit_transaction(
         self,
@@ -204,13 +244,46 @@ class TxManager:
             timeout=timeout,
         )
 
-        # Kick off processing as a background task; caller can await the PendingTx
-        asyncio.create_task(
+        # Kick off processing as a background task; caller can await the PendingTx.
+        # Keep a strong reference until it finishes — asyncio holds only a weak
+        # reference to bare tasks, so an unreferenced one can be garbage-collected
+        # mid-flight, leaving pending._final_future unresolved forever.
+        task = asyncio.create_task(
             self._attempt_submissions(pending, estimated_gas_limit, account_seq=account_seq)
         )
+        pending._task = task
+        self._inflight.add(pending)
+        task.add_done_callback(lambda _: self._inflight.discard(pending))
 
         return pending
-    
+
+    async def close(self) -> None:
+        """Cancel any in-flight submission tasks and wait for them to unwind.
+
+        Gives the manager the same shutdown discipline the websocket subscriber
+        has: if the client is dropped without awaiting pending transactions, the
+        detached submission tasks would otherwise keep running. Idempotent.
+        """
+        pendings = list(self._inflight)
+        tasks = [ p._task for p in pendings if p._task is not None ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Cancelling a submission task raises CancelledError inside
+        # _attempt_submissions; being BaseException it bypasses the result-setting
+        # handlers, so _final_future would be left unresolved and any caller
+        # awaiting the PendingTx would hang forever. Resolve them explicitly so
+        # awaiters get a CancelledError instead.
+        for pending in pendings:
+            if not pending._final_future.done():
+                pending._final_future.cancel()
+        self._inflight.clear()
+
+    async def stop(self) -> None:
+        """Alias for close() — matches the websocket subscriber's lifecycle name."""
+        await self.close()
+
     async def simulate_transaction(
         self,
         type_url: str,
@@ -319,7 +392,7 @@ class TxManager:
 
                 pending.attempt = attempt
 
-                gas_multiplier = 1.0 + (attempt * 0.3)
+                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
@@ -349,7 +422,7 @@ class TxManager:
                 return
 
             except OutOfGasError as oog_err:
-                gas_multiplier = 1.0 + (attempt * 0.3)
+                gas_multiplier = self._gas_adjustment + (attempt * 0.3)
 
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     pending._final_future.set_exception(oog_err)
@@ -390,6 +463,51 @@ class TxManager:
                 continue
 
             except AccountSequenceMismatchError:
+                # Before treating this as a genuine sequence conflict, check
+                # whether our own last broadcast actually landed (e.g. a prior
+                # timeout-path retry re-broadcast at the same sequence and the
+                # original silently landed in between). If it did, resolve via
+                # the future instead of resetting the sequence and re-landing.
+                if await self._bail_if_landed(pending) is _LandedOutcome.FINALIZED:
+                    return
+
+                if pending._same_seq_rebroadcast:
+                    # This attempt was a deliberate same-sequence idempotency
+                    # re-broadcast (set by the timeout handler), so an ASM
+                    # rejection of it is near-certain proof the ORIGINAL tx
+                    # landed and consumed the sequence — not a genuine conflict.
+                    # Resetting to a fresh sequence here would land the same
+                    # operation twice, so first give the indexer a bounded grace
+                    # window to catch up and confirm the original hash.
+                    pending._same_seq_rebroadcast = False
+                    outcome = await self._confirm_landed_with_grace(pending)
+                    if outcome is _LandedOutcome.FINALIZED:
+                        return
+                    if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                        # Landed retryably — its sequence is consumed, so retry
+                        # with a fresh one (and better gas if it ran out).
+                        next_account_seq = None
+                        seeded = self._consume_landed_gas_seed(pending)
+                        if seeded is not None:
+                            current_gas_limit = seeded
+                        # Same retry-or-stop policy as the sibling paths —
+                        # _bail_if_landed only returns RETRY_NEW_SEQUENCE with
+                        # attempts remaining, but the caller's timeout may have
+                        # expired during the grace window.
+                        if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
+                            err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
+                            pending._final_future.set_exception(err)
+                            return
+                        logger.debug("Account sequence mismatch, retrying...")
+                        continue
+                    # Still unconfirmed after the grace window — indexer lag
+                    # exceeded timeout + grace. Fall through to the
+                    # fresh-sequence retry as a last resort; the residual
+                    # double-execution risk is pinned by
+                    # test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rejection.
+
+                # Genuine mismatch (or a landed-retryable tx whose sequence is
+                # now consumed): fetch a fresh sequence for the retry.
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
@@ -399,7 +517,46 @@ class TxManager:
                 continue
 
             except TxTimeoutError:
-                next_account_seq = None
+                # wait_for_tx timed out — but the tx may still have landed
+                # (slow to index on a load-balanced endpoint). Re-broadcasting a
+                # tx that actually landed wastes a fee and is rejected as a
+                # duplicate. Guard against that in two ways:
+                #   1. Re-query the hash; if it landed, resolve success (or the
+                #      landed tx's own failure) via the future — never raise
+                #      out of this handler, since _attempt_submissions runs as
+                #      a detached task and an escaping exception would leave
+                #      pending._final_future unresolved forever.
+                outcome = await self._bail_if_landed(pending)
+                if outcome is _LandedOutcome.FINALIZED:
+                    return
+                if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                    # It landed but failed retryably — its sequence is consumed,
+                    # so retry with a fresh one instead of the stale sequence
+                    # below (which would only seq-mismatch and burn a cycle).
+                    next_account_seq = None
+                    seeded = self._consume_landed_gas_seed(pending)
+                    if seeded is not None:
+                        current_gas_limit = seeded
+                else:
+                    # NOT_LANDED — the retry below keeps the same sequence (a
+                    # deliberate same-sequence idempotency re-broadcast). Flag
+                    # it so the AccountSequenceMismatchError handler treats a
+                    # rejection of this attempt as near-certain proof the
+                    # original landed, not a genuine sequence conflict.
+                    pending._same_seq_rebroadcast = True
+                #   2. Otherwise (not confirmed landed) retry WITHOUT resetting
+                #      the account sequence. If the original silently landed
+                #      after all, re-broadcasting at the same sequence is
+                #      rejected at CheckTx (sequence mismatch, no fee) rather
+                #      than acquiring a fresh sequence and landing a second time.
+                #      A genuinely-lost tx still re-lands (its sequence was
+                #      never consumed).
+                #
+                #      There is an inherent TOCTOU window: the original tx could
+                #      land between the _bail_if_landed check above and this
+                #      re-broadcast. That is fine — the same-sequence CheckTx
+                #      rejection is the backstop, so this check is a fast-path
+                #      optimization, not the correctness guarantee.
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
                     pending._final_future.set_exception(TxTimeoutError())
@@ -424,6 +581,14 @@ class TxManager:
         gas_multiplier: float,
         account_seq: Optional[int] = None,
     ) -> tuple[str, int, Coin, int]:
+        """Build, sign, and SYNC-broadcast the tx; return (hash, gas, fee, seq).
+
+        This is the *broadcast* half only. A non-zero CheckTx code raises the
+        classified error here (the tx never entered the mempool), so callers get
+        an exception instead of a hash that will never index. Confirmation
+        (waiting for the tx to land) is a separate step the caller performs via
+        wait_for_tx — broadcast and confirm are already distinct phases.
+        """
         any_messages = [ self._create_any_message(msg, type_url) for msg in msgs ]
 
         tx = Transaction()
@@ -431,6 +596,10 @@ class TxManager:
             tx.add_message(msg)
 
         if gas_limit is None:
+            # Simulation failed upstream — fall back to the static default.
+            # The gas_multiplier headroom below applies on this path too, so
+            # the first-attempt OOG protection (gas_adjustment) holds even
+            # without a simulated estimate.
             gas_limit = await self._estimate_gas(type_url)
 
         gas_limit = int(gas_limit * gas_multiplier)
@@ -475,6 +644,19 @@ class TxManager:
             raise Exception('broadcast_tx returned None - check network connectivity')
 
         tx_hash = broadcast_result.tx_response.txhash
+
+        # SYNC broadcast: a non-zero code here is a CheckTx rejection (bad
+        # sequence, insufficient fees, ...). The tx was NOT accepted into the
+        # mempool and will never be indexed, so raise the classified error now
+        # instead of returning a hash that wait_for_tx would only time out on.
+        # This is also what makes the idempotency path work: a same-sequence
+        # re-broadcast of an already-landed tx is rejected here (sequence
+        # mismatch), and because we raise before setting pending.last_tx_hash,
+        # the caller's already-landed check still points at the original hash.
+        err = self._exception_from_tx_response(broadcast_result.tx_response)
+        if err is not None:
+            raise err
+
         logger.debug("⏳ Waiting for transaction to be included in block...")
 
         return tx_hash, gas_limit, fee, resolved_seq
@@ -539,6 +721,105 @@ class TxManager:
         err = self._exception_from_tx_response(resp)
         if err is not None:
             raise err
+
+    async def _try_confirm_landed(self, tx_hash: str) -> Optional[TxResponse]:
+        """Re-query a tx by hash. Returns the tx_response if found, None if not
+        found or if the query itself failed transiently (e.g. a flaky endpoint
+        during a failover). Never raises — callers rely on this to safely
+        fall through to normal retry logic instead of hanging or crashing the
+        detached submission task.
+        """
+        try:
+            resp = await self._get_tx(tx_hash)
+        except Exception as exc:
+            # A "not found" here is expected (the tx genuinely didn't land), but
+            # a transient RPC error or a real bug looks identical to the caller
+            # — log at debug so it's diagnosable without spamming the normal
+            # not-yet-indexed case.
+            logger.debug("confirm-landed re-query for %s failed: %r", tx_hash, exc)
+            return None
+        if resp is None or resp.tx_response is None:
+            return None
+        return resp.tx_response
+
+    async def _bail_if_landed(self, pending: "PendingTx") -> "_LandedOutcome":
+        """Check whether pending's last broadcast already landed and decide what
+        the retry handler should do:
+
+        - FINALIZED: it landed with a success, or a non-retryable failure, or a
+          retryable failure with no retries left — the future is resolved here
+          and the caller must return.
+        - RETRY_NEW_SEQUENCE: it landed with a *retryable* failure (out-of-gas /
+          sequence mismatch / insufficient fees) and retries remain. It consumed
+          its on-chain sequence, so the caller must retry with a FRESH sequence
+          (reusing the old one would just seq-mismatch and waste a cycle).
+        - NOT_LANDED: no last hash, not landed, or the re-query failed — the
+          caller falls through to its normal retry path.
+
+        Never raises.
+        """
+        pending.last_landed_error = None
+        if not pending.last_tx_hash:
+            return _LandedOutcome.NOT_LANDED
+        landed_resp = await self._try_confirm_landed(pending.last_tx_hash)
+        if landed_resp is None:
+            return _LandedOutcome.NOT_LANDED
+        err = self._exception_from_tx_response(landed_resp)
+        if (
+            isinstance(err, _RETRYABLE_TX_ERRORS)
+            and pending.attempt < pending.max_retries
+        ):
+            pending.last_landed_error = err
+            return _LandedOutcome.RETRY_NEW_SEQUENCE
+        self._resolve_landed(pending, landed_resp)
+        return _LandedOutcome.FINALIZED
+
+    async def _confirm_landed_with_grace(self, pending: "PendingTx", max_attempts: int = 3) -> "_LandedOutcome":
+        """Re-check pending's last hash a bounded number of times, giving the
+        indexer a grace window (query_interval_secs between checks) to catch up.
+        Returns the first non-NOT_LANDED outcome, or NOT_LANDED once the window
+        is exhausted. Used when a same-sequence idempotency re-broadcast is
+        rejected at CheckTx — near-certain proof the original landed but is not
+        yet indexed.
+        """
+        for _ in range(max_attempts):
+            await asyncio.sleep(self.query_interval_secs)
+            outcome = await self._bail_if_landed(pending)
+            if outcome is not _LandedOutcome.NOT_LANDED:
+                return outcome
+        return _LandedOutcome.NOT_LANDED
+
+    @staticmethod
+    def _consume_landed_gas_seed(pending: "PendingTx") -> Optional[int]:
+        """Read-and-clear pending.last_landed_error; if the landed tx ran out
+        of gas, return a retry gas limit seeded from its gas_wanted (same bump
+        the OutOfGasError handler applies) — reusing the gas limit that just
+        proved too small would only fail again. None otherwise.
+        """
+        landed_err, pending.last_landed_error = pending.last_landed_error, None
+        if isinstance(landed_err, OutOfGasError) and landed_err.gas_wanted:
+            return int(landed_err.gas_wanted * 1.2)
+        return None
+
+    def _resolve_landed(self, pending: "PendingTx", tx_response: TxResponse) -> None:
+        """Resolve pending's future for a confirmed-landed tx. If the landed
+        tx itself failed on-chain (non-zero code), that error is set on the
+        future rather than raised — this may be called from within an except
+        handler, and raising here would escape _attempt_submissions (a
+        detached asyncio task), leaving the future unresolved forever.
+        """
+        self._log_tx_response(tx_response)
+        try:
+            self._raise_for_status(tx_response)
+        except Exception as err:
+            # Bare Exception is deliberate: this resolves the future for a
+            # DETACHED task, so ANY error must land on the future — letting one
+            # escape would leave the caller awaiting forever. asyncio.CancelledError
+            # and KeyboardInterrupt are BaseException (py>=3.10), so cancellation
+            # still propagates correctly and is not swallowed here.
+            pending._final_future.set_exception(err)
+            return
+        pending._final_future.set_result(tx_response)
 
     def _classify_error_from_message(self, error_msg: str) -> type[Exception]:
         """
