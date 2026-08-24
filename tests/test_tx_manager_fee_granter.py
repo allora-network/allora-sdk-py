@@ -37,8 +37,10 @@ def _make_manager(fee_granter=None, signer_balance: int = 10**12) -> TxManager:
 
     tx_client = Mock()
     tx_client.simulate = AsyncMock(return_value=Mock(gas_info=Mock(gas_used=100000)))
+    # code=0 / empty raw_log: the broadcast path runs _raise_for_status, which
+    # classifies on raw_log, so a bare Mock response reads as a failed tx.
     tx_client.broadcast_tx = AsyncMock(
-        return_value=Mock(tx_response=Mock(txhash="ABC123"))
+        return_value=Mock(tx_response=Mock(txhash="ABC123", code=0, raw_log="", codespace=""))
     )
 
     feemarket_client = Mock()
