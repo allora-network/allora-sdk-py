@@ -37,8 +37,11 @@ install_as_editable:
 .PHONY: codegen
 codegen: $(PROTO_STAMP) $(INTERFACE_STAMP) $(REST_STAMP) $(GRPC_STAMP)
 
+# The rpc_client protos/rest/grpc/interfaces packages are generated and
+# gitignored, so building from a clean checkout produces a wheel that installs
+# but cannot be imported. Depend on codegen so that is impossible.
 .PHONY: wheel
-wheel:
+wheel: codegen
 	uv build
 
 # --- Git dependencies

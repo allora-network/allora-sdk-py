@@ -459,8 +459,10 @@ make dev
 # Run tests
 tox
 
-# Build wheel for distribution
-make wheel      # or: uv build
+# Build wheel for distribution. Use make wheel, not a bare `uv build`: the
+# generated packages are gitignored, and uv build will happily produce a wheel
+# without them that installs but fails on import.
+make wheel
 ```
 
 ### Dependencies
