@@ -79,6 +79,11 @@ def test_malformed_fee_granter_rejected_at_construction():
         _make_manager(fee_granter="not-an-address")
 
 
+def test_uppercase_fee_granter_rejected_at_construction():
+    with pytest.raises(ValueError, match="lowercase"):
+        _make_manager(fee_granter=GRANTER.upper())
+
+
 def test_wrong_prefix_fee_granter_rejected_at_construction():
     with pytest.raises(ValueError, match="'allo' bech32 prefix"):
         _make_manager(fee_granter="cosmos1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu")

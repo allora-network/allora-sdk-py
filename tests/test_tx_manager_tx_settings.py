@@ -12,9 +12,12 @@ from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import (
     AccountSequenceMismatchError,
     FeeTier,
+    InsufficientFeesError,
     MaxFeesExceededError,
+    OutOfGasError,
     PendingTx,
     TxManager,
+    TxTimeoutError,
 )
 
 
@@ -71,6 +74,33 @@ async def test_fee_above_max_fees_raises():
     manager = _make_manager(max_fees=1_000_000)
     with pytest.raises(MaxFeesExceededError, match="max_fees"):
         await manager._calculate_optimal_fee(200000, 1.0)
+
+
+@pytest.mark.asyncio
+async def test_fee_exactly_at_max_fees_is_allowed():
+    manager = _make_manager(max_fees=2_000_000)
+    fee = await manager._calculate_optimal_fee(200000, 1.0)
+    assert fee.amount == 2_000_000
+
+
+@pytest.mark.asyncio
+async def test_max_fees_cap_applies_to_fee_after_tier_multiplier():
+    # base fee 2_000_000 is under the cap, but the 2.0x tier multiplier puts it over
+    manager = _make_manager(max_fees=2_000_000)
+    with pytest.raises(MaxFeesExceededError):
+        await manager._calculate_optimal_fee(200000, 2.0)
+
+
+@pytest.mark.asyncio
+async def test_max_fees_exceeded_propagates_from_submit_preview():
+    manager = _make_manager(max_fees=1_000)
+    manager.simulate_transaction = AsyncMock(return_value=200000)
+    with pytest.raises(MaxFeesExceededError):
+        await manager.submit_transaction(
+            type_url="/cosmos.bank.v1beta1.MsgSend",
+            msgs=[Mock()],
+            fee_tier=FeeTier.STANDARD,
+        )
 
 
 @pytest.mark.asyncio
@@ -149,9 +179,9 @@ async def test_simulate_gas_from_start_false_skips_upfront_simulation(monkeypatc
 
 # --- account_sequence_retry_delay ---
 
-async def _run_seq_mismatch_retries(manager: TxManager) -> list[float]:
+async def _run_seq_mismatch_retries(manager: TxManager, error: Exception | None = None) -> list[float]:
     manager._pre_flight_checks = AsyncMock(return_value=None)
-    manager._build_and_broadcast = AsyncMock(side_effect=AccountSequenceMismatchError("mismatch"))
+    manager._build_and_broadcast = AsyncMock(side_effect=error or AccountSequenceMismatchError("mismatch"))
 
     sleeps: list[float] = []
 
@@ -171,7 +201,7 @@ async def _run_seq_mismatch_retries(manager: TxManager) -> list[float]:
             timeout=timedelta(seconds=60),
         )
         await manager._attempt_submissions(pending, gas_limit=200000)
-        with pytest.raises(AccountSequenceMismatchError):
+        with pytest.raises(Exception):
             await pending
     finally:
         asyncio.sleep = real_sleep
@@ -191,3 +221,38 @@ async def test_no_account_sequence_retry_delay_by_default():
     manager = _make_manager()
     sleeps = await _run_seq_mismatch_retries(manager)
     assert sleeps == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [
+    OutOfGasError("out of gas", gas_wanted=200000, gas_used=250000),
+    InsufficientFeesError("insufficient fees"),
+    TxTimeoutError(),
+])
+async def test_retry_delay_not_applied_to_other_retry_paths(error):
+    manager = _make_manager(account_sequence_retry_delay=5.0)
+    sleeps = await _run_seq_mismatch_retries(manager, error=error)
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_deadline_rechecked_after_account_sequence_retry_sleep():
+    manager = _make_manager(account_sequence_retry_delay=0.05)
+    manager._pre_flight_checks = AsyncMock(return_value=None)
+    manager._build_and_broadcast = AsyncMock(side_effect=AccountSequenceMismatchError("mismatch"))
+
+    pending = PendingTx(
+        manager=manager,
+        parent_tx_id=0,
+        type_url="/cosmos.bank.v1beta1.MsgSend",
+        msgs=[Mock()],
+        fee_tier=FeeTier.STANDARD,
+        max_retries=5,
+        timeout=timedelta(seconds=0.01),  # expires during the retry sleep
+    )
+    await manager._attempt_submissions(pending, gas_limit=200000)
+    with pytest.raises(AccountSequenceMismatchError, match="deadline"):
+        await pending
+
+    # The deadline expired during the sleep, so no second broadcast happened.
+    assert manager._build_and_broadcast.call_count == 1

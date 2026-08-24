@@ -154,6 +154,9 @@ def _parse_fee_granter(fee_granter: Optional[str]) -> Optional[Address]:
     if fee_granter is None:
         return None
 
+    if fee_granter != fee_granter.lower():
+        raise ValueError(f"fee_granter must be lowercase bech32 (the chain's prefix check is case-sensitive): {fee_granter!r}")
+
     hrp, data = bech32.bech32_decode(fee_granter)
     if data is None:
         raise ValueError(f"fee_granter is not a valid bech32 address: {fee_granter!r}")
@@ -267,6 +270,8 @@ class TxManager:
                     self._fee_multipliers[fee_tier],
                 )
                 logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+            except MaxFeesExceededError:
+                raise
             except Exception as e:
                 logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
                 estimated_gas_limit = None
@@ -557,6 +562,10 @@ class TxManager:
                 logger.debug("Account sequence mismatch, retrying...")
                 if self.account_sequence_retry_delay:
                     await asyncio.sleep(self.account_sequence_retry_delay)
+                    if pending.timeout and start + pending.timeout < datetime.now():
+                        err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
+                        pending._final_future.set_exception(err)
+                        return
                 continue
 
             except TxTimeoutError:

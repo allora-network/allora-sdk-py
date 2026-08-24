@@ -7,6 +7,13 @@
 - Optional fee-granter support: `fee_granter` parameter on `TxManager`, `AlloraRPCClient`, and the `AlloraWorker` constructors sets `AuthInfo.Fee.granter` on all built transactions (simulate and broadcast), letting an on-chain fee grant pay transaction fees
 - Tx-level settings ported from `allora-offchain-node`: `max_fees` (hard per-tx fee cap, raises `MaxFeesExceededError`), `account_sequence_retry_delay`, `gas_adjustment` (previously hardcoded 1.2), `base_gas`, and `simulate_gas_from_start`
 
+## v1.3.0
+
+- Injectable cosmpy `Wallet` (custodial/remote signer support) via `AlloraWalletConfig.wallet` (#85)
+- `create_topic` updated with new v10 topic parameters and defaults (#92)
+- Packaging fix: include generated rpc_client protobufs in wheel/sdist artifacts
+- Integration test fixes (#93)
+
 ## v1.2.0
 
 - New worker types (#37)

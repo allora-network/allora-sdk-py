@@ -156,6 +156,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "async-timeout" },
+    { name = "bech32" },
     { name = "betterproto2" },
     { name = "cosmpy" },
     { name = "grpcio" },
@@ -205,6 +206,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = "~=3.12" },
     { name = "async-timeout", specifier = ">=5.0.1" },
+    { name = "bech32", specifier = ">=1.2.0" },
     { name = "betterproto2", specifier = "~=0.7.0" },
     { name = "betterproto2-compiler", marker = "extra == 'codegen'" },
     { name = "cosmpy", specifier = ">=0.11.1" },
