@@ -105,6 +105,11 @@ class AlloraRPCClient:
         network: AlloraNetworkConfig = AlloraNetworkConfig.testnet(),
         debug: bool = False,
         fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ):
         """
         Initialize the Allora blockchain client.
@@ -116,6 +121,15 @@ class AlloraRPCClient:
             debug: Enable debug logging.
             fee_granter: Optional bech32 `allo` address that pays transaction fees
                 via an on-chain fee grant. When unset, the wallet pays its own fees.
+            max_fees: Optional hard cap on the fee of a single transaction (in the fee denom);
+                a computed fee above this raises MaxFeesExceededError instead of submitting.
+            account_sequence_retry_delay: Optional delay in seconds before retrying after an
+                account sequence mismatch.
+            gas_adjustment: Safety multiplier applied to gas estimates (default 1.2).
+            base_gas: Optional gas limit used instead of the per-message-type defaults when
+                gas cannot be (or is not) simulated.
+            simulate_gas_from_start: Simulate gas before the first submission attempt (default True);
+                set False to start from base_gas / defaults and only rely on retry adjustments.
         """
         if debug:
             logging.basicConfig(level=logging.DEBUG)
@@ -168,6 +182,11 @@ class AlloraRPCClient:
                 config=self.network,
                 query_timeout_secs=self.network.query_timeout_secs,
                 fee_granter=fee_granter,
+                max_fees=max_fees,
+                account_sequence_retry_delay=account_sequence_retry_delay,
+                gas_adjustment=gas_adjustment,
+                base_gas=base_gas,
+                simulate_gas_from_start=simulate_gas_from_start,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)

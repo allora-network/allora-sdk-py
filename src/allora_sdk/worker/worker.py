@@ -87,6 +87,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         debug: bool = False,
         show_banner: bool = True,
         fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -106,6 +111,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+            max_fees: Optional hard cap on the fee of a single transaction (in uallo)
+            account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
+            gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
+            base_gas: Optional gas limit used when gas is not simulated
+            simulate_gas_from_start: Simulate gas before the first submission attempt (default True)
 
         Returns:
             An instance of AlloraWorker configured as an inferer
@@ -116,6 +126,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             network=network,
             debug=debug,
             fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TInfererRunFnResult](
             use_case=Inferer(
@@ -155,6 +170,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         debug: bool = False,
         show_banner: bool = True,
         fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -173,6 +193,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+            max_fees: Optional hard cap on the fee of a single transaction (in uallo)
+            account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
+            gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
+            base_gas: Optional gas limit used when gas is not simulated
+            simulate_gas_from_start: Simulate gas before the first submission attempt (default True)
 
         Returns:
             An instance of AlloraWorker configured as a reputer
@@ -187,6 +212,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             network=network,
             debug=debug,
             fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
         return AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle](
             use_case=Reputer(
@@ -225,6 +255,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         debug: bool = False,
         show_banner: bool = True,
         fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -245,6 +280,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             debug: Enable debug logging
             show_banner: Set to false to replace startup banner by one-line message
             fee_granter: Optional bech32 `allo` address that pays transaction fees via an on-chain fee grant
+            max_fees: Optional hard cap on the fee of a single transaction (in uallo)
+            account_sequence_retry_delay: Optional delay in seconds before retrying after an account sequence mismatch
+            gas_adjustment: Safety multiplier applied to gas estimates (default 1.2)
+            base_gas: Optional gas limit used when gas is not simulated
+            simulate_gas_from_start: Simulate gas before the first submission attempt (default True)
 
         Returns:
             An instance of AlloraWorker configured as a forecaster
@@ -255,6 +295,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             network=network,
             debug=debug,
             fee_granter=fee_granter,
+            max_fees=max_fees,
+            account_sequence_retry_delay=account_sequence_retry_delay,
+            gas_adjustment=gas_adjustment,
+            base_gas=base_gas,
+            simulate_gas_from_start=simulate_gas_from_start,
         )
         return AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult](
             use_case=Forecaster(

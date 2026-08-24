@@ -122,6 +122,10 @@ class WalletNotConfiguredError(Exception):
     """Raised when a transaction method is called without a configured wallet."""
     pass
 
+class MaxFeesExceededError(Exception):
+    """Raised when a computed transaction fee exceeds the configured max_fees cap."""
+    pass
+
 class TxNotFoundError(Exception):
     pass
 
@@ -173,9 +177,28 @@ class TxManager:
         query_interval_secs: int = 2,
         query_timeout_secs: int = 10,
         fee_granter: Optional[str] = None,
+        max_fees: Optional[int] = None,
+        account_sequence_retry_delay: Optional[float] = None,
+        gas_adjustment: Optional[float] = None,
+        base_gas: Optional[int] = None,
+        simulate_gas_from_start: Optional[bool] = None,
     ):
+        if max_fees is not None and max_fees <= 0:
+            raise ValueError(f"max_fees must be a positive integer, got {max_fees}")
+        if account_sequence_retry_delay is not None and account_sequence_retry_delay < 0:
+            raise ValueError(f"account_sequence_retry_delay must be >= 0, got {account_sequence_retry_delay}")
+        if gas_adjustment is not None and gas_adjustment <= 0:
+            raise ValueError(f"gas_adjustment must be > 0, got {gas_adjustment}")
+        if base_gas is not None and base_gas <= 0:
+            raise ValueError(f"base_gas must be a positive integer, got {base_gas}")
+
         self.wallet = wallet
         self.fee_granter: Optional[Address] = _parse_fee_granter(fee_granter)
+        self.max_fees = max_fees
+        self.account_sequence_retry_delay = account_sequence_retry_delay
+        self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
+        self.base_gas = base_gas
+        self.simulate_gas_from_start: bool = simulate_gas_from_start if simulate_gas_from_start is not None else True
         self.tx_client = tx_client
         self.auth_client = auth_client
         self.bank_client = bank_client
@@ -235,17 +258,18 @@ class TxManager:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
 
         estimated_gas_limit: Optional[int] = None
-        try:
-            estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
-            logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
-            fee_preview = await self._calculate_optimal_fee(
-                estimated_gas_limit,
-                self._fee_multipliers[fee_tier],
-            )
-            logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
-        except Exception as e:
-            logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
-            estimated_gas_limit = None
+        if self.simulate_gas_from_start:
+            try:
+                estimated_gas_limit = await self.simulate_transaction(type_url, msgs)
+                logger.debug(f"Simulated gas requirement for {type_url}: {estimated_gas_limit}")
+                fee_preview = await self._calculate_optimal_fee(
+                    estimated_gas_limit,
+                    self._fee_multipliers[fee_tier],
+                )
+                logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
+            except Exception as e:
+                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+                estimated_gas_limit = None
 
         async with self._parent_tx_id_lock:
             next_parent_tx_id = self.parent_tx_id
@@ -378,8 +402,8 @@ class TxManager:
                 gas_used = int(sim_response.gas_info.gas_used)
                 logger.debug(f"Simulation successful after {attempt} attempt(s): estimated gas = {gas_used}")
 
-                # Add a 20% safety margin to the estimate
-                return int(gas_used * 1.2)
+                # Add a safety margin to the estimate
+                return int(gas_used * self.gas_adjustment)
 
             except grpc.RpcError as e:
                 err = self._exception_from_simulation_error(e)
@@ -531,6 +555,8 @@ class TxManager:
                     pending._final_future.set_exception(err)
                     return
                 logger.debug("Account sequence mismatch, retrying...")
+                if self.account_sequence_retry_delay:
+                    await asyncio.sleep(self.account_sequence_retry_delay)
                 continue
 
             except TxTimeoutError:
@@ -923,11 +949,13 @@ class TxManager:
             )
 
     async def _estimate_gas(self, type_url: str) -> int:
-        # TODO
+        if self.base_gas is not None:
+            return int(self.base_gas * self.gas_adjustment)
+
         base_gas = self._default_gas_limits.get(type_url, 200000)
 
-        # Add 20% safety margin
-        return int(base_gas * 1.2)
+        # Add safety margin
+        return int(base_gas * self.gas_adjustment)
 
 
     async def _get_current_gas_price(self) -> float:
@@ -1049,6 +1077,11 @@ class TxManager:
             logger.debug(f"Applied congestion multiplier: {congestion_multiplier}x")
 
         fee_amount = int(gas_limit * price_with_tier)
+        if self.max_fees is not None and fee_amount > self.max_fees:
+            raise MaxFeesExceededError(
+                f"Computed fee {fee_amount}{self.config.fee_denom} exceeds max_fees cap "
+                f"{self.max_fees}{self.config.fee_denom} (gas_limit={gas_limit})"
+            )
         return Coin(amount=fee_amount, denom=self.config.fee_denom)
 
 
