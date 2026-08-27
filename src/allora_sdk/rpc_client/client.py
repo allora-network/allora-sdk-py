@@ -40,7 +40,7 @@ from allora_sdk.rpc_client.client_tendermint import TendermintClient
 
 from .client_emissions import EmissionsClient
 from .client_mint import MintClient
-from .config import AlloraNetworkConfig, AlloraWalletConfig
+from .config import AlloraNetworkConfig, AlloraWalletConfig, _env_bool
 from .client_websocket_events import AlloraWebsocketSubscriber
 from .tx_manager import TxManager
 
@@ -102,25 +102,6 @@ def _env_number(name: str, cast: Callable[[str], Any]) -> Optional[Any]:
         return cast(value)
     except ValueError as exc:
         raise ValueError(f"environment variable {name} must be {cast.__name__}, got {value!r}") from exc
-
-
-def _env_bool(name: str) -> Optional[bool]:
-    """Parse an optional boolean environment variable strictly, raising on unrecognised values."""
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        # Empty is treated as unset, matching _env_number: a k8s manifest that
-        # renders `value: ""` for an unconfigured knob must not be an error.
-        return None
-
-    normalized = value.strip().lower()
-    if normalized in ("1", "true", "yes"):
-        return True
-    if normalized in ("0", "false", "no"):
-        return False
-
-    raise ValueError(
-        f"environment variable {name} must be one of true/false/1/0/yes/no (case-insensitive), got {value!r}"
-    )
 
 
 def resolve_tx_settings_from_env(

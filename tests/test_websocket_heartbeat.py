@@ -15,6 +15,7 @@ import pytest
 from allora_sdk.rpc_client import client_websocket_events as ws_events
 from allora_sdk.rpc_client.client_websocket_events import (
     AlloraWebsocketSubscriber,
+    EventFilter,
     _HEARTBEAT_SUBSCRIPTION_ID,
 )
 
@@ -102,15 +103,36 @@ def test_heartbeat_dispatches_to_no_callback():
     assert called == []
 
 
-def test_reserved_id_is_rejected():
-    """Two queries behind one JSON-RPC id would let confirmations and events be
-    attributed to the wrong subscription."""
+def test_reserved_id_is_rejected_by_every_public_api():
+    """Each registration path must reject it.
+
+    The typed helpers do not funnel through `subscribe()` -- they register
+    directly -- so the guard has to be verified on each entry point rather than
+    on the shared helper, which would not catch a dropped call.
+    """
     sub = _subscriber(_FakeSocket())
-    for method in (sub.subscribe, sub.subscribe_new_block_events, sub.subscribe_new_block_events_typed):
+
+    async def cb(*a, **k):
+        return None
+
+    async def call_subscribe():
+        await sub.subscribe(EventFilter.new_blocks(), cb, _HEARTBEAT_SUBSCRIPTION_ID)
+
+    async def call_new_block_events():
+        await sub.subscribe_new_block_events(
+            "SomeEvent", [], cb, subscription_id=_HEARTBEAT_SUBSCRIPTION_ID
+        )
+
+    async def call_typed():
+        await sub.subscribe_new_block_events_typed(
+            object, [], cb, subscription_id=_HEARTBEAT_SUBSCRIPTION_ID
+        )
+
+    for entry in (call_subscribe, call_new_block_events, call_typed):
         with pytest.raises(ValueError, match="reserved"):
-            sub._reject_reserved_id(_HEARTBEAT_SUBSCRIPTION_ID)
-    sub._reject_reserved_id("sub_1")      # anything else is fine
-    sub._reject_reserved_id(None)
+            asyncio.run(entry())
+
+    assert _HEARTBEAT_SUBSCRIPTION_ID not in sub.subscriptions
 
 
 def test_heartbeat_traffic_stops_the_watchdog_firing(monkeypatch):

@@ -217,7 +217,9 @@ class AlloraNetworkConfig:
             fee_minimum_gas_price=_env_float((env_prefix or "") + "FEE_MIN_GAS_PRICE", required=True),
             event_recv_timeout_secs=_env_float((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", 30.0),
             max_event_silence_secs=_env_float((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", 60.0),
-            websocket_heartbeat=_env_bool((env_prefix or "") + "WEBSOCKET_HEARTBEAT", True),
+            websocket_heartbeat=(
+                hb if (hb := _env_bool((env_prefix or "") + "WEBSOCKET_HEARTBEAT")) is not None else True
+            ),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
@@ -230,16 +232,27 @@ class AlloraNetworkConfig:
         )
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    """Read a boolean env var, treating blank as unset.
+def _env_bool(name: str) -> "bool | None":
+    """Parse an optional boolean environment variable strictly, raising on unrecognised values.
 
-    Same reasoning as _env_float: k8s renders `value: ""` for unconfigured
-    knobs, and a blank value must mean "use the default" rather than False.
+    Returning False for anything unrecognised would let a typo silently flip a
+    safety-relevant knob with no signal, so only the known spellings are
+    accepted. Blank is treated as unset, matching _env_float: a k8s manifest
+    that renders `value: ""` for an unconfigured knob must not be an error.
     """
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in ("1", "true", "yes", "on")
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes"):
+        return True
+    if normalized in ("0", "false", "no"):
+        return False
+
+    raise ValueError(
+        f"environment variable {name} must be one of true/false/1/0/yes/no (case-insensitive), got {value!r}"
+    )
 
 
 def _env_float(name: str, default: float | None = None, required: bool = False) -> float:
