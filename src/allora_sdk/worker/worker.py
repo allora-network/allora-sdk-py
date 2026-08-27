@@ -394,6 +394,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             raise ValueError('no client provided')
 
         self._initialized = False
+        self._init_lock = asyncio.Lock()
         self.use_case = use_case
         self.client = client
         self.address = address
@@ -421,16 +422,27 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _ensure_initialized(self):
+        """Run one-time startup, and only record success once it has happened.
+
+        Setting the flag up front made a transient failure permanent: a raise
+        anywhere below left the worker marked initialised but with none of the
+        setup done, and nothing ever retried. The lock keeps that safe against
+        concurrent callers now that the flag is set at the end.
+        """
         if self._initialized:
             return
-        self._initialized = True
+        async with self._init_lock:
+            if self._initialized:
+                return
 
-        self._chain_id = await self.client.raise_for_chain_id_mismatch()
+            self._chain_id = await self.client.raise_for_chain_id_mismatch()
 
-        topic = await self._derive_polling_interval()
-        await self._show_banner(topic)
-        await self._log_balance()
-        await self._maybe_faucet_request()
+            topic = await self._derive_polling_interval()
+            await self._show_banner(topic)
+            await self._log_balance()
+            await self._maybe_faucet_request()
+
+            self._initialized = True
 
 
     async def _derive_polling_interval(self) -> Optional[Any]:
@@ -499,8 +511,16 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         # The topic was already fetched during init; querying again here would
         # be a second chain round-trip for identical data on every startup.
         if topic is None:
-            resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
-            topic = resp.topic
+            # Best effort: the banner is cosmetic, so a chain blip here must not
+            # take down startup -- especially since the caller already tolerates
+            # this exact query failing.
+            try:
+                resp = await self.client.emissions.query.get_topic(
+                    GetTopicRequest(topic_id=int(self.topic_id))
+                )
+                topic = resp.topic
+            except Exception as e:
+                logger.warning(f"Could not read topic {self.topic_id} for the banner: {e}")
 
         if self.show_banner:
             print(indent(dedent(
