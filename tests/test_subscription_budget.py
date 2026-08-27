@@ -23,7 +23,7 @@ def _subscribe_fn() -> ast.AST:
     Parsed from source rather than inspect.getsource so the indentation of a
     nested method does not have to be un-picked before ast.parse accepts it.
     """
-    tree = ast.parse(pathlib.Path(worker_mod.__file__).read_text())
+    tree = ast.parse(pathlib.Path(worker_mod.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                 and node.name == "_subscribe_websocket_events":
