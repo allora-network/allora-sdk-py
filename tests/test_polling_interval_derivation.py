@@ -7,6 +7,7 @@ submission rather than a late one.
 """
 
 import asyncio
+import textwrap
 import types
 
 import pytest
@@ -97,13 +98,47 @@ def test_huge_window_is_capped():
 
 
 @pytest.mark.parametrize("factory", ["inferer", "reputer", "forecaster"])
-def test_factories_forward_block_duration(factory):
-    """Chains with a different block time need the estimate tunable from the
-    documented entry points, not only the constructor."""
+def test_factories_actually_forward_block_duration(factory):
+    """Accepting the argument is not the same as passing it on.
+
+    A factory that took `block_duration_secs` and dropped it would satisfy a
+    signature check while leaving the estimate untunable. Checked structurally
+    rather than by construction because the factories build a wallet and client
+    first, which needs an environment this test has no business requiring.
+    """
+    import ast
     import inspect
     from allora_sdk.worker.worker import AlloraWorker
 
-    sig = inspect.signature(getattr(AlloraWorker, factory))
-    assert "block_duration_secs" in sig.parameters, (
-        f"AlloraWorker.{factory} cannot tune the block-time estimate"
+    src = inspect.getsource(getattr(AlloraWorker, factory))
+    tree = ast.parse(textwrap.dedent(src))
+
+    forwarded = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "block_duration_secs" and isinstance(kw.value, ast.Name) \
+                    and kw.value.id == "block_duration_secs":
+                forwarded = True
+
+    assert forwarded, (
+        f"AlloraWorker.{factory} accepts block_duration_secs but never passes it down"
+    )
+
+
+@pytest.mark.parametrize("factory", ["inferer", "reputer", "forecaster"])
+def test_block_duration_is_last_so_positional_callers_are_unaffected(factory):
+    """Inserting a parameter mid-signature silently rebinds existing positional
+    arguments. Adding it last keeps callers working."""
+    import inspect
+    from allora_sdk.worker.worker import AlloraWorker
+
+    names = [
+        n for n, prm in inspect.signature(getattr(AlloraWorker, factory)).parameters.items()
+        if prm.kind is prm.POSITIONAL_OR_KEYWORD
+    ]
+    assert names[-1] == "block_duration_secs", (
+        f"{factory} has block_duration_secs at position {names.index('block_duration_secs')} "
+        f"of {len(names) - 1}; a mid-signature insertion rebinds positional callers"
     )

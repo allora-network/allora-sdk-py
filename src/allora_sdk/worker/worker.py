@@ -92,7 +92,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
-        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -105,6 +104,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -183,7 +183,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
-        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         min_stake_uallo: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         lock: Optional[asyncio.Lock] = None,
@@ -195,6 +194,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -275,7 +275,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
-        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -287,6 +286,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -365,11 +365,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
-        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
         show_banner: bool = True,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> None:
         """
         Initialize the Allora worker.
