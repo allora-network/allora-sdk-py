@@ -395,6 +395,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._initialized = False
         self._init_lock = asyncio.Lock()
+        self._initializing_task = None
         self.use_case = use_case
         self.client = client
         self.address = address
@@ -429,20 +430,29 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         setup done, and nothing ever retried. The lock keeps that safe against
         concurrent callers now that the flag is set at the end.
         """
+        # _log_balance and _maybe_faucet_request call back into this method,
+        # and asyncio.Lock is not reentrant, so a nested call from the task that
+        # already holds it would deadlock every startup. Same-task re-entry is a
+        # no-op; other tasks still wait on the lock.
+        if self._initializing_task is asyncio.current_task():
+            return
         if self._initialized:
             return
         async with self._init_lock:
             if self._initialized:
                 return
+            self._initializing_task = asyncio.current_task()
+            try:
+                self._chain_id = await self.client.raise_for_chain_id_mismatch()
 
-            self._chain_id = await self.client.raise_for_chain_id_mismatch()
+                topic = await self._derive_polling_interval()
+                await self._show_banner(topic)
+                await self._log_balance()
+                await self._maybe_faucet_request()
 
-            topic = await self._derive_polling_interval()
-            await self._show_banner(topic)
-            await self._log_balance()
-            await self._maybe_faucet_request()
-
-            self._initialized = True
+                self._initialized = True
+            finally:
+                self._initializing_task = None
 
 
     async def _derive_polling_interval(self) -> Optional[Any]:
