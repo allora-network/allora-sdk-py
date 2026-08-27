@@ -355,3 +355,26 @@ def test_healthy_heartbeat_still_logs_nothing(caplog):
         asyncio.run(sub._handle_message(payload))
 
     assert caplog.records == [], [r.getMessage() for r in caplog.records]
+
+
+def test_heartbeat_is_sent_before_caller_subscriptions():
+    """Order matters when the server caps subscriptions per client.
+
+    A caller that fills the budget would push a trailing heartbeat over the cap,
+    and a rejected heartbeat leaves the watchdog with no traffic to measure --
+    which looks like connection flakiness rather than a configuration problem.
+    A rejected caller subscription, by contrast, is visible to the caller.
+    """
+    sock = _FakeSocket()
+    sub = _subscriber(sock)
+    # pretend the caller already registered queries before the (re)connect
+    sub.subscriptions = {
+        "sub_1": {"query": "tm.event='Tx'", "sent": False, "active": False},
+        "sub_2": {"query": "tm.event='NewBlock'", "sent": False, "active": False},
+    }
+
+    asyncio.run(sub._connect())
+
+    ids = [m["id"] for m in sock.sent if m.get("method") == "subscribe"]
+    assert ids[0] == _HEARTBEAT_SUBSCRIPTION_ID, ids
+    assert set(ids[1:]) == {"sub_1", "sub_2"}, ids

@@ -76,7 +76,7 @@ class AlloraNetworkConfig:
     # max_event_silence_secs for subscriptions that are legitimately idle longer.
     event_recv_timeout_secs: float = 30.0
     max_event_silence_secs: float = 60.0
-    # Subscribe to NewBlock alongside the caller's queries purely to keep
+    # Subscribe to NewBlockHeader alongside the caller's queries purely to keep
     # traffic on the wire. Without it, a subscription filtered server-side to
     # one topic is silent between events, and the watchdog above cannot tell a
     # quiet subscription from a deaf connection -- so it reconnects a healthy

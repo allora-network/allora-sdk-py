@@ -220,7 +220,7 @@ class AlloraWebsocketSubscriber:
         ``max_event_silence_secs`` gates the deaf-subscription watchdog: after
         this long with no message the loop forces a reconnect+resubscribe.
 
-        With ``heartbeat`` enabled (the default) a NewBlock subscription is
+        With ``heartbeat`` enabled (the default) a NewBlockHeader subscription is
         added to every connection, so the wire carries a message roughly per
         block regardless of how quiet the caller's own subscriptions are. That
         keeps the threshold measuring the *connection* rather than the caller's
@@ -396,18 +396,23 @@ class AlloraWebsocketSubscriber:
                             info["sent"] = False
                             info["active"] = False
                     
+                    # Sent before the caller's queries, not after. Servers cap
+                    # subscriptions per client (5 on allora-testnet-1), and a
+                    # caller that fills the budget would otherwise push the
+                    # heartbeat over it -- leaving the watchdog with no traffic
+                    # to measure and tearing down healthy sockets on every quiet
+                    # interval. A rejected caller subscription is visible to the
+                    # caller; a rejected heartbeat only looks like flakiness.
+                    if self._heartbeat:
+                        await self._send_subscription(
+                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_block_headers().to_query()
+                        )
+
                     for subscription_id, info in items:
                         await self._send_subscription(subscription_id, info["query"])
                         async with self._state_lock:
                             if subscription_id in self.subscriptions:
                                 self.subscriptions[subscription_id]["sent"] = True
-
-                    # Keep traffic on the wire so the silence watchdog measures
-                    # the connection rather than the caller's event cadence.
-                    if self._heartbeat:
-                        await self._send_subscription(
-                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_block_headers().to_query()
-                        )
 
                     return
                     
@@ -528,7 +533,7 @@ class AlloraWebsocketSubscriber:
             message_id = data.get("id")
             
             # The heartbeat exists to put bytes on the wire; the silence timer
-            # was already reset by the receive itself. Its NewBlock payload is
+            # was already reset by the receive itself. Its NewBlockHeader payload is
             # not a NewBlockEvents frame, so letting it reach the structured
             # parser below logs a spurious error for every block.
             if message_id == _HEARTBEAT_SUBSCRIPTION_ID:
