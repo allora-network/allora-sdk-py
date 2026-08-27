@@ -12,10 +12,30 @@ import json
 
 import pytest
 
+from allora_sdk.rpc_client import client_websocket_events as ws_events
 from allora_sdk.rpc_client.client_websocket_events import (
     AlloraWebsocketSubscriber,
     _HEARTBEAT_SUBSCRIPTION_ID,
 )
+
+
+class _Clock:
+    """Controlled monotonic clock.
+
+    These tests are about how the loop *accounts* for elapsed time, not about
+    real durations. Driving them off wall-clock sleeps makes them hostage to
+    timer granularity -- on Windows a 1ms sleep lands nearer 15ms, which is
+    enough to trip a threshold the test intends to stay under.
+    """
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, secs):
+        self.now += secs
 
 
 class _FakeSocket:
@@ -93,17 +113,17 @@ def test_reserved_id_is_rejected():
     sub._reject_reserved_id(None)
 
 
-def test_heartbeat_traffic_stops_the_watchdog_firing():
+def test_heartbeat_traffic_stops_the_watchdog_firing(monkeypatch):
     """The property the heartbeat exists for: arriving traffic resets the timer.
 
-    The silence check only runs in the recv-timeout branch, so the socket has to
-    *interleave* messages with timeouts -- a fake that always returns a message
-    never reaches the watchdog at all and would pass no matter what the loop
-    did. Here a message arrives every other recv, and the threshold spans
-    several timeouts: with the reset, measured silence stays under it forever;
-    without it, silence accrues from loop start and trips.
+    The silence check only runs in the recv-timeout branch, so the socket must
+    interleave messages with timeouts -- a fake that always returns a message
+    never reaches the watchdog at all. Time is advanced explicitly by the fake,
+    so the threshold is compared against accounted time rather than real time.
     """
     reconnects = []
+    clock = _Clock()
+    monkeypatch.setattr(ws_events, "time", clock)
 
     class _Socket:
         def __init__(self):
@@ -114,11 +134,12 @@ def test_heartbeat_traffic_stops_the_watchdog_firing():
             await asyncio.sleep(0)
 
         async def recv(self):
+            await asyncio.sleep(0)
             self._n += 1
             if self._n % 2:
-                await asyncio.sleep(0.03)      # exceeds the recv timeout
+                clock.advance(0.03)          # a recv timeout elapses
                 raise asyncio.TimeoutError()
-            await asyncio.sleep(0.001)         # a heartbeat lands
+            clock.advance(0.001)             # a heartbeat lands promptly
             return json.dumps({"id": _HEARTBEAT_SUBSCRIPTION_ID, "result": {}})
 
         async def ping(self):
@@ -135,31 +156,35 @@ def test_heartbeat_traffic_stops_the_watchdog_firing():
     sub.running = True
     sub.websocket = _Socket()
     sub._event_recv_timeout_secs = 0.01
+    # Spans several timeouts: reachable only if the timer stops being reset.
     sub._max_event_silence_secs = 0.09
 
     async def drive():
         task = asyncio.create_task(sub._event_loop())
+        for _ in range(300):
+            if reconnects:
+                break
+            await asyncio.sleep(0)
+        sub.running = False
+        task.cancel()
         try:
-            await asyncio.sleep(0.4)
-        finally:
-            sub.running = False
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     asyncio.run(drive())
     assert reconnects == [], "watchdog tore down a connection that was carrying traffic"
 
 
-def test_watchdog_still_fires_when_the_wire_is_truly_silent():
+def test_watchdog_still_fires_when_the_wire_is_truly_silent(monkeypatch):
     """The heartbeat must not disarm genuine deafness detection.
 
-    Each reconnect gets a fresh socket, as it would in production -- handing
-    back the closed one makes the loop spin instead of settling.
+    Each reconnect gets a fresh socket, as in production -- handing back the
+    closed one makes the loop spin instead of settling.
     """
     closed = []
+    clock = _Clock()
+    monkeypatch.setattr(ws_events, "time", clock)
 
     class _Socket:
         def __init__(self):
@@ -169,7 +194,8 @@ def test_watchdog_still_fires_when_the_wire_is_truly_silent():
             await asyncio.sleep(0)
 
         async def recv(self):
-            await asyncio.sleep(0.002)
+            await asyncio.sleep(0)
+            clock.advance(0.03)
             raise asyncio.TimeoutError()
 
         async def ping(self):
@@ -184,15 +210,16 @@ def test_watchdog_still_fires_when_the_wire_is_truly_silent():
 
     sub = AlloraWebsocketSubscriber(url="wss://x", connect_fn=connect_fn)
     sub.running = True
-    sub._event_recv_timeout_secs = 0.001
-    sub._max_event_silence_secs = 0.01     # trips almost immediately
+    sub.websocket = _Socket()
+    sub._event_recv_timeout_secs = 0.01
+    sub._max_event_silence_secs = 0.09
 
     async def drive():
         task = asyncio.create_task(sub._event_loop())
-        for _ in range(400):
+        for _ in range(300):
             if closed:
                 break
-            await asyncio.sleep(0.005)
+            await asyncio.sleep(0)
         sub.running = False
         task.cancel()
         try:
