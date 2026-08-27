@@ -94,3 +94,16 @@ def test_tiny_window_is_floored():
 
 def test_huge_window_is_capped():
     assert _run(_Worker(10_000)) == DEFAULT_POLLING_INTERVAL_SECS
+
+
+@pytest.mark.parametrize("factory", ["inferer", "reputer", "forecaster"])
+def test_factories_forward_block_duration(factory):
+    """Chains with a different block time need the estimate tunable from the
+    documented entry points, not only the constructor."""
+    import inspect
+    from allora_sdk.worker.worker import AlloraWorker
+
+    sig = inspect.signature(getattr(AlloraWorker, factory))
+    assert "block_duration_secs" in sig.parameters, (
+        f"AlloraWorker.{factory} cannot tune the block-time estimate"
+    )

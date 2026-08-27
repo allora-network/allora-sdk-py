@@ -260,3 +260,49 @@ def test_heartbeat_can_be_disabled():
 
     ids = [m["id"] for m in sock.sent if m.get("method") == "subscribe"]
     assert _HEARTBEAT_SUBSCRIPTION_ID not in ids
+
+
+def test_heartbeat_messages_do_not_reach_the_structured_parser(monkeypatch, caplog):
+    """A NewBlock payload is not a NewBlockEvents frame.
+
+    Letting it fall through to the structured parse logs an error for every
+    block on every connection, which is a lot of noise for a message whose only
+    job was to exist.
+    """
+    import logging
+
+    sub = _subscriber(_FakeSocket())
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": _HEARTBEAT_SUBSCRIPTION_ID,
+        "result": {"query": "tm.event='NewBlock'",
+                   "data": {"type": "tendermint/event/NewBlock", "value": {"block": {}}}},
+    })
+
+    with caplog.at_level(logging.ERROR, logger=ws_events.logger.name):
+        asyncio.run(sub._handle_message(payload))
+
+    assert caplog.records == [], [r.getMessage() for r in caplog.records]
+
+
+def test_reserved_id_rejected_before_the_event_loop_starts():
+    """A rejected call should not leave a started event-loop task behind."""
+    sock = _FakeSocket()
+
+    async def connect_fn(url):
+        return sock
+
+    # Deliberately not started: the point is that the rejected call does not
+    # start it as a side effect.
+    sub = AlloraWebsocketSubscriber(url="wss://x", connect_fn=connect_fn)
+
+    async def cb(*a, **k):
+        return None
+
+    async def call():
+        await sub.subscribe(EventFilter.new_blocks(), cb, _HEARTBEAT_SUBSCRIPTION_ID)
+
+    with pytest.raises(ValueError, match="reserved"):
+        asyncio.run(call())
+
+    assert not sub.running, "event loop was started by a call that then raised"

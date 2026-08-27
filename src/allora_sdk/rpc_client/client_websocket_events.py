@@ -323,10 +323,12 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call should not have
+        # started the event-loop task on its way out.
+        self._reject_reserved_id(subscription_id)
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
-        self._reject_reserved_id(subscription_id)
 
         if not subscription_id:
             self._subscription_id_counter += 1
@@ -516,6 +518,13 @@ class AlloraWebsocketSubscriber:
             data = json.loads(message)
             message_id = data.get("id")
             
+            # The heartbeat exists to put bytes on the wire; the silence timer
+            # was already reset by the receive itself. Its NewBlock payload is
+            # not a NewBlockEvents frame, so letting it reach the structured
+            # parser below logs a spurious error for every block.
+            if message_id == _HEARTBEAT_SUBSCRIPTION_ID:
+                return
+
             # Handle subscription confirmations
             if data.get("result", {}).get("data") is None and "id" in data:
                 subscription_id = data["id"]
@@ -911,10 +920,12 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call should not have
+        # started the event-loop task on its way out.
+        self._reject_reserved_id(subscription_id)
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
-        self._reject_reserved_id(subscription_id)
 
         if not subscription_id:
             self._subscription_id_counter += 1
@@ -967,10 +978,12 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call should not have
+        # started the event-loop task on its way out.
+        self._reject_reserved_id(subscription_id)
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
-        self._reject_reserved_id(subscription_id)
 
         if not subscription_id:
             self._subscription_id_counter += 1

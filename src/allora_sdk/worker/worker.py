@@ -13,7 +13,7 @@ from textwrap import dedent, indent
 import traceback
 import requests
 import logging
-from typing import Generic, Optional, AsyncIterator, TypeVar
+from typing import Any, Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -92,6 +92,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -165,6 +166,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -181,6 +183,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         min_stake_uallo: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         lock: Optional[asyncio.Lock] = None,
@@ -255,6 +258,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -271,6 +275,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -343,6 +348,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -359,11 +365,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
         polling_interval: Optional[int] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
         show_banner: bool = True,
-        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -429,7 +435,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         await self._maybe_faucet_request()
 
 
-    async def _derive_polling_interval(self):
+    async def _derive_polling_interval(self) -> Optional[Any]:
         """Size the fallback poll against the topic's submission window.
 
         The poll is what finds an open window when its websocket event was not
@@ -447,6 +453,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             logger.warning(f"Could not read topic {self.topic_id}: {e}")
 
         if self._explicit_polling_interval is not None:
+            logger.info(
+                f"Polling every {self.polling_interval}s for topic {self.topic_id} "
+                f"(explicitly configured; not derived from the submission window)"
+            )
             return topic
 
         window_blocks = int(getattr(topic, "worker_submission_window", 0) or 0) if topic else 0
@@ -470,7 +480,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         return topic
 
-    async def _show_banner(self, topic=None):
+    async def _show_banner(self, topic: Optional[Any] = None) -> None:
         # The topic was already fetched during init; querying again here would
         # be a second chain round-trip for identical data on every startup.
         if topic is None:
