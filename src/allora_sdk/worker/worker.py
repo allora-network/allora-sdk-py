@@ -55,6 +55,18 @@ logger = logging.getLogger("allora_sdk")
 SubmissionWindowOpenEventType = TypeVar("SubmissionWindowOpenEventType", bound=TSubmissionWindowOpenEventType)
 WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 
+# Polling is the fallback path for discovering an open submission window when
+# the websocket event was not delivered. It must therefore fire several times
+# within a window, or a dropped event becomes a missed submission rather than a
+# late one. Derived from the topic's own window unless the caller is explicit.
+DEFAULT_POLLING_INTERVAL_SECS = 120
+POLLS_PER_WINDOW = 3
+MIN_POLLING_INTERVAL_SECS = 5
+# Wall-clock seconds per block, used only to turn the topic's window (in
+# blocks) into a polling cadence. An estimate is sufficient here: it selects a
+# polling rate, it does not gate any submission.
+DEFAULT_BLOCK_DURATION_SECS = 6.0
+
 # Default per-cycle cap for inferer/forecaster unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
@@ -340,11 +352,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
         show_banner: bool = True,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -356,7 +369,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. Leave as None to derive it from the topic's own
+                submission window, which is what you want: a fixed interval
+                longer than the window turns a dropped event into a missed
+                submission. Pass an int only to override that.
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
             debug: Enable debug logging
@@ -373,7 +390,13 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self.api_key = api_key
         self.topic_id = topic_id
         self.fee_tier = fee_tier
-        self.polling_interval = polling_interval
+        # None means "derive from the topic window once the chain is reachable";
+        # until then fall back to the historical default so nothing polls at 0.
+        self._explicit_polling_interval = polling_interval
+        self.polling_interval = (
+            polling_interval if polling_interval is not None else DEFAULT_POLLING_INTERVAL_SECS
+        )
+        self.block_duration_secs = block_duration_secs
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
         self.show_banner = show_banner
 
@@ -394,10 +417,49 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._chain_id = await self.client.raise_for_chain_id_mismatch()
 
+        await self._derive_polling_interval()
         await self._show_banner()
         await self._log_balance()
         await self._maybe_faucet_request()
 
+
+    async def _derive_polling_interval(self):
+        """Size the fallback poll against the topic's submission window.
+
+        The poll is what finds an open window when its websocket event was not
+        delivered. A cadence longer than the window means such a nonce is found
+        only after it has expired, so the interval has to come from the window
+        rather than from a fixed default.
+        """
+        if self._explicit_polling_interval is not None:
+            return
+
+        window_blocks = 0
+        try:
+            resp = await self.client.emissions.query.get_topic(
+                GetTopicRequest(topic_id=int(self.topic_id))
+            )
+            window_blocks = int(getattr(resp.topic, "worker_submission_window", 0) or 0)
+        except Exception as e:
+            logger.warning(f"Could not read the submission window for topic {self.topic_id}: {e}")
+
+        if window_blocks <= 0:
+            logger.warning(
+                f"No usable submission window for topic {self.topic_id}; "
+                f"polling every {self.polling_interval}s. A dropped event will not "
+                f"be recovered inside a window shorter than that."
+            )
+            return
+
+        window_secs = window_blocks * self.block_duration_secs
+        self.polling_interval = max(
+            MIN_POLLING_INTERVAL_SECS,
+            min(int(window_secs / POLLS_PER_WINDOW), DEFAULT_POLLING_INTERVAL_SECS),
+        )
+        logger.info(
+            f"Polling every {self.polling_interval}s "
+            f"(topic {self.topic_id} window {window_blocks} blocks ~ {window_secs:.0f}s)"
+        )
 
     async def _show_banner(self):
         resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))

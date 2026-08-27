@@ -119,6 +119,12 @@ class EventAttributeCondition:
         return f"EventAttributeCondition({self.attribute_name} {self.operator} {self.value})"
 
 
+# Reserved id for the liveness heartbeat subscription. It is deliberately kept
+# out of ``self.subscriptions`` so it dispatches to no callback: its only job is
+# to put traffic on the wire.
+_HEARTBEAT_SUBSCRIPTION_ID = "__allora_liveness_heartbeat__"
+
+
 class EventFilter:
     """Event filter for subscription queries."""
 
@@ -198,15 +204,24 @@ class AlloraWebsocketSubscriber:
         connect_fn: ConnectFn = default_websocket_connect,
         event_recv_timeout_secs: float = _EVENT_RECV_TIMEOUT_SECS,
         max_event_silence_secs: float = _MAX_EVENT_SILENCE_SECS,
+        heartbeat: bool = True,
     ):
         """Initialize event subscriber with Allora client.
 
         ``max_event_silence_secs`` gates the deaf-subscription watchdog: after
         this long with no message the loop forces a reconnect+resubscribe.
-        The default suits subscriptions that receive a message roughly per block
-        (e.g. NewBlock-based queries). Raise it for subscriptions that can be
-        legitimately idle longer than the default, to avoid reconnecting a
-        healthy-but-quiet stream.
+
+        With ``heartbeat`` enabled (the default) a NewBlock subscription is
+        added to every connection, so the wire carries a message roughly per
+        block regardless of how quiet the caller's own subscriptions are. That
+        keeps the threshold measuring the *connection* rather than the caller's
+        event cadence: silence then genuinely means the server stopped pushing.
+
+        Disable ``heartbeat`` only if the extra per-block traffic is
+        unacceptable, and then raise ``max_event_silence_secs`` above the
+        expected gap between events -- otherwise the watchdog will reconnect a
+        healthy-but-quiet stream, and an event arriving during the reconnect is
+        lost.
         """
         # A non-positive recv timeout would make recv() return instantly and
         # ping-storm the loop; a silence threshold at/below the recv timeout
@@ -226,6 +241,7 @@ class AlloraWebsocketSubscriber:
         self.connect_fn = connect_fn
         self._event_recv_timeout_secs = event_recv_timeout_secs
         self._max_event_silence_secs = max_event_silence_secs
+        self._heartbeat = heartbeat
         self.websocket: Optional['WebSocketLike'] = None
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
         self.callbacks: Dict[str, List[Callable]] = {}
@@ -359,7 +375,14 @@ class AlloraWebsocketSubscriber:
                         async with self._state_lock:
                             if subscription_id in self.subscriptions:
                                 self.subscriptions[subscription_id]["sent"] = True
-                    
+
+                    # Keep traffic on the wire so the silence watchdog measures
+                    # the connection rather than the caller's event cadence.
+                    if self._heartbeat:
+                        await self._send_subscription(
+                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_blocks().to_query()
+                        )
+
                     return
                     
                 except Exception as e:

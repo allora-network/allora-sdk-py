@@ -279,6 +279,7 @@ class AlloraRPCClient:
                 self.network.websocket_url,
                 event_recv_timeout_secs=self.network.event_recv_timeout_secs,
                 max_event_silence_secs=self.network.max_event_silence_secs,
+                heartbeat=self.network.websocket_heartbeat,
             )
 
         logger.debug(f"Initialized Allora client for {self.network.chain_id}")

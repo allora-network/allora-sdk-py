@@ -2,6 +2,11 @@
 
 # CHANGELOG
 
+## Unreleased
+
+- Websocket liveness heartbeat: every connection now also subscribes to `NewBlock`, so the wire carries a message roughly per block regardless of how quiet the caller's own subscriptions are. Worker subscriptions are filtered server-side to a single topic and are therefore silent between epochs; without the heartbeat the silence watchdog could not distinguish a quiet subscription from a deaf connection and would reconnect a healthy socket, losing any event that arrived during the reconnect. Disable with `AlloraNetworkConfig.websocket_heartbeat=False`
+- Polling interval is now derived from the topic's own submission window instead of a fixed 120s. Polling is the fallback that finds an open window when its event was not delivered, so an interval longer than the window turned a dropped event into a missed submission rather than a late one. Pass `polling_interval` explicitly to override; the derived value polls several times per window, floored at 5s and capped at the previous 120s default
+
 ## v1.4.0
 
 - Optional fee-granter support: `fee_granter` parameter on `TxManager`, `AlloraRPCClient`, and the `AlloraWorker` constructors sets `AuthInfo.Fee.granter` on all built transactions (simulate and broadcast), letting an on-chain fee grant pay transaction fees
