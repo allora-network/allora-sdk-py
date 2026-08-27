@@ -293,6 +293,19 @@ class AlloraWebsocketSubscriber:
             self.websocket = None
         
 
+    @staticmethod
+    def _reject_reserved_id(subscription_id: Optional[str]) -> None:
+        """The heartbeat id is not a namespace callers may write into.
+
+        Sharing it would put two different queries behind one JSON-RPC id, so
+        confirmations and events could be attributed to the wrong subscription.
+        """
+        if subscription_id == _HEARTBEAT_SUBSCRIPTION_ID:
+            raise ValueError(
+                f"subscription_id {_HEARTBEAT_SUBSCRIPTION_ID!r} is reserved for the "
+                "liveness heartbeat; choose another id"
+            )
+
     async def subscribe(
         self,
         event_filter: EventFilter,
@@ -313,6 +326,8 @@ class AlloraWebsocketSubscriber:
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
         
+        self._reject_reserved_id(subscription_id)
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"sub_{self._subscription_id_counter}"
@@ -899,6 +914,8 @@ class AlloraWebsocketSubscriber:
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
         
+        self._reject_reserved_id(subscription_id)
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"block_events_{self._subscription_id_counter}"
@@ -953,6 +970,8 @@ class AlloraWebsocketSubscriber:
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
         
+        self._reject_reserved_id(subscription_id)
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"typed_block_events_{self._subscription_id_counter}"

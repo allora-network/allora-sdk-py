@@ -113,6 +113,7 @@ class AlloraNetworkConfig:
         grpc_drain_window_secs=5,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
+        websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -129,6 +130,7 @@ class AlloraNetworkConfig:
             grpc_drain_window_secs=grpc_drain_window_secs,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
+            websocket_heartbeat=websocket_heartbeat,
         )
 
     @classmethod
@@ -147,6 +149,7 @@ class AlloraNetworkConfig:
         grpc_drain_window_secs=5,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
+        websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -162,6 +165,7 @@ class AlloraNetworkConfig:
             grpc_drain_window_secs=grpc_drain_window_secs,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
+            websocket_heartbeat=websocket_heartbeat,
         )
 
     @classmethod
@@ -182,6 +186,7 @@ class AlloraNetworkConfig:
         url: str | None = None,
         event_recv_timeout_secs=30.0,
         max_event_silence_secs=60.0,
+        websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(
             chain_id=chain_id,
@@ -198,6 +203,7 @@ class AlloraNetworkConfig:
             grpc_drain_window_secs=grpc_drain_window_secs,
             event_recv_timeout_secs=event_recv_timeout_secs,
             max_event_silence_secs=max_event_silence_secs,
+            websocket_heartbeat=websocket_heartbeat,
         )
 
     @classmethod
@@ -211,6 +217,7 @@ class AlloraNetworkConfig:
             fee_minimum_gas_price=_env_float((env_prefix or "") + "FEE_MIN_GAS_PRICE", required=True),
             event_recv_timeout_secs=_env_float((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", 30.0),
             max_event_silence_secs=_env_float((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", 60.0),
+            websocket_heartbeat=_env_bool((env_prefix or "") + "WEBSOCKET_HEARTBEAT", True),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
@@ -221,6 +228,18 @@ class AlloraNetworkConfig:
             fee_denomination=self.fee_denom,
             staking_denomination=self.fee_denom
         )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean env var, treating blank as unset.
+
+    Same reasoning as _env_float: k8s renders `value: ""` for unconfigured
+    knobs, and a blank value must mean "use the default" rather than False.
+    """
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
 
 
 def _env_float(name: str, default: float | None = None, required: bool = False) -> float:

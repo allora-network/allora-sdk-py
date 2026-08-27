@@ -91,7 +91,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -115,7 +115,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. None (the default) derives it from the topic's own
+                submission window; pass an int only to override that.
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
@@ -178,7 +180,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         min_stake_uallo: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         lock: Optional[asyncio.Lock] = None,
@@ -201,7 +203,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit reputer payloads to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. None (the default) derives it from the topic's own
+                submission window; pass an int only to override that.
             min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
@@ -266,7 +270,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -291,7 +295,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit forecasts to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. None (the default) derives it from the topic's own
+                submission window; pass an int only to override that.
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
@@ -417,8 +423,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._chain_id = await self.client.raise_for_chain_id_mismatch()
 
-        await self._derive_polling_interval()
-        await self._show_banner()
+        topic = await self._derive_polling_interval()
+        await self._show_banner(topic)
         await self._log_balance()
         await self._maybe_faucet_request()
 
@@ -431,17 +437,19 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         only after it has expired, so the interval has to come from the window
         rather than from a fixed default.
         """
-        if self._explicit_polling_interval is not None:
-            return
-
-        window_blocks = 0
+        topic = None
         try:
             resp = await self.client.emissions.query.get_topic(
                 GetTopicRequest(topic_id=int(self.topic_id))
             )
-            window_blocks = int(getattr(resp.topic, "worker_submission_window", 0) or 0)
+            topic = resp.topic
         except Exception as e:
-            logger.warning(f"Could not read the submission window for topic {self.topic_id}: {e}")
+            logger.warning(f"Could not read topic {self.topic_id}: {e}")
+
+        if self._explicit_polling_interval is not None:
+            return topic
+
+        window_blocks = int(getattr(topic, "worker_submission_window", 0) or 0) if topic else 0
 
         if window_blocks <= 0:
             logger.warning(
@@ -449,7 +457,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"polling every {self.polling_interval}s. A dropped event will not "
                 f"be recovered inside a window shorter than that."
             )
-            return
+            return topic
 
         window_secs = window_blocks * self.block_duration_secs
         self.polling_interval = max(
@@ -460,9 +468,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             f"Polling every {self.polling_interval}s "
             f"(topic {self.topic_id} window {window_blocks} blocks ~ {window_secs:.0f}s)"
         )
+        return topic
 
-    async def _show_banner(self):
-        resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
+    async def _show_banner(self, topic=None):
+        # The topic was already fetched during init; querying again here would
+        # be a second chain round-trip for identical data on every startup.
+        if topic is None:
+            resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
+            topic = resp.topic
 
         if self.show_banner:
             print(indent(dedent(
@@ -471,7 +484,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     / \  | |   | |   / _ \|  _ \    / \
                    / _ \ | |   | |  | | | | |_) |  / _ \
                   / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
-                 /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
+                 /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {topic.metadata if topic else '-'} (ID: {self.topic_id})
                  __        _____  ____  _  _______ ____          Address: {self.address}
                  \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
                   \ \ /\ / / | | | |_) | ' /|  _| | |_) |
@@ -480,7 +493,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 """
             ), "   "))
         else:
-            print(f"Allora Worker - Chain: {self._chain_id}, Topic: {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id}), Address: {self.address}, Role: {self.use_case.name().upper()}")
+            print(f"Allora Worker - Chain: {self._chain_id}, Topic: {topic.metadata if topic else '-'} (ID: {self.topic_id}), Address: {self.address}, Role: {self.use_case.name().upper()}")
 
 
     async def _log_balance(self):
