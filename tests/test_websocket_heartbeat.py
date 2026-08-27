@@ -378,3 +378,37 @@ def test_heartbeat_is_sent_before_caller_subscriptions():
     ids = [m["id"] for m in sock.sent if m.get("method") == "subscribe"]
     assert ids[0] == _HEARTBEAT_SUBSCRIPTION_ID, ids
     assert set(ids[1:]) == {"sub_1", "sub_2"}, ids
+
+
+def test_rejected_subscription_is_not_marked_active(caplog):
+    """An error frame has an id and no result.data, exactly like a confirmation.
+
+    Treating it as one leaves a rejected subscription looking established while
+    no events ever arrive -- the caller sees a healthy-looking subscription and
+    silence, which is the hardest failure to diagnose.
+    """
+    import logging
+
+    sub = _subscriber(_FakeSocket())
+    sub.subscriptions = {"sub_9": {"query": "tm.event='Tx'", "sent": True, "active": False}}
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": "sub_9",
+        "error": {"code": -32603, "message": "max_subscriptions_per_client reached"},
+    })
+
+    with caplog.at_level(logging.ERROR, logger=ws_events.logger.name):
+        asyncio.run(sub._handle_message(payload))
+
+    assert sub.subscriptions["sub_9"]["active"] is False, "rejected subscription marked active"
+    assert any("rejected" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
+
+
+def test_successful_confirmation_still_marks_active():
+    """The fix must not stop real confirmations working."""
+    sub = _subscriber(_FakeSocket())
+    sub.subscriptions = {"sub_9": {"query": "tm.event='Tx'", "sent": True, "active": False}}
+    payload = json.dumps({"jsonrpc": "2.0", "id": "sub_9", "result": {}})
+
+    asyncio.run(sub._handle_message(payload))
+    assert sub.subscriptions["sub_9"]["active"] is True

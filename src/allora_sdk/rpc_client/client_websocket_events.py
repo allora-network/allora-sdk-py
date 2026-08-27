@@ -545,9 +545,22 @@ class AlloraWebsocketSubscriber:
                     logger.error(f"Heartbeat subscription error: {data['error']}")
                 return
 
-            # Handle subscription confirmations
+            # Handle subscription confirmations.
+            #
+            # An error frame also has an id and no result.data, so it satisfies
+            # the same shape as a confirmation. Marking it active would leave a
+            # rejected subscription looking established while no events ever
+            # arrive -- the failure would be invisible to the caller.
             if data.get("result", {}).get("data") is None and "id" in data:
                 subscription_id = data["id"]
+                if "error" in data:
+                    logger.error(
+                        f"Subscription {subscription_id} rejected: {data['error']}"
+                    )
+                    async with self._state_lock:
+                        if subscription_id in self.subscriptions:
+                            self.subscriptions[subscription_id]["active"] = False
+                    return
                 async with self._state_lock:
                     if subscription_id in self.subscriptions:
                         self.subscriptions[subscription_id]["active"] = True
