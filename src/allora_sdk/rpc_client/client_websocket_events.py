@@ -175,6 +175,15 @@ class EventFilter:
         return EventFilter().event_type('NewBlock')
 
     @staticmethod
+    def new_block_headers():
+        """Filter for new block headers.
+
+        Fires once per block like NewBlock but carries only the header, so it is
+        the cheapest way to keep traffic on the wire.
+        """
+        return EventFilter().event_type('NewBlockHeader')
+
+    @staticmethod
     def transactions():
         """Filter for transaction events."""
         return EventFilter().event_type('Tx')
@@ -397,7 +406,7 @@ class AlloraWebsocketSubscriber:
                     # the connection rather than the caller's event cadence.
                     if self._heartbeat:
                         await self._send_subscription(
-                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_blocks().to_query()
+                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_block_headers().to_query()
                         )
 
                     return
@@ -523,6 +532,12 @@ class AlloraWebsocketSubscriber:
             # not a NewBlockEvents frame, so letting it reach the structured
             # parser below logs a spurious error for every block.
             if message_id == _HEARTBEAT_SUBSCRIPTION_ID:
+                # A rejected heartbeat (subscription cap reached, duplicate
+                # query) arrives as an error frame. Returning unconditionally
+                # would hide the one failure that disables the watchdog's only
+                # source of traffic, and the socket would simply go quiet again.
+                if "error" in data:
+                    logger.error(f"Heartbeat subscription error: {data['error']}")
                 return
 
             # Handle subscription confirmations

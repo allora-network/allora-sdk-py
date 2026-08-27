@@ -21,11 +21,9 @@ import async_timeout
 
 from allora_sdk.rpc_client.protos.emissions.v10 import (
     GetTopicRequest,
-    EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventRewardsSettled,
     EventWorkerSubmissionWindowOpened,
-    EventWorkerSubmissionWindowClosed,
 )
 from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
 from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env
@@ -452,6 +450,23 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         except Exception as e:
             logger.warning(f"Could not read topic {self.topic_id}: {e}")
 
+        # A reputer cannot recover a dropped window by polling: its
+        # get_unfulfilled_nonces() returns an empty set because the open-window
+        # RPC is not wired, so the poll loop only re-runs the whitelist check.
+        # Deriving a tighter interval would add query traffic and recover
+        # nothing; the heartbeat is the only net a reputer has.
+        try:
+            is_reputer = self.use_case.submission_window_event_type() is EventReputerSubmissionWindowOpened
+        except Exception:
+            is_reputer = False
+        if is_reputer:
+            logger.info(
+                f"Polling every {self.polling_interval}s for topic {self.topic_id} "
+                f"(reputer: polling cannot recover a dropped submission window, so the "
+                f"interval is not derived from it)"
+            )
+            return topic
+
         if self._explicit_polling_interval is not None:
             logger.info(
                 f"Polling every {self.polling_interval}s for topic {self.topic_id} "
@@ -762,18 +777,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         self._subscription_ids.append(id)
 
-        id = await self.client.events.subscribe_new_block_events_typed(
-            EventWorkerSubmissionWindowClosed,
-            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
-        )
-        self._subscription_ids.append(id)
-        id = await self.client.events.subscribe_new_block_events_typed(
-            EventReputerSubmissionWindowClosed,
-            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
-        )
-        self._subscription_ids.append(id)
+        # The two *SubmissionWindowClosed subscriptions were dropped: their
+        # callbacks only logged and drove nothing, while CometBFT caps a client
+        # at max_subscriptions_per_client (5 on allora-testnet-1). Holding two
+        # slots for log lines left no room for the liveness heartbeat, which is
+        # what keeps the silence watchdog from tearing down a healthy socket.
 
         # Subscribe to rewards events for autostaking if configured on the use case
         if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:

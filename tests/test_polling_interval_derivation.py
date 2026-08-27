@@ -142,3 +142,35 @@ def test_block_duration_is_last_so_positional_callers_are_unaffected(factory):
         f"{factory} has block_duration_secs at position {names.index('block_duration_secs')} "
         f"of {len(names) - 1}; a mid-signature insertion rebinds positional callers"
     )
+
+
+def test_reputer_keeps_the_default_interval(monkeypatch):
+    """A reputer cannot recover a dropped window by polling.
+
+    Reputer.get_unfulfilled_nonces() returns an empty set because the
+    open-window RPC is not wired, so the poll loop only re-runs the whitelist
+    check. Deriving a tighter interval adds query traffic and recovers nothing.
+    """
+    from allora_sdk.rpc_client.protos.emissions.v10 import (
+        EventReputerSubmissionWindowOpened,
+    )
+
+    w = _Worker(9)                      # a 54s window, which would derive 18s
+    w.use_case = types.SimpleNamespace(
+        submission_window_event_type=lambda: EventReputerSubmissionWindowOpened
+    )
+    assert _run(w) == DEFAULT_POLLING_INTERVAL_SECS
+
+
+def test_non_reputer_still_derives(monkeypatch):
+    """The guard must not disable derivation for inferers and forecasters,
+    which do have a working unfulfilled-nonce query."""
+    from allora_sdk.rpc_client.protos.emissions.v10 import (
+        EventWorkerSubmissionWindowOpened,
+    )
+
+    w = _Worker(9)
+    w.use_case = types.SimpleNamespace(
+        submission_window_event_type=lambda: EventWorkerSubmissionWindowOpened
+    )
+    assert _run(w) == int(9 * 6.0 / POLLS_PER_WINDOW)

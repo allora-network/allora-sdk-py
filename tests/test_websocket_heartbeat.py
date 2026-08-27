@@ -306,3 +306,52 @@ def test_reserved_id_rejected_before_the_event_loop_starts():
         asyncio.run(call())
 
     assert not sub.running, "event loop was started by a call that then raised"
+
+
+def test_heartbeat_uses_the_header_only_query():
+    """NewBlock carries the whole block body; NewBlockHeader fires just as often
+    and is far cheaper, and the heartbeat only needs bytes on the wire."""
+    sock = _FakeSocket()
+    sub = _subscriber(sock)
+    asyncio.run(sub._connect())
+
+    q = [m["params"]["query"] for m in sock.sent
+         if m.get("id") == _HEARTBEAT_SUBSCRIPTION_ID]
+    assert q == ["tm.event='NewBlockHeader'"], q
+
+
+def test_heartbeat_subscription_error_is_logged(caplog):
+    """A rejected heartbeat -- subscription cap reached, duplicate query -- is
+    the one failure that silently disables the watchdog's only traffic source.
+    It must not be swallowed by the parse-flood guard."""
+    import logging
+
+    sub = _subscriber(_FakeSocket())
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": _HEARTBEAT_SUBSCRIPTION_ID,
+        "error": {"code": -32603, "message": "max_subscriptions_per_client reached"},
+    })
+
+    with caplog.at_level(logging.ERROR, logger=ws_events.logger.name):
+        asyncio.run(sub._handle_message(payload))
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("max_subscriptions_per_client" in m for m in msgs), msgs
+
+
+def test_healthy_heartbeat_still_logs_nothing(caplog):
+    """The flood guard must survive: a well-formed header frame produces no
+    ERROR, which is what the early return was added for."""
+    import logging
+
+    sub = _subscriber(_FakeSocket())
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": _HEARTBEAT_SUBSCRIPTION_ID,
+        "result": {"query": "tm.event='NewBlockHeader'",
+                   "data": {"type": "tendermint/event/NewBlockHeader", "value": {"header": {}}}},
+    })
+
+    with caplog.at_level(logging.ERROR, logger=ws_events.logger.name):
+        asyncio.run(sub._handle_message(payload))
+
+    assert caplog.records == [], [r.getMessage() for r in caplog.records]
