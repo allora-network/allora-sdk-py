@@ -182,3 +182,52 @@ def test_essential_steps_still_happen_before_init_is_recorded():
         "worker was marked initialised before the polling interval was derived"
     )
     assert w._initialized is True
+
+
+def test_optional_step_failure_does_not_fail_startup(caplog):
+    """These steps run after `_initialized` is set, so a raise would fail the
+    caller while every later call skips startup -- a transient balance query
+    would present as a permanently broken worker."""
+    import logging
+
+    w = _worker()
+
+    async def boom():
+        raise RuntimeError("balance query failed")
+
+    w._log_balance = boom
+
+    with caplog.at_level(logging.WARNING):
+        _run(w._ensure_initialized())
+
+    assert w._initialized is True
+    assert any("Optional startup step failed" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
+
+
+def test_a_failing_step_does_not_stop_the_ones_after_it():
+    """Each optional step is independent; one failing must not skip the rest."""
+    w = _worker()
+    ran = []
+
+    async def boom():
+        ran.append("banner-attempted")
+        raise RuntimeError("banner failed")
+
+    async def later():
+        ran.append("faucet")
+
+    w._show_banner = lambda *a, **k: boom()
+    w._maybe_faucet_request = later
+
+    _run(w._ensure_initialized())
+    assert "faucet" in ran, f"a later step was skipped after an earlier failure: {ran}"
+
+
+def test_essential_failure_still_propagates():
+    """The tolerance must not extend to the steps inside the lock: a chain-id
+    failure has to surface and leave the worker uninitialised."""
+    w = _worker(fail_times=1)
+    with pytest.raises(_Boom):
+        _run(w._ensure_initialized())
+    assert w._initialized is False

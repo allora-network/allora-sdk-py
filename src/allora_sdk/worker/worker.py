@@ -457,11 +457,17 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         # alone can await several minutes of polling and sleeps, and holding a
         # non-reentrant lock across that would stall every concurrent caller --
         # including submission windows opening in the meantime, which is the
-        # failure this PR exists to remove. All three tolerate their own
-        # failures, so none of them belongs in the critical section.
-        await self._show_banner(topic)
-        await self._log_balance()
-        await self._maybe_faucet_request()
+        # failure this PR exists to remove.
+        #
+        # They are also best-effort: none of them gates the worker's ability to
+        # submit. Since `_initialized` is already set, letting one raise would
+        # fail the caller while every later call skips startup entirely, so a
+        # transient balance query would look like a permanently broken worker.
+        for step in (lambda: self._show_banner(topic), self._log_balance, self._maybe_faucet_request):
+            try:
+                await step()
+            except Exception as e:
+                logger.warning(f"Optional startup step failed, continuing: {e}")
 
 
     async def _derive_polling_interval(self) -> Optional[Any]:
