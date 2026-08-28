@@ -460,7 +460,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 # lifetime and polls straight past a short submission window --
                 # the exact failure this PR removes. `_ensure_initialized` runs
                 # each submission cycle, so this re-attempts naturally.
-                topic = await self._derive_polling_interval()
+                #
+                # Under the lock, unlike the optional steps: this is a single
+                # short query rather than minutes of faucet polling, so the
+                # cost of serialising it is negligible next to every concurrent
+                # caller firing its own duplicate topic lookup.
+                async with self._init_lock:
+                    if not self._polling_interval_derived:
+                        topic = await self._derive_polling_interval()
 
             # Best-effort: none of these gates the worker's ability to submit.
             # Letting one raise would fail the caller while `_initialized` is

@@ -342,3 +342,33 @@ def test_resolved_derivation_is_not_repeated():
     _run(w._ensure_initialized())
     _run(w._ensure_initialized())
     assert calls == [1], f"derivation ran {len(calls)} times"
+
+
+def test_concurrent_retries_derive_once():
+    """Several callers arriving while the interval is still unresolved must not
+    each fire their own topic lookup."""
+    w = _worker()
+    calls = []
+
+    async def derive_fails():
+        return None
+
+    w._derive_polling_interval = derive_fails
+    _run(w._ensure_initialized())
+    assert w._polling_interval_derived is False
+
+    async def derive_slow():
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        w._polling_interval_derived = True
+        return None
+
+    w._derive_polling_interval = derive_slow
+
+    async def drive():
+        await asyncio.wait_for(
+            asyncio.gather(*(w._ensure_initialized() for _ in range(5))), timeout=TIMEOUT
+        )
+
+    asyncio.run(drive())
+    assert calls == [1], f"derivation retried {len(calls)} times concurrently"
