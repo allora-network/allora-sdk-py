@@ -398,6 +398,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self._initializing_tasks = set()
         self._optional_steps_done = False
         self._optional_steps_running = False
+        self._polling_interval_derived = False
         self.use_case = use_case
         self.client = client
         self.address = address
@@ -441,7 +442,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         me = asyncio.current_task()
         if me in self._initializing_tasks:
             return
-        if self._initialized and self._optional_steps_done:
+        if self._initialized and self._optional_steps_done and self._polling_interval_derived:
             return
 
         topic = None
@@ -453,6 +454,13 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         self._chain_id = await self.client.raise_for_chain_id_mismatch()
                         topic = await self._derive_polling_interval()
                         self._initialized = True
+            elif not self._polling_interval_derived:
+                # A transient topic query at startup leaves the interval on the
+                # 120s fallback. Without a retry the worker keeps that for its
+                # lifetime and polls straight past a short submission window --
+                # the exact failure this PR removes. `_ensure_initialized` runs
+                # each submission cycle, so this re-attempts naturally.
+                topic = await self._derive_polling_interval()
 
             # Best-effort: none of these gates the worker's ability to submit.
             # Letting one raise would fail the caller while `_initialized` is
@@ -511,6 +519,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"(reputer: polling cannot recover a dropped submission window, so the "
                 f"interval is not derived from it)"
             )
+            self._polling_interval_derived = True
             return topic
 
         if self._explicit_polling_interval is not None:
@@ -518,6 +527,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"Polling every {self.polling_interval}s for topic {self.topic_id} "
                 f"(explicitly configured; not derived from the submission window)"
             )
+            self._polling_interval_derived = True
             return topic
 
         window_blocks = int(getattr(topic, "worker_submission_window", 0) or 0) if topic else 0
@@ -539,6 +549,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             f"Polling every {self.polling_interval}s "
             f"(topic {self.topic_id} window {window_blocks} blocks ~ {window_secs:.0f}s)"
         )
+        self._polling_interval_derived = True
         return topic
 
     async def _show_banner(self, topic: Optional[Any] = None) -> None:

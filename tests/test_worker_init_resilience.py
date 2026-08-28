@@ -37,6 +37,7 @@ def _worker(fail_times: int = 0):
     w._initializing_tasks = set()
     w._optional_steps_done = False
     w._optional_steps_running = False
+    w._polling_interval_derived = False
     w.topic_id = 1
     w.polling_interval = DEFAULT_POLLING_INTERVAL_SECS
     w._explicit_polling_interval = None
@@ -295,3 +296,49 @@ def test_second_caller_does_not_queue_behind_a_slow_optional_phase():
     except asyncio.TimeoutError:
         pytest.fail("second caller queued behind the slow optional phase")
     assert w.calls["faucet"] == 1, "optional steps ran more than once"
+
+
+def test_failed_derivation_is_retried_on_a_later_cycle():
+    """A transient topic query leaves the interval on the 120s fallback. Without
+    a retry the worker keeps that for its lifetime and polls straight past a
+    short submission window -- the failure this PR exists to remove."""
+    w = _worker()
+    attempts = []
+
+    async def derive_fails():
+        attempts.append("fail")
+        return None                      # mirrors the caught-exception path
+
+    async def derive_succeeds():
+        attempts.append("ok")
+        w._polling_interval_derived = True
+        w.polling_interval = 18
+        return None
+
+    w._derive_polling_interval = derive_fails
+    _run(w._ensure_initialized())
+    assert w._initialized is True
+    assert w._polling_interval_derived is False, "unresolved derivation marked as done"
+    assert w.polling_interval == DEFAULT_POLLING_INTERVAL_SECS
+
+    w._derive_polling_interval = derive_succeeds
+    _run(w._ensure_initialized())        # the next submission cycle
+    assert attempts == ["fail", "ok"], attempts
+    assert w.polling_interval == 18, "the retry did not take effect"
+
+
+def test_resolved_derivation_is_not_repeated():
+    """Once resolved, the interval must not be re-derived on every cycle."""
+    w = _worker()
+    calls = []
+
+    async def derive():
+        calls.append(1)
+        w._polling_interval_derived = True
+        return None
+
+    w._derive_polling_interval = derive
+    _run(w._ensure_initialized())
+    _run(w._ensure_initialized())
+    _run(w._ensure_initialized())
+    assert calls == [1], f"derivation ran {len(calls)} times"
