@@ -21,8 +21,10 @@ import async_timeout
 
 from allora_sdk.rpc_client.protos.emissions.v10 import (
     GetTopicRequest,
+    EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventRewardsSettled,
+    EventWorkerSubmissionWindowClosed,
     EventWorkerSubmissionWindowOpened,
 )
 from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
@@ -851,11 +853,23 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         self._subscription_ids.append(id)
 
-        # The two *SubmissionWindowClosed subscriptions were dropped: their
-        # callbacks only logged and drove nothing, while CometBFT caps a client
-        # at max_subscriptions_per_client (5 on allora-testnet-1). Holding two
-        # slots for log lines left no room for the liveness heartbeat, which is
-        # what keeps the silence watchdog from tearing down a healthy socket.
+        # These two are diagnostics only -- their callbacks log and drive
+        # nothing. They are kept because the heartbeat does not need a slot
+        # reserved for it: it is subscribed first, before any of these, so a
+        # server that does enforce max_subscriptions_per_client rejects a
+        # trailing close-window listener rather than the liveness heartbeat.
+        id = await self.client.events.subscribe_new_block_events_typed(
+            EventWorkerSubmissionWindowClosed,
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
+        )
+        self._subscription_ids.append(id)
+        id = await self.client.events.subscribe_new_block_events_typed(
+            EventReputerSubmissionWindowClosed,
+            [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
+            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
+        )
+        self._subscription_ids.append(id)
 
         # Subscribe to rewards events for autostaking if configured on the use case
         if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
