@@ -395,7 +395,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._initialized = False
         self._init_lock = asyncio.Lock()
-        self._initializing_task = None
+        self._initializing_tasks = set()
+        self._optional_steps_done = False
+        self._optional_steps_running = False
         self.use_case = use_case
         self.client = client
         self.address = address
@@ -423,52 +425,59 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _ensure_initialized(self):
-        """Run one-time startup, and only record success once it has happened.
+        """Run one-time startup, recording each phase only once it has happened.
 
-        Setting the flag up front made a transient failure permanent: a raise
-        anywhere below left the worker marked initialised but with none of the
-        setup done, and nothing ever retried. The lock keeps that safe against
-        concurrent callers now that the flag is set at the end.
+        Two phases, tracked separately. The essential phase -- chain identity and
+        polling cadence -- is what other callers need before they can work, so it
+        runs under a lock. The optional phase -- banner, balance, faucet -- runs
+        outside it, because the faucet cycle alone can await minutes of polling
+        and holding a non-reentrant lock across that would stall concurrent
+        callers, including submission windows opening in the meantime.
+
+        Both phases are guarded against same-task re-entry: `_log_balance` and
+        `_maybe_faucet_request` call back into this method, and asyncio.Lock is
+        not reentrant, so a nested call would deadlock or re-run the phase.
         """
-        # _log_balance and _maybe_faucet_request call back into this method,
-        # and asyncio.Lock is not reentrant, so a nested call from the task that
-        # already holds it would deadlock every startup. Same-task re-entry is a
-        # no-op; other tasks still wait on the lock.
-        if self._initializing_task is asyncio.current_task():
+        me = asyncio.current_task()
+        if me in self._initializing_tasks:
             return
-        if self._initialized:
+        if self._initialized and self._optional_steps_done:
             return
 
         topic = None
-        async with self._init_lock:
-            if self._initialized:
-                return
-            self._initializing_task = asyncio.current_task()
-            try:
-                # Only what other callers genuinely need before they can work:
-                # the chain identity and the polling cadence.
-                self._chain_id = await self.client.raise_for_chain_id_mismatch()
-                topic = await self._derive_polling_interval()
-                self._initialized = True
-            finally:
-                self._initializing_task = None
+        self._initializing_tasks.add(me)
+        try:
+            if not self._initialized:
+                async with self._init_lock:
+                    if not self._initialized:
+                        self._chain_id = await self.client.raise_for_chain_id_mismatch()
+                        topic = await self._derive_polling_interval()
+                        self._initialized = True
 
-        # Banner, balance and faucet run outside the lock. The faucet cycle
-        # alone can await several minutes of polling and sleeps, and holding a
-        # non-reentrant lock across that would stall every concurrent caller --
-        # including submission windows opening in the meantime, which is the
-        # failure this PR exists to remove.
-        #
-        # They are also best-effort: none of them gates the worker's ability to
-        # submit. Since `_initialized` is already set, letting one raise would
-        # fail the caller while every later call skips startup entirely, so a
-        # transient balance query would look like a permanently broken worker.
-        for step in (lambda: self._show_banner(topic), self._log_balance, self._maybe_faucet_request):
-            try:
-                await step()
-            except Exception as e:
-                logger.warning(f"Optional startup step failed, continuing: {e}")
-
+            # Best-effort: none of these gates the worker's ability to submit.
+            # Letting one raise would fail the caller while `_initialized` is
+            # already set, so a transient balance query would look like a
+            # permanently broken worker. Completion is tracked separately so a
+            # cancellation here is retried by the next caller rather than
+            # silently skipping the faucet forever.
+            if not self._optional_steps_done and not self._optional_steps_running:
+                # Not a lock: a second caller arriving mid-faucet returns
+                # immediately rather than queueing behind minutes of polling.
+                # The flag is cleared in `finally`, so a cancelled run is
+                # retried by whoever comes next.
+                self._optional_steps_running = True
+                try:
+                    for step in (lambda: self._show_banner(topic), self._log_balance,
+                                 self._maybe_faucet_request):
+                        try:
+                            await step()
+                        except Exception as e:
+                            logger.warning(f"Optional startup step failed, continuing: {e}")
+                    self._optional_steps_done = True
+                finally:
+                    self._optional_steps_running = False
+        finally:
+            self._initializing_tasks.discard(me)
 
     async def _derive_polling_interval(self) -> Optional[Any]:
         """Size the fallback poll against the topic's submission window.
@@ -567,7 +576,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _log_balance(self):
-        await self._ensure_initialized()
+        if not self._initialized:
+            await self._ensure_initialized()
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
@@ -580,7 +590,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _maybe_faucet_request(self):
-        await self._ensure_initialized()
+        if not self._initialized:
+            await self._ensure_initialized()
 
         if self._chain_id != "allora-testnet-1":
             return

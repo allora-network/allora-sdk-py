@@ -34,7 +34,9 @@ def _worker(fail_times: int = 0):
     w = object.__new__(AlloraWorker)
     w._initialized = False
     w._init_lock = asyncio.Lock()
-    w._initializing_task = None
+    w._initializing_tasks = set()
+    w._optional_steps_done = False
+    w._optional_steps_running = False
     w.topic_id = 1
     w.polling_interval = DEFAULT_POLLING_INTERVAL_SECS
     w._explicit_polling_interval = None
@@ -98,7 +100,7 @@ def test_failed_init_is_retried_not_recorded_as_done():
     with pytest.raises(_Boom):
         _run(w._ensure_initialized())
     assert w._initialized is False, "failed init was recorded as complete"
-    assert w._initializing_task is None, "re-entrancy marker leaked after a failure"
+    assert w._initializing_tasks == set(), "re-entrancy marker leaked after a failure"
 
     _run(w._ensure_initialized())
     assert w._initialized is True
@@ -231,3 +233,65 @@ def test_essential_failure_still_propagates():
     with pytest.raises(_Boom):
         _run(w._ensure_initialized())
     assert w._initialized is False
+
+
+def test_cancelled_optional_phase_is_retried_by_the_next_caller():
+    """`_initialized` is set before the optional steps run, so a cancellation
+    mid-phase would otherwise abandon them permanently -- on testnet that
+    silently skips the faucet and the worker never gets funded."""
+    w = _worker()
+    started = asyncio.Event()
+
+    async def slow_faucet():
+        started.set()
+        await asyncio.sleep(10)          # cancelled before this completes
+        w.calls["faucet"] += 1
+
+    w._maybe_faucet_request = slow_faucet
+
+    async def drive():
+        t = asyncio.create_task(w._ensure_initialized())
+        await asyncio.wait_for(started.wait(), timeout=TIMEOUT)
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+        assert w.calls["faucet"] == 0, "faucet should not have completed"
+        assert w._optional_steps_done is False, "phase wrongly marked complete"
+
+        # a later caller must retry the abandoned steps
+        async def quick_faucet():
+            w.calls["faucet"] += 1
+
+        w._maybe_faucet_request = quick_faucet
+        await asyncio.wait_for(w._ensure_initialized(), timeout=TIMEOUT)
+
+    asyncio.run(drive())
+    assert w.calls["faucet"] == 1, "the cancelled optional phase was never retried"
+
+
+def test_second_caller_does_not_queue_behind_a_slow_optional_phase():
+    """The optional phase is guarded by a flag, not a lock: a caller arriving
+    while the faucet is polling returns at once instead of waiting minutes."""
+    w = _worker()
+    started = asyncio.Event()
+
+    async def slow_faucet():
+        started.set()
+        await asyncio.sleep(0.4)
+        w.calls["faucet"] += 1
+
+    w._maybe_faucet_request = slow_faucet
+
+    async def drive():
+        t = asyncio.create_task(w._ensure_initialized())
+        await asyncio.wait_for(started.wait(), timeout=TIMEOUT)
+        await asyncio.wait_for(w._ensure_initialized(), timeout=0.1)   # must not block
+        await asyncio.wait_for(t, timeout=TIMEOUT)
+
+    try:
+        asyncio.run(drive())
+    except asyncio.TimeoutError:
+        pytest.fail("second caller queued behind the slow optional phase")
+    assert w.calls["faucet"] == 1, "optional steps ran more than once"
