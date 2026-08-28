@@ -610,7 +610,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         if balance >= MIN_ALLO:
             return
-        logger.info(f"    Requesting ALLO from testnet faucet...")
+        logger.info("    Requesting ALLO from testnet faucet...")
 
         for faucet_attempt in range(MAX_FAUCET_RETRIES):
             try:
@@ -626,7 +626,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     },
                 )
                 faucet_resp.raise_for_status()
-                logger.info(f"    Request sent...")
+                logger.info("    Request sent...")
 
                 for _ in range(MAX_BALANCE_POLLS_PER_FAUCET_REQUEST):
                     await asyncio.sleep(5)
@@ -642,7 +642,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 logger.warning("    Faucet request succeeded but balance did not update in time, retrying...")
             except requests.HTTPError as err:
                 if err.response.status_code == 429:
-                    logger.error(f"    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
+                    logger.error("    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
                     self.stop()
                     sys.exit(-1)
                 logger.error(f"    Error requesting funds from wallet: {err}")
@@ -793,7 +793,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _polling_worker(self, ctx: Context):
         await self._ensure_initialized()
 
-        logger.info(f"🔄 Starting polling worker")
+        logger.info("🔄 Starting polling worker")
 
         while not ctx.is_cancelled():
             try:
