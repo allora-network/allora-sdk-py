@@ -126,3 +126,59 @@ def test_concurrent_callers_initialise_once():
     except asyncio.TimeoutError:
         pytest.fail("concurrent startup deadlocked")
     assert w.calls["chain_id"] == 1, f"initialised {w.calls['chain_id']} times"
+
+
+def test_slow_optional_steps_do_not_block_other_callers():
+    """The faucet cycle can await minutes of polling. Holding the init lock
+    across it would stall every concurrent caller -- including a submission
+    window opening in the meantime, which is the failure this PR removes.
+
+    So the lock must cover only chain id and polling derivation; banner,
+    balance and faucet run outside it.
+    """
+    w = _worker()
+    released = asyncio.Event()
+    other_finished = []
+
+    async def slow_faucet():
+        await w._ensure_initialized()          # real re-entrant call
+        released.set()
+        await asyncio.sleep(0.3)               # stands in for the faucet wait
+        w.calls["faucet"] += 1
+
+    w._maybe_faucet_request = slow_faucet
+
+    async def drive():
+        init = asyncio.create_task(w._ensure_initialized())
+        await asyncio.wait_for(released.wait(), timeout=TIMEOUT)
+        # while the faucet is still waiting, another caller must get through
+        await asyncio.wait_for(w._ensure_initialized(), timeout=0.1)
+        other_finished.append(True)
+        await asyncio.wait_for(init, timeout=TIMEOUT)
+
+    try:
+        asyncio.run(drive())
+    except asyncio.TimeoutError:
+        pytest.fail("a concurrent caller was blocked by the slow optional steps")
+
+    assert other_finished == [True]
+    assert w._initialized is True
+
+
+def test_essential_steps_still_happen_before_init_is_recorded():
+    """Narrowing the lock must not mark the worker ready before the chain id
+    and polling interval are actually resolved."""
+    w = _worker()
+    seen = {}
+
+    async def derive():
+        seen["initialized_during_derive"] = w._initialized
+        return None
+
+    w._derive_polling_interval = derive
+    _run(w._ensure_initialized())
+
+    assert seen["initialized_during_derive"] is False, (
+        "worker was marked initialised before the polling interval was derived"
+    )
+    assert w._initialized is True

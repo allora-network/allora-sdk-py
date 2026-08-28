@@ -438,21 +438,30 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
         if self._initialized:
             return
+
+        topic = None
         async with self._init_lock:
             if self._initialized:
                 return
             self._initializing_task = asyncio.current_task()
             try:
+                # Only what other callers genuinely need before they can work:
+                # the chain identity and the polling cadence.
                 self._chain_id = await self.client.raise_for_chain_id_mismatch()
-
                 topic = await self._derive_polling_interval()
-                await self._show_banner(topic)
-                await self._log_balance()
-                await self._maybe_faucet_request()
-
                 self._initialized = True
             finally:
                 self._initializing_task = None
+
+        # Banner, balance and faucet run outside the lock. The faucet cycle
+        # alone can await several minutes of polling and sleeps, and holding a
+        # non-reentrant lock across that would stall every concurrent caller --
+        # including submission windows opening in the meantime, which is the
+        # failure this PR exists to remove. All three tolerate their own
+        # failures, so none of them belongs in the critical section.
+        await self._show_banner(topic)
+        await self._log_balance()
+        await self._maybe_faucet_request()
 
 
     async def _derive_polling_interval(self) -> Optional[Any]:
