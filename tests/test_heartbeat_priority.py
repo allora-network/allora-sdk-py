@@ -51,31 +51,71 @@ def test_heartbeat_is_sent_before_caller_subscriptions():
     )
 
 
-def test_rejected_subscription_is_logged_not_swallowed():
-    """A cap rejection must be visible. The heartbeat branch in _handle_message
-    returns early to keep NewBlockHeader frames out of the structured parser;
-    it must log an error frame before doing so."""
-    src = pathlib.Path(ws_mod.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(src)
+def _heartbeat_branch() -> ast.If:
+    """The `if message_id == _HEARTBEAT_SUBSCRIPTION_ID:` node in _handle_message."""
+    tree = ast.parse(pathlib.Path(ws_mod.__file__).read_text(encoding="utf-8"))
     handler = next(
         (n for n in ast.walk(tree)
          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "_handle_message"),
         None,
     )
     assert handler is not None, "_handle_message not found"
-
-    # Find the heartbeat-id comparison, then require a logger.error reachable
-    # from that branch before its return.
     for node in ast.walk(handler):
-        if not isinstance(node, ast.If):
-            continue
-        test_src = ast.unparse(node.test)
-        if "_HEARTBEAT_SUBSCRIPTION_ID" not in test_src:
-            continue
-        body = ast.unparse(ast.Module(body=node.body, type_ignores=[]))
-        assert "logger.error" in body, (
-            "the heartbeat branch returns without logging an error frame; a "
-            "rejected heartbeat would be invisible"
-        )
-        return
+        if isinstance(node, ast.If) and "_HEARTBEAT_SUBSCRIPTION_ID" in ast.unparse(node.test):
+            return node
     pytest.fail("no heartbeat-id branch found in _handle_message")
+
+
+def test_rejected_heartbeat_is_logged_before_the_branch_returns():
+    """A cap rejection must be visible.
+
+    The heartbeat branch returns early to keep NewBlockHeader frames out of the
+    structured parser. It must log an error frame *before* that return, and the
+    log must be conditional on the frame actually being an error -- otherwise
+    either the rejection is invisible or every block logs an error.
+
+    Checked structurally rather than by substring: a `logger.error` sitting
+    after an unconditional `return`, or outside any error test, is dead or
+    wrong but would satisfy a text match.
+    """
+    branch = _heartbeat_branch()
+
+    logged_before_return = False
+    for stmt in branch.body:                      # top-level statements, in order
+        if isinstance(stmt, ast.Return):
+            break                                 # anything after this is unreachable
+        if not isinstance(stmt, ast.If):
+            continue
+        if "error" not in ast.unparse(stmt.test):
+            continue                              # not the error-frame guard
+        calls = [
+            n for n in ast.walk(stmt)
+            if isinstance(n, ast.Call)
+            and getattr(n.func, "attr", None) == "error"
+            and getattr(n.func.value, "id", None) == "logger"
+        ]
+        if calls:
+            logged_before_return = True
+            break
+
+    assert logged_before_return, (
+        "the heartbeat branch reaches its return without an error-conditional "
+        "logger.error; a rejected heartbeat would be invisible, and the "
+        "watchdog would lose its only source of traffic silently"
+    )
+
+
+def test_heartbeat_logging_is_not_unconditional():
+    """Guard the other direction: logging every heartbeat frame would emit an
+    error per block, which is what the early return exists to prevent."""
+    branch = _heartbeat_branch()
+    bare = [
+        stmt for stmt in branch.body
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+        and getattr(stmt.value.func, "attr", None) == "error"
+        and getattr(stmt.value.func.value, "id", None) == "logger"
+    ]
+    assert not bare, (
+        "logger.error is called unconditionally in the heartbeat branch; it "
+        "would fire once per block, not only on a rejection"
+    )
