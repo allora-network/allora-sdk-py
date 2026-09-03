@@ -217,9 +217,7 @@ class AlloraNetworkConfig:
             fee_minimum_gas_price=_env_float((env_prefix or "") + "FEE_MIN_GAS_PRICE", required=True),
             event_recv_timeout_secs=_env_float((env_prefix or "") + "EVENT_RECV_TIMEOUT_SECS", 30.0),
             max_event_silence_secs=_env_float((env_prefix or "") + "MAX_EVENT_SILENCE_SECS", 60.0),
-            websocket_heartbeat=(
-                hb if (hb := _env_bool((env_prefix or "") + "WEBSOCKET_HEARTBEAT")) is not None else True
-            ),
+            websocket_heartbeat=_env_bool((env_prefix or "") + "WEBSOCKET_HEARTBEAT", True),
         )
 
     def to_cosmpy_config(self) -> NetworkConfig:
@@ -232,17 +230,17 @@ class AlloraNetworkConfig:
         )
 
 
-def _env_bool(name: str) -> "bool | None":
-    """Parse an optional boolean environment variable strictly, raising on unrecognised values.
+def _env_bool(name: str, default: "bool | None" = None) -> "bool | None":
+    """Read a boolean env var, raising on unrecognised values.
 
     Returning False for anything unrecognised would let a typo silently flip a
     safety-relevant knob with no signal, so only the known spellings are
-    accepted. Blank is treated as unset, matching _env_float: a k8s manifest
-    that renders `value: ""` for an unconfigured knob must not be an error.
+    accepted. Blank counts as unset, matching _env_float: a k8s manifest that
+    renders `value: ""` for an unconfigured knob must not be an error.
     """
     value = os.getenv(name)
     if value is None or not value.strip():
-        return None
+        return default
 
     normalized = value.strip().lower()
     if normalized in ("1", "true", "yes"):

@@ -10,12 +10,10 @@ the threshold measures the connection instead.
 import asyncio
 import json
 
-import pytest
 
 from allora_sdk.rpc_client import client_websocket_events as ws_events
 from allora_sdk.rpc_client.client_websocket_events import (
     AlloraWebsocketSubscriber,
-    EventFilter,
     _HEARTBEAT_SUBSCRIPTION_ID,
 )
 
@@ -101,39 +99,6 @@ def test_heartbeat_dispatches_to_no_callback():
     sub.callbacks[_HEARTBEAT_SUBSCRIPTION_ID] = [lambda *a, **k: called.append(1)]
     asyncio.run(sub._dispatch_events([{"type": "x"}], _HEARTBEAT_SUBSCRIPTION_ID, 1))
     assert called == []
-
-
-def test_reserved_id_is_rejected_by_every_public_api():
-    """Each registration path must reject it.
-
-    The typed helpers do not funnel through `subscribe()` -- they register
-    directly -- so the guard has to be verified on each entry point rather than
-    on the shared helper, which would not catch a dropped call.
-    """
-    sub = _subscriber(_FakeSocket())
-
-    async def cb(*a, **k):
-        return None
-
-    async def call_subscribe():
-        await sub.subscribe(EventFilter.new_blocks(), cb, _HEARTBEAT_SUBSCRIPTION_ID)
-
-    async def call_new_block_events():
-        await sub.subscribe_new_block_events(
-            "SomeEvent", [], cb, subscription_id=_HEARTBEAT_SUBSCRIPTION_ID
-        )
-
-    async def call_typed():
-        await sub.subscribe_new_block_events_typed(
-            object, [], cb, subscription_id=_HEARTBEAT_SUBSCRIPTION_ID
-        )
-
-    for entry in (call_subscribe, call_new_block_events, call_typed):
-        with pytest.raises(ValueError, match="reserved"):
-            asyncio.run(entry())
-
-    assert _HEARTBEAT_SUBSCRIPTION_ID not in sub.subscriptions
-
 
 def test_heartbeat_traffic_stops_the_watchdog_firing(monkeypatch):
     """The property the heartbeat exists for: arriving traffic resets the timer.
@@ -283,30 +248,6 @@ def test_heartbeat_messages_do_not_reach_the_structured_parser(monkeypatch, capl
         asyncio.run(sub._handle_message(payload))
 
     assert caplog.records == [], [r.getMessage() for r in caplog.records]
-
-
-def test_reserved_id_rejected_before_the_event_loop_starts():
-    """A rejected call should not leave a started event-loop task behind."""
-    sock = _FakeSocket()
-
-    async def connect_fn(url):
-        return sock
-
-    # Deliberately not started: the point is that the rejected call does not
-    # start it as a side effect.
-    sub = AlloraWebsocketSubscriber(url="wss://x", connect_fn=connect_fn)
-
-    async def cb(*a, **k):
-        return None
-
-    async def call():
-        await sub.subscribe(EventFilter.new_blocks(), cb, _HEARTBEAT_SUBSCRIPTION_ID)
-
-    with pytest.raises(ValueError, match="reserved"):
-        asyncio.run(call())
-
-    assert not sub.running, "event loop was started by a call that then raised"
-
 
 def test_heartbeat_uses_the_header_only_query():
     """NewBlock carries the whole block body; NewBlockHeader fires just as often

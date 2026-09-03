@@ -34,7 +34,7 @@ def _worker(fail_times: int = 0):
     w = object.__new__(AlloraWorker)
     w._initialized = False
     w._init_lock = asyncio.Lock()
-    w._initializing_tasks = set()
+    w._startup_tasks = set()
     w._optional_steps_done = False
     w._optional_steps_running = False
     w._polling_interval_derived = False
@@ -101,7 +101,7 @@ def test_failed_init_is_retried_not_recorded_as_done():
     with pytest.raises(_Boom):
         _run(w._ensure_initialized())
     assert w._initialized is False, "failed init was recorded as complete"
-    assert w._initializing_tasks == set(), "re-entrancy marker leaked after a failure"
+    assert w._startup_tasks == set(), "re-entrancy marker leaked after a failure"
 
     _run(w._ensure_initialized())
     assert w._initialized is True

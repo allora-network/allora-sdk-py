@@ -119,3 +119,43 @@ def test_heartbeat_logging_is_not_unconditional():
         "logger.error is called unconditionally in the heartbeat branch; it "
         "would fire once per block, not only on a rejection"
     )
+
+
+def test_functional_subscriptions_precede_the_log_only_ones():
+    """Under a server-side subscription cap the trailing subscribe is the one
+    rejected, so the log-only diagnostics must come last.
+
+    With autostake enabled a worker opens 5 subscriptions plus the heartbeat.
+    If the two *SubmissionWindowClosed log listeners sit ahead of the rewards
+    subscription, the rejected one is the subscription that drives autostaking
+    and rewards events stop arriving -- while two log lines keep their slots.
+    """
+    import ast
+    import pathlib
+
+    from allora_sdk.worker import worker as worker_mod
+
+    tree = ast.parse(pathlib.Path(worker_mod.__file__).read_text(encoding="utf-8"))
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "_subscribe_websocket_events"
+    )
+
+    order = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "subscribe_new_block_events_typed":
+            evt = node.args[0] if node.args else None
+            if isinstance(evt, ast.Name):
+                order.append((node.lineno, evt.id))
+    order.sort()
+    names = [n for _, n in order]
+
+    assert "EventRewardsSettled" in names, "autostake subscription not found"
+    rewards = names.index("EventRewardsSettled")
+    for diag in ("EventWorkerSubmissionWindowClosed", "EventReputerSubmissionWindowClosed"):
+        assert diag in names, f"{diag} subscription not found"
+        assert names.index(diag) > rewards, (
+            f"{diag} is a log-only diagnostic but is subscribed before the functional "
+            "rewards subscription; under a cap the rejected one would be autostake"
+        )

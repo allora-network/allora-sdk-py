@@ -144,22 +144,28 @@ def test_block_duration_is_last_so_positional_callers_are_unaffected(factory):
     )
 
 
-def test_reputer_keeps_the_default_interval(monkeypatch):
-    """A reputer cannot recover a dropped window by polling.
+def test_reputer_derives_like_every_other_role(monkeypatch):
+    """Reputers derive their interval from the window too.
 
-    Reputer.get_unfulfilled_nonces() returns an empty set because the
-    open-window RPC is not wired, so the poll loop only re-runs the whitelist
-    check. Deriving a tighter interval adds query traffic and recovers nothing.
+    An earlier revision exempted them, because Reputer.get_unfulfilled_nonces()
+    returned an empty set and polling could not recover a dropped window. #96
+    wires GetOpenReputerSubmissionWindows, so polling now finds real nonces and
+    a 120s cadence would poll straight past a shorter window.
     """
     from allora_sdk.rpc_client.protos.emissions.v10 import (
         EventReputerSubmissionWindowOpened,
     )
 
-    w = _Worker(9)                      # a 54s window, which would derive 18s
+    w = _Worker(9)                      # a 54s window
     w.use_case = types.SimpleNamespace(
         submission_window_event_type=lambda: EventReputerSubmissionWindowOpened
     )
-    assert _run(w) == DEFAULT_POLLING_INTERVAL_SECS
+    derived = _run(w)
+    assert derived != DEFAULT_POLLING_INTERVAL_SECS, (
+        "reputer still pinned to the default; a dropped window would be found "
+        "only after it closed"
+    )
+    assert derived == 18.0, derived
 
 
 def test_non_reputer_still_derives(monkeypatch):

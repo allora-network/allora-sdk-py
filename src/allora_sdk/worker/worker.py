@@ -117,8 +117,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission
-                windows. None (the default) derives it from the topic's own
-                submission window; pass an int only to override that.
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, capped at
+                DEFAULT_POLLING_INTERVAL_SECS.
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
@@ -397,7 +398,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         self._initialized = False
         self._init_lock = asyncio.Lock()
-        self._initializing_tasks = set()
+        self._startup_tasks = set()
         self._optional_steps_done = False
         self._optional_steps_running = False
         self._polling_interval_derived = False
@@ -428,73 +429,74 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _ensure_initialized(self):
-        """Run one-time startup, recording each phase only once it has happened.
+        """Run one-time startup, in two phases with different failure rules.
 
-        Two phases, tracked separately. The essential phase -- chain identity and
-        polling cadence -- is what other callers need before they can work, so it
-        runs under a lock. The optional phase -- banner, balance, faucet -- runs
-        outside it, because the faucet cycle alone can await minutes of polling
-        and holding a non-reentrant lock across that would stall concurrent
-        callers, including submission windows opening in the meantime.
+        Essential (chain id, polling cadence): every caller needs it before it
+        can submit, so it is serialised and its failures propagate.
 
-        Both phases are guarded against same-task re-entry: `_log_balance` and
-        `_maybe_faucet_request` call back into this method, and asyncio.Lock is
-        not reentrant, so a nested call would deadlock or re-run the phase.
+        Startup steps (banner, balance, faucet): best-effort. A failure is
+        logged and the worker carries on.
         """
         me = asyncio.current_task()
-        if me in self._initializing_tasks:
+        if me in self._startup_tasks:
+            # _log_balance and _maybe_faucet_request call back into this method.
+            # From inside the startup steps that is a no-op, not a second pass.
             return
         if self._initialized and self._optional_steps_done and self._polling_interval_derived:
             return
 
-        topic = None
-        self._initializing_tasks.add(me)
+        self._startup_tasks.add(me)
         try:
-            if not self._initialized:
-                async with self._init_lock:
-                    if not self._initialized:
-                        self._chain_id = await self.client.raise_for_chain_id_mismatch()
-                        topic = await self._derive_polling_interval()
-                        self._initialized = True
-            elif not self._polling_interval_derived:
-                # A transient topic query at startup leaves the interval on the
-                # 120s fallback. Without a retry the worker keeps that for its
-                # lifetime and polls straight past a short submission window --
-                # the exact failure this PR removes. `_ensure_initialized` runs
-                # each submission cycle, so this re-attempts naturally.
-                #
-                # Under the lock, unlike the optional steps: this is a single
-                # short query rather than minutes of faucet polling, so the
-                # cost of serialising it is negligible next to every concurrent
-                # caller firing its own duplicate topic lookup.
-                async with self._init_lock:
-                    if not self._polling_interval_derived:
-                        topic = await self._derive_polling_interval()
-
-            # Best-effort: none of these gates the worker's ability to submit.
-            # Letting one raise would fail the caller while `_initialized` is
-            # already set, so a transient balance query would look like a
-            # permanently broken worker. Completion is tracked separately so a
-            # cancellation here is retried by the next caller rather than
-            # silently skipping the faucet forever.
-            if not self._optional_steps_done and not self._optional_steps_running:
-                # Not a lock: a second caller arriving mid-faucet returns
-                # immediately rather than queueing behind minutes of polling.
-                # The flag is cleared in `finally`, so a cancelled run is
-                # retried by whoever comes next.
-                self._optional_steps_running = True
-                try:
-                    for step in (lambda: self._show_banner(topic), self._log_balance,
-                                 self._maybe_faucet_request):
-                        try:
-                            await step()
-                        except Exception as e:
-                            logger.warning(f"Optional startup step failed, continuing: {e}")
-                    self._optional_steps_done = True
-                finally:
-                    self._optional_steps_running = False
+            topic = await self._resolve_chain_essentials()
+            await self._run_startup_steps_once(topic)
         finally:
-            self._initializing_tasks.discard(me)
+            self._startup_tasks.discard(me)
+
+
+    async def _resolve_chain_essentials(self):
+        """Chain id and polling cadence. Returns the topic when one was
+        fetched, so the banner can reuse it instead of querying again."""
+        if not self._initialized:
+            async with self._init_lock:
+                if not self._initialized:
+                    self._chain_id = await self.client.raise_for_chain_id_mismatch()
+                    topic = await self._derive_polling_interval()
+                    self._initialized = True
+                    return topic
+        elif not self._polling_interval_derived:
+            # A transient topic query at startup leaves the interval on the
+            # default; without this retry the worker keeps that for its lifetime
+            # and polls straight past a short submission window. Serialised so
+            # concurrent callers do not each fire their own duplicate lookup.
+            async with self._init_lock:
+                if not self._polling_interval_derived:
+                    return await self._derive_polling_interval()
+        return None
+
+
+    async def _run_startup_steps_once(self, topic):
+        """Banner, balance and faucet request.
+
+        Completion is tracked separately from `_initialized` so a run cancelled
+        midway -- the faucet can poll for minutes -- is retried by the next
+        caller rather than skipped for the process lifetime.
+        """
+        if self._optional_steps_done or self._optional_steps_running:
+            return
+        # A flag rather than the lock: a second caller arriving mid-faucet
+        # returns immediately instead of queueing behind minutes of polling.
+        self._optional_steps_running = True
+        try:
+            for step in (lambda: self._show_banner(topic), self._log_balance,
+                         self._maybe_faucet_request):
+                try:
+                    await step()
+                except Exception as e:
+                    logger.warning(f"Optional startup step failed, continuing: {e}")
+            self._optional_steps_done = True
+        finally:
+            self._optional_steps_running = False
+
 
     async def _derive_polling_interval(self) -> Optional[Any]:
         """Size the fallback poll against the topic's submission window.
@@ -513,23 +515,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         except Exception as e:
             logger.warning(f"Could not read topic {self.topic_id}: {e}")
 
-        # A reputer cannot recover a dropped window by polling: its
-        # get_unfulfilled_nonces() returns an empty set because the open-window
-        # RPC is not wired, so the poll loop only re-runs the whitelist check.
-        # Deriving a tighter interval would add query traffic and recover
-        # nothing; the heartbeat is the only net a reputer has.
-        try:
-            is_reputer = self.use_case.submission_window_event_type() is EventReputerSubmissionWindowOpened
-        except Exception:
-            is_reputer = False
-        if is_reputer:
-            logger.info(
-                f"Polling every {self.polling_interval}s for topic {self.topic_id} "
-                f"(reputer: polling cannot recover a dropped submission window, so the "
-                f"interval is not derived from it)"
-            )
-            self._polling_interval_derived = True
-            return topic
 
         if self._explicit_polling_interval is not None:
             logger.info(
@@ -562,12 +547,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         return topic
 
     async def _show_banner(self, topic: Optional[Any] = None) -> None:
-        # The topic was already fetched during init; querying again here would
-        # be a second chain round-trip for identical data on every startup.
         if topic is None:
-            # Best effort: the banner is cosmetic, so a chain blip here must not
-            # take down startup -- especially since the caller already tolerates
-            # this exact query failing.
+            # The banner is cosmetic, so a chain blip must not take down startup.
             try:
                 resp = await self.client.emissions.query.get_topic(
                     GetTopicRequest(topic_id=int(self.topic_id))
@@ -853,11 +834,24 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         self._subscription_ids.append(id)
 
-        # These two are diagnostics only -- their callbacks log and drive
-        # nothing. They are kept because the heartbeat does not need a slot
-        # reserved for it: it is subscribed first, before any of these, so a
-        # server that does enforce max_subscriptions_per_client rejects a
-        # trailing close-window listener rather than the liveness heartbeat.
+        # Before the diagnostics below: this one drives autostaking, so it must
+        # not be the subscription a capped server rejects.
+        if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
+            id = await self.client.events.subscribe_new_block_events_typed(
+                EventRewardsSettled,
+                [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
+                self.use_case.handle_rewards_settled,
+            )
+            self._subscription_ids.append(id)
+            logger.info(
+                f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
+            )
+
+        # Diagnostics only -- these callbacks log and drive nothing, so they go
+        # last. Under a server-side max_subscriptions_per_client the trailing
+        # subscription is the one rejected, and losing a log line is the
+        # cheapest thing to lose: the heartbeat is sent first in _connect, and
+        # the functional rewards subscription above precedes these.
         id = await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
@@ -870,18 +864,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
         self._subscription_ids.append(id)
-
-        # Subscribe to rewards events for autostaking if configured on the use case
-        if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
-            id = await self.client.events.subscribe_new_block_events_typed(
-                EventRewardsSettled,
-                [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
-                self.use_case.handle_rewards_settled,
-            )
-            self._subscription_ids.append(id)
-            logger.info(
-                f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
-            )
 
 
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):

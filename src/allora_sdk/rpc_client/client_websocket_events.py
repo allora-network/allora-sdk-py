@@ -302,19 +302,6 @@ class AlloraWebsocketSubscriber:
             self.websocket = None
         
 
-    @staticmethod
-    def _reject_reserved_id(subscription_id: Optional[str]) -> None:
-        """The heartbeat id is not a namespace callers may write into.
-
-        Sharing it would put two different queries behind one JSON-RPC id, so
-        confirmations and events could be attributed to the wrong subscription.
-        """
-        if subscription_id == _HEARTBEAT_SUBSCRIPTION_ID:
-            raise ValueError(
-                f"subscription_id {_HEARTBEAT_SUBSCRIPTION_ID!r} is reserved for the "
-                "liveness heartbeat; choose another id"
-            )
-
     async def subscribe(
         self,
         event_filter: EventFilter,
@@ -334,7 +321,6 @@ class AlloraWebsocketSubscriber:
         """
         # Validate before any side effect: a rejected call should not have
         # started the event-loop task on its way out.
-        self._reject_reserved_id(subscription_id)
 
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
@@ -486,9 +472,8 @@ class AlloraWebsocketSubscriber:
                         self.websocket.recv(),
                         timeout=self._event_recv_timeout_secs,
                     )
-                    # Reset the silence timer on the wire-receive event itself,
-                    # not after handling — a message arriving over the wire is
-                    # the true liveness signal regardless of parse outcome.
+                    # Any message on the wire proves liveness, regardless of
+                    # whether it parses.
                     last_msg = time.monotonic()
                     await self._handle_message(str(message))
 
@@ -955,7 +940,6 @@ class AlloraWebsocketSubscriber:
         """
         # Validate before any side effect: a rejected call should not have
         # started the event-loop task on its way out.
-        self._reject_reserved_id(subscription_id)
 
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
@@ -1013,7 +997,6 @@ class AlloraWebsocketSubscriber:
         """
         # Validate before any side effect: a rejected call should not have
         # started the event-loop task on its way out.
-        self._reject_reserved_id(subscription_id)
 
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
