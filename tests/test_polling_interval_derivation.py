@@ -180,3 +180,35 @@ def test_non_reputer_still_derives(monkeypatch):
         submission_window_event_type=lambda: EventWorkerSubmissionWindowOpened
     )
     assert _run(w) == int(9 * 6.0 / POLLS_PER_WINDOW)
+
+
+def test_reputer_polling_is_now_a_real_fallback():
+    """The two halves of the reputer fallback have to be present together.
+
+    Deriving a tight interval is only worth the query traffic if polling can
+    actually discover a nonce, and #96's discovery is only reachable often
+    enough to matter if the interval is derived from the window. Either half
+    alone is a no-op, and each shipped in a different PR — so pin the pair.
+    """
+    import inspect
+
+    from allora_sdk.worker.reputer import Reputer
+
+    src = inspect.getsource(Reputer.get_unfulfilled_nonces)
+    assert "get_open_reputer_submission_windows" in src, (
+        "reputer nonce discovery is not wired; a derived interval would poll "
+        "for something that can never be found"
+    )
+    assert "return set[int]()" not in src.split("if resp.nonces is None")[0], (
+        "get_unfulfilled_nonces short-circuits before querying"
+    )
+
+    from allora_sdk.rpc_client.protos.emissions.v10 import (
+        EventReputerSubmissionWindowOpened,
+    )
+
+    w = _Worker(9)
+    w.use_case = types.SimpleNamespace(
+        submission_window_event_type=lambda: EventReputerSubmissionWindowOpened
+    )
+    assert _run(w) == 18.0, "reputer is not deriving from its window"
