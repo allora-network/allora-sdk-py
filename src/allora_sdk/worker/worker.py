@@ -745,7 +745,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             self.stop()
             return
 
-        nonces = await self.use_case.get_unfulfilled_nonces()
+        # catch errors so that `nonce` is still processed if query fails
+        try:
+            nonces = await self.use_case.get_unfulfilled_nonces()
+        except Exception as err:
+            logger.warning(f"   Failed querying unfulfilled nonces for topic {self.topic_id}: {err}")
+            nonces = set()
         new_nonces = { n for n in nonces if n not in self.submitted_nonces }
 
         if nonce is not None and nonce not in self.submitted_nonces:
