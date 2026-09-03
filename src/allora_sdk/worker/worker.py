@@ -118,8 +118,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission
                 windows. If None (the default), set to the topic's submission
-                window length / POLLS_PER_WINDOW, capped at
-                DEFAULT_POLLING_INTERVAL_SECS.
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
@@ -208,8 +208,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id: The Allora network topic ID to submit reputer payloads to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission
-                windows. None (the default) derives it from the topic's own
-                submission window; pass an int only to override that.
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
@@ -302,8 +303,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id: The Allora network topic ID to submit forecasts to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission
-                windows. None (the default) derives it from the topic's own
-                submission window; pass an int only to override that.
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
@@ -383,10 +385,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
             polling_interval: Interval in seconds to poll for new submission
-                windows. Leave as None to derive it from the topic's own
-                submission window, which is what you want: a fixed interval
-                longer than the window turns a dropped event into a missed
-                submission. Pass an int only to override that.
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
             debug: Enable debug logging

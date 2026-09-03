@@ -119,10 +119,17 @@ class EventAttributeCondition:
         return f"EventAttributeCondition({self.attribute_name} {self.operator} {self.value})"
 
 
-# Reserved id for the liveness heartbeat subscription. It is deliberately kept
-# out of ``self.subscriptions`` so it dispatches to no callback: its only job is
-# to put traffic on the wire.
-_HEARTBEAT_SUBSCRIPTION_ID = "__allora_liveness_heartbeat__"
+# JSON-RPC id of the liveness heartbeat subscription. An int, while every
+# caller id is a str (`subscribe` generates "sub_N" and a falsy argument is
+# replaced), so a caller cannot collide with it: `0 == "0"` is False, and
+# passing the int 0 is falsy and gets replaced. Collision would otherwise be
+# quietly destructive -- the heartbeat branch in `_handle_message` swallows
+# every frame carrying this id, so the caller's subscription would never
+# confirm, and `unsubscribe` on it would tear down the heartbeat itself.
+#
+# Kept out of `self.subscriptions` so it dispatches to no callback: its only
+# job is to put traffic on the wire.
+_HEARTBEAT_SUBSCRIPTION_ID = 0
 
 
 class EventFilter:
@@ -319,9 +326,6 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
-        # Validate before any side effect: a rejected call should not have
-        # started the event-loop task on its way out.
-
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
 
@@ -407,7 +411,7 @@ class AlloraWebsocketSubscriber:
                     logger.error(f"Connection attempt {attempts} failed: {e}")
                     await asyncio.sleep(self.reconnect_delay)
     
-    async def _send_subscription(self, subscription_id: str, query: str):
+    async def _send_subscription(self, subscription_id: "str | int", query: str):
         """Send subscription request."""
         if not self.websocket or self.websocket.close_code:
             return

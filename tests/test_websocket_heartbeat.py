@@ -353,3 +353,32 @@ def test_successful_confirmation_still_marks_active():
 
     asyncio.run(sub._handle_message(payload))
     assert sub.subscriptions["sub_9"]["active"] is True
+
+
+def test_caller_ids_cannot_collide_with_the_heartbeat_id():
+    """The heartbeat id must be unreachable from the caller-facing API.
+
+    A collision is quietly destructive: the heartbeat branch in _handle_message
+    swallows every frame carrying that id, so the caller's subscription never
+    confirms and its events are dropped; on reconnect two different queries go
+    out under one id; and unsubscribe() on it tears down the real heartbeat,
+    leaving the wire silent and the watchdog reconnecting on every interval.
+
+    Rather than validating against it, the id is an int while every caller id is
+    a str, so the two value spaces cannot meet.
+    """
+    from allora_sdk.rpc_client.client_websocket_events import _HEARTBEAT_SUBSCRIPTION_ID
+
+    assert isinstance(_HEARTBEAT_SUBSCRIPTION_ID, int), (
+        "a str heartbeat id shares a namespace with caller ids and can be collided with"
+    )
+    assert not isinstance(_HEARTBEAT_SUBSCRIPTION_ID, bool)
+
+    # The string spelling of the id is a different value, so it cannot match.
+    assert str(_HEARTBEAT_SUBSCRIPTION_ID) != _HEARTBEAT_SUBSCRIPTION_ID
+
+    # And the int itself is falsy, so `if not subscription_id` replaces it with
+    # a generated "sub_N" before it is ever stored.
+    assert not _HEARTBEAT_SUBSCRIPTION_ID, (
+        "a truthy int id would survive the falsy-check in subscribe() and collide"
+    )
