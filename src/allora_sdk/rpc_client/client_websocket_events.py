@@ -119,6 +119,19 @@ class EventAttributeCondition:
         return f"EventAttributeCondition({self.attribute_name} {self.operator} {self.value})"
 
 
+# JSON-RPC id of the liveness heartbeat subscription. An int, while every
+# caller id is a str (`subscribe` generates "sub_N" and a falsy argument is
+# replaced), so a caller cannot collide with it: `0 == "0"` is False, and
+# passing the int 0 is falsy and gets replaced. Collision would otherwise be
+# quietly destructive -- the heartbeat branch in `_handle_message` swallows
+# every frame carrying this id, so the caller's subscription would never
+# confirm, and `unsubscribe` on it would tear down the heartbeat itself.
+#
+# Kept out of `self.subscriptions` so it dispatches to no callback: its only
+# job is to put traffic on the wire.
+_HEARTBEAT_SUBSCRIPTION_ID = 0
+
+
 class EventFilter:
     """Event filter for subscription queries."""
 
@@ -169,6 +182,18 @@ class EventFilter:
         return EventFilter().event_type('NewBlock')
 
     @staticmethod
+    def _new_block_headers():
+        """The liveness heartbeat's filter. Private on purpose.
+
+        CometBFT keys a subscription by (connection, query), not by JSON-RPC id,
+        so a caller subscribing to this same query would be rejected as a
+        duplicate of the heartbeat -- and their `unsubscribe` would remove the
+        heartbeat's subscription, silencing the wire and leaving the watchdog
+        reconnecting on every interval.
+        """
+        return EventFilter().event_type('NewBlockHeader')
+
+    @staticmethod
     def transactions():
         """Filter for transaction events."""
         return EventFilter().event_type('Tx')
@@ -197,16 +222,28 @@ class AlloraWebsocketSubscriber:
         url: str,
         connect_fn: ConnectFn = default_websocket_connect,
         event_recv_timeout_secs: float = _EVENT_RECV_TIMEOUT_SECS,
-        max_event_silence_secs: float = _MAX_EVENT_SILENCE_SECS,
+        max_event_silence_secs: "float | None" = _MAX_EVENT_SILENCE_SECS,
+        heartbeat: bool = True,
     ):
         """Initialize event subscriber with Allora client.
 
         ``max_event_silence_secs`` gates the deaf-subscription watchdog: after
-        this long with no message the loop forces a reconnect+resubscribe.
-        The default suits subscriptions that receive a message roughly per block
-        (e.g. NewBlock-based queries). Raise it for subscriptions that can be
-        legitimately idle longer than the default, to avoid reconnecting a
-        healthy-but-quiet stream.
+        this long with no message the loop forces a reconnect+resubscribe. Set
+        it to ``None`` or ``0`` to disable the watchdog entirely, leaving
+        liveness to the websocket library's own ping/pong -- which detects a
+        dead transport but not a subscription the server has stopped pushing.
+
+        With ``heartbeat`` enabled (the default) a NewBlockHeader subscription is
+        added to every connection, so the wire carries a message roughly per
+        block regardless of how quiet the caller's own subscriptions are. That
+        keeps the threshold measuring the *connection* rather than the caller's
+        event cadence: silence then genuinely means the server stopped pushing.
+
+        Disable ``heartbeat`` only if the extra per-block traffic is
+        unacceptable, and then raise ``max_event_silence_secs`` above the
+        expected gap between events -- otherwise the watchdog will reconnect a
+        healthy-but-quiet stream, and an event arriving during the reconnect is
+        lost.
         """
         # A non-positive recv timeout would make recv() return instantly and
         # ping-storm the loop; a silence threshold at/below the recv timeout
@@ -216,16 +253,22 @@ class AlloraWebsocketSubscriber:
             raise ValueError(
                 f"event_recv_timeout_secs must be > 0, got {event_recv_timeout_secs!r}"
             )
-        if max_event_silence_secs <= event_recv_timeout_secs:
-            raise ValueError(
-                "max_event_silence_secs must be greater than event_recv_timeout_secs "
-                f"({max_event_silence_secs!r} <= {event_recv_timeout_secs!r})"
-            )
+        # None/0 disables the watchdog. Any other value at or below the recv
+        # timeout would trip it on every idle recv cycle and reconnect-storm,
+        # so that stays an error rather than a silent near-miss.
+        if max_event_silence_secs is not None and max_event_silence_secs != 0:
+            if max_event_silence_secs <= event_recv_timeout_secs:
+                raise ValueError(
+                    "max_event_silence_secs must be greater than event_recv_timeout_secs, "
+                    f"or None/0 to disable the watchdog "
+                    f"({max_event_silence_secs!r} <= {event_recv_timeout_secs!r})"
+                )
 
         self.url = url
         self.connect_fn = connect_fn
         self._event_recv_timeout_secs = event_recv_timeout_secs
-        self._max_event_silence_secs = max_event_silence_secs
+        self._max_event_silence_secs = max_event_silence_secs or None
+        self._heartbeat = heartbeat
         self.websocket: Optional['WebSocketLike'] = None
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
         self.callbacks: Dict[str, List[Callable]] = {}
@@ -277,6 +320,25 @@ class AlloraWebsocketSubscriber:
             self.websocket = None
         
 
+    def _reject_heartbeat_query(self, query: str) -> None:
+        """A caller cannot subscribe to the heartbeat's own query.
+
+        CometBFT keys subscriptions by (connection, query): a second one with
+        this query is rejected as a duplicate, and unsubscribing it removes the
+        heartbeat's. Raised rather than ignored because both failures are
+        silent -- no events, or a wire that goes quiet and reconnects forever.
+
+        Only subscribe() needs this: the two subscribe_new_block_events*
+        helpers hardcode event_type('NewBlockEvents') and cannot produce the
+        heartbeat's query.
+        """
+        if self._heartbeat and query == EventFilter._new_block_headers().to_query():
+            raise ValueError(
+                f"query {query!r} is used by the liveness heartbeat on this "
+                "connection; subscribe to a different event, or construct the "
+                "client with websocket_heartbeat=False"
+            )
+
     async def subscribe(
         self,
         event_filter: EventFilter,
@@ -294,14 +356,17 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call must not leave a
+        # reconnecting event-loop task behind on its way out.
+        query = event_filter.to_query()
+        self._reject_heartbeat_query(query)
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"sub_{self._subscription_id_counter}"
-        
-        query = event_filter.to_query()
         
         # Store subscription info
         async with self._state_lock:
@@ -354,12 +419,29 @@ class AlloraWebsocketSubscriber:
                             info["sent"] = False
                             info["active"] = False
                     
+                    # Sent before the caller's queries, not after. A server may
+                    # cap subscriptions per client (CometBFT's default is 5),
+                    # and a caller that fills the budget would otherwise push
+                    # the heartbeat over it -- leaving the watchdog with no
+                    # traffic to measure and tearing down healthy sockets on
+                    # every quiet interval.
+                    #
+                    # Ordering matters because neither rejection raises: the
+                    # server replies with a JSON-RPC error frame, which is
+                    # logged and leaves the subscription inactive. A caller can
+                    # at least see their own events never arrive; a rejected
+                    # heartbeat just looks like flakiness.
+                    if self._heartbeat:
+                        await self._send_subscription(
+                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter._new_block_headers().to_query()
+                        )
+
                     for subscription_id, info in items:
                         await self._send_subscription(subscription_id, info["query"])
                         async with self._state_lock:
                             if subscription_id in self.subscriptions:
                                 self.subscriptions[subscription_id]["sent"] = True
-                    
+
                     return
                     
                 except Exception as e:
@@ -367,7 +449,7 @@ class AlloraWebsocketSubscriber:
                     logger.error(f"Connection attempt {attempts} failed: {e}")
                     await asyncio.sleep(self.reconnect_delay)
     
-    async def _send_subscription(self, subscription_id: str, query: str):
+    async def _send_subscription(self, subscription_id: "str | int", query: str):
         """Send subscription request."""
         if not self.websocket or self.websocket.close_code:
             return
@@ -432,15 +514,15 @@ class AlloraWebsocketSubscriber:
                         self.websocket.recv(),
                         timeout=self._event_recv_timeout_secs,
                     )
-                    # Reset the silence timer on the wire-receive event itself,
-                    # not after handling — a message arriving over the wire is
-                    # the true liveness signal regardless of parse outcome.
+                    # Any message on the wire proves liveness, regardless of
+                    # whether it parses.
                     last_msg = time.monotonic()
                     await self._handle_message(str(message))
 
                 except asyncio.TimeoutError:
                     silent = time.monotonic() - last_msg
-                    if silent >= self._max_event_silence_secs:
+                    if (self._max_event_silence_secs is not None
+                            and silent >= self._max_event_silence_secs):
                         # Alive at the ping/pong layer but no events arriving —
                         # force a full reconnect; _connect() re-sends every
                         # subscription.
@@ -478,9 +560,35 @@ class AlloraWebsocketSubscriber:
             data = json.loads(message)
             message_id = data.get("id")
             
-            # Handle subscription confirmations
+            # The heartbeat exists to put bytes on the wire; the silence timer
+            # was already reset by the receive itself. Its NewBlockHeader payload is
+            # not a NewBlockEvents frame, so letting it reach the structured
+            # parser below logs a spurious error for every block.
+            if message_id == _HEARTBEAT_SUBSCRIPTION_ID:
+                # A rejected heartbeat (subscription cap reached, duplicate
+                # query) arrives as an error frame. Returning unconditionally
+                # would hide the one failure that disables the watchdog's only
+                # source of traffic, and the socket would simply go quiet again.
+                if "error" in data:
+                    logger.error(f"Heartbeat subscription error: {data['error']}")
+                return
+
+            # Handle subscription confirmations.
+            #
+            # An error frame also has an id and no result.data, so it satisfies
+            # the same shape as a confirmation. Marking it active would leave a
+            # rejected subscription looking established while no events ever
+            # arrive -- the failure would be invisible to the caller.
             if data.get("result", {}).get("data") is None and "id" in data:
                 subscription_id = data["id"]
+                if "error" in data:
+                    logger.error(
+                        f"Subscription {subscription_id} rejected: {data['error']}"
+                    )
+                    async with self._state_lock:
+                        if subscription_id in self.subscriptions:
+                            self.subscriptions[subscription_id]["active"] = False
+                    return
                 async with self._state_lock:
                     if subscription_id in self.subscriptions:
                         self.subscriptions[subscription_id]["active"] = True
@@ -873,9 +981,12 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call should not have
+        # started the event-loop task on its way out.
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"block_events_{self._subscription_id_counter}"
@@ -927,9 +1038,12 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call should not have
+        # started the event-loop task on its way out.
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
-        
+
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"typed_block_events_{self._subscription_id_counter}"

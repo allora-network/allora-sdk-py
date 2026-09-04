@@ -13,7 +13,7 @@ from textwrap import dedent, indent
 import traceback
 import requests
 import logging
-from typing import Generic, Optional, AsyncIterator, TypeVar
+from typing import Any, Generic, Optional, AsyncIterator, TypeVar
 
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -24,8 +24,8 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     EventReputerSubmissionWindowClosed,
     EventReputerSubmissionWindowOpened,
     EventRewardsSettled,
-    EventWorkerSubmissionWindowOpened,
     EventWorkerSubmissionWindowClosed,
+    EventWorkerSubmissionWindowOpened,
 )
 from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
 from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env
@@ -55,6 +55,18 @@ logger = logging.getLogger("allora_sdk")
 SubmissionWindowOpenEventType = TypeVar("SubmissionWindowOpenEventType", bound=TSubmissionWindowOpenEventType)
 WorkerFnReturnType = TypeVar("WorkerFnReturnType")
 
+# Polling is the fallback path for discovering an open submission window when
+# the websocket event was not delivered. It must therefore fire several times
+# within a window, or a dropped event becomes a missed submission rather than a
+# late one. Derived from the topic's own window unless the caller is explicit.
+DEFAULT_POLLING_INTERVAL_SECS = 120
+POLLS_PER_WINDOW = 3
+MIN_POLLING_INTERVAL_SECS = 5
+# Wall-clock seconds per block, used only to turn the topic's window (in
+# blocks) into a polling cadence. An estimate is sufficient here: it selects a
+# polling rate, it does not gate any submission.
+DEFAULT_BLOCK_DURATION_SECS = 6.0
+
 # Default per-cycle cap for inferer/forecaster unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
@@ -79,7 +91,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -92,6 +104,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -103,7 +116,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
             sanity_check: Optional sanity check config; defaults to enabled with 60s throttle interval
@@ -151,6 +167,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -166,7 +183,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         min_stake_uallo: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES,
         lock: Optional[asyncio.Lock] = None,
@@ -178,6 +195,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -189,7 +207,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit reputer payloads to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             min_stake_uallo: Minimum stake in uallo to top-up to (used for dynamic staking)
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
@@ -239,6 +260,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -254,7 +276,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         autostake: AutoStakeConfig | None = None,
@@ -266,6 +288,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -279,7 +302,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit forecasts to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: if more than this many open nonces, skip the oldest ones
             lock: asyncio.Lock to share with other AlloraWorker instances using the same wallet
             autostake: Optional autostake config to stake this worker's rewards to a reputer or validator
@@ -325,6 +351,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             topic_id=topic_id,
             fee_tier=fee_tier,
             polling_interval=polling_interval,
+            block_duration_secs=block_duration_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -340,11 +367,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         api_key: Optional[str] = None,
         topic_id: int = 69,
         fee_tier: FeeTier = FeeTier.STANDARD,
-        polling_interval: int = 120,
+        polling_interval: Optional[int] = None,
         max_unfulfilled_nonces: int = DEFAULT_MAX_UNFULFILLED_WORKER_NONCES,
         lock: Optional[asyncio.Lock] = None,
         debug: bool = False,
         show_banner: bool = True,
+        block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -356,7 +384,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             api_key: API key for testnet faucet (if needed)
             topic_id: The Allora network topic ID to submit predictions to
             fee_tier: Transaction fee tier (ECO/STANDARD/PRIORITY)
-            polling_interval: Interval in seconds to poll for new submission windows
+            polling_interval: Interval in seconds to poll for new submission
+                windows. If None (the default), set to the topic's submission
+                window length / POLLS_PER_WINDOW, clamped to
+                [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
             debug: Enable debug logging
@@ -367,13 +398,28 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             raise ValueError('no client provided')
 
         self._initialized = False
+        self._init_lock = asyncio.Lock()
+        self._startup_tasks = set()
+        self._optional_steps_completed: set[str] = set()
+        self._optional_steps_attempted = False
+        self._startup_retry_task: Optional[asyncio.Task] = None
+        self._shutting_down = False
+        self._optional_steps_done = False
+        self._optional_steps_running = False
+        self._polling_interval_derived = False
         self.use_case = use_case
         self.client = client
         self.address = address
         self.api_key = api_key
         self.topic_id = topic_id
         self.fee_tier = fee_tier
-        self.polling_interval = polling_interval
+        # None means "derive from the topic window once the chain is reachable";
+        # until then fall back to the historical default so nothing polls at 0.
+        self._explicit_polling_interval = polling_interval
+        self.polling_interval = (
+            polling_interval if polling_interval is not None else DEFAULT_POLLING_INTERVAL_SECS
+        )
+        self.block_duration_secs = block_duration_secs
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
         self.show_banner = show_banner
 
@@ -388,19 +434,189 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _ensure_initialized(self):
-        if self._initialized:
+        """Run one-time startup, in two phases with different failure rules.
+
+        Essential (chain id, polling cadence): every caller needs it before it
+        can submit, so it is serialised and its failures propagate.
+
+        Startup steps (banner, balance, faucet): best-effort. A failure is
+        logged and the worker carries on.
+        """
+        me = asyncio.current_task()
+        if me in self._startup_tasks:
+            # _log_balance and _maybe_faucet_request call back into this method.
+            # From inside the startup steps that is a no-op, not a second pass.
             return
-        self._initialized = True
+        if self._initialized and self._optional_steps_done and self._polling_interval_derived:
+            return
 
-        self._chain_id = await self.client.raise_for_chain_id_mismatch()
+        self._startup_tasks.add(me)
+        try:
+            topic = await self._resolve_chain_essentials()
+            await self._run_startup_steps_once(topic)
+        finally:
+            self._startup_tasks.discard(me)
 
-        await self._show_banner()
-        await self._log_balance()
-        await self._maybe_faucet_request()
+
+    async def _resolve_chain_essentials(self):
+        """Chain id and polling cadence. Returns the topic when one was
+        fetched, so the banner can reuse it instead of querying again."""
+        if not self._initialized:
+            async with self._init_lock:
+                if not self._initialized:
+                    self._chain_id = await self.client.raise_for_chain_id_mismatch()
+                    topic = await self._derive_polling_interval()
+                    self._initialized = True
+                    return topic
+        elif not self._polling_interval_derived:
+            # A transient topic query at startup leaves the interval on the
+            # default; without this retry the worker keeps that for its lifetime
+            # and polls straight past a short submission window. Serialised so
+            # concurrent callers do not each fire their own duplicate lookup.
+            async with self._init_lock:
+                if not self._polling_interval_derived:
+                    return await self._derive_polling_interval()
+        return None
 
 
-    async def _show_banner(self):
-        resp = await self.client.emissions.query.get_topic(GetTopicRequest(topic_id=int(self.topic_id)))
+    async def _run_startup_steps_once(self, topic):
+        """Banner, balance and faucet request.
+
+        Completion is tracked separately from `_initialized` so a run cancelled
+        midway -- the faucet can poll for minutes -- is retried by the next
+        caller rather than skipped for the process lifetime.
+        """
+        if self._optional_steps_done or self._optional_steps_running:
+            return
+
+        # The first pass is awaited: it runs at startup, before there is any
+        # submission to delay, and the banner should print before work begins.
+        #
+        # Every pass after that is detached. `_ensure_initialized` runs on the
+        # submission path -- `_maybe_submit` awaits it on every poll and every
+        # window event -- and these steps can block for minutes: a failing
+        # faucet retries five times, each polling balance for up to a minute.
+        # Awaiting a retry there would push submissions past short windows.
+        # Funding is not a precondition for submitting anyway; a fee-granted
+        # worker submits unfunded.
+        if self._optional_steps_attempted:
+            self._spawn_startup_step_retry(topic)
+            return
+        self._optional_steps_attempted = True
+        await self._run_startup_steps(topic)
+
+
+    def _spawn_startup_step_retry(self, topic) -> None:
+        """Retry the incomplete startup steps off the submission path."""
+        # A poller or window event can reach here while _cleanup is running;
+        # without this the replacement outlives the cancellation that just
+        # happened.
+        if self._shutting_down:
+            return
+        if self._startup_retry_task is not None and not self._startup_retry_task.done():
+            return
+        self._startup_retry_task = asyncio.create_task(self._run_startup_steps(topic))
+        # Retries are best-effort; surface a crash rather than an unretrieved
+        # exception warning at interpreter shutdown.
+        self._startup_retry_task.add_done_callback(self._log_startup_retry_result)
+
+
+    @staticmethod
+    def _log_startup_retry_result(task: "asyncio.Task") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(f"Startup step retry failed: {exc}")
+
+
+    async def _run_startup_steps(self, topic):
+        """Run whichever startup steps have not yet succeeded."""
+        if self._optional_steps_done or self._optional_steps_running:
+            return
+        # A flag rather than the lock: a second caller arriving mid-faucet
+        # returns immediately instead of queueing behind minutes of polling.
+        self._optional_steps_running = True
+        try:
+            steps = (
+                ("banner", lambda: self._show_banner(topic)),
+                ("balance", self._log_balance),
+                ("faucet", self._maybe_faucet_request),
+            )
+            for name, step in steps:
+                if name in self._optional_steps_completed:
+                    continue
+                try:
+                    await step()
+                except Exception as e:
+                    logger.warning(f"Optional startup step {name!r} failed, continuing: {e}")
+                    continue
+                self._optional_steps_completed.add(name)
+            self._optional_steps_done = all(
+                name in self._optional_steps_completed for name, _ in steps
+            )
+        finally:
+            self._optional_steps_running = False
+
+
+    async def _derive_polling_interval(self) -> Optional[Any]:
+        """Size the fallback poll against the topic's submission window.
+
+        The poll is what finds an open window when its websocket event was not
+        delivered. A cadence longer than the window means such a nonce is found
+        only after it has expired, so the interval has to come from the window
+        rather than from a fixed default.
+        """
+        topic = None
+        try:
+            resp = await self.client.emissions.query.get_topic(
+                GetTopicRequest(topic_id=int(self.topic_id))
+            )
+            topic = resp.topic
+        except Exception as e:
+            logger.warning(f"Could not read topic {self.topic_id}: {e}")
+
+
+        if self._explicit_polling_interval is not None:
+            logger.info(
+                f"Polling every {self.polling_interval}s for topic {self.topic_id} "
+                f"(explicitly configured; not derived from the submission window)"
+            )
+            self._polling_interval_derived = True
+            return topic
+
+        window_blocks = int(getattr(topic, "worker_submission_window", 0) or 0) if topic else 0
+
+        if window_blocks <= 0:
+            logger.warning(
+                f"No usable submission window for topic {self.topic_id}; "
+                f"polling every {self.polling_interval}s. A dropped event will not "
+                f"be recovered inside a window shorter than that."
+            )
+            return topic
+
+        window_secs = window_blocks * self.block_duration_secs
+        self.polling_interval = max(
+            MIN_POLLING_INTERVAL_SECS,
+            min(int(window_secs / POLLS_PER_WINDOW), DEFAULT_POLLING_INTERVAL_SECS),
+        )
+        logger.info(
+            f"Polling every {self.polling_interval}s "
+            f"(topic {self.topic_id} window {window_blocks} blocks ~ {window_secs:.0f}s)"
+        )
+        self._polling_interval_derived = True
+        return topic
+
+    async def _show_banner(self, topic: Optional[Any] = None) -> None:
+        if topic is None:
+            # The banner is cosmetic, so a chain blip must not take down startup.
+            try:
+                resp = await self.client.emissions.query.get_topic(
+                    GetTopicRequest(topic_id=int(self.topic_id))
+                )
+                topic = resp.topic
+            except Exception as e:
+                logger.warning(f"Could not read topic {self.topic_id} for the banner: {e}")
 
         if self.show_banner:
             print(indent(dedent(
@@ -409,7 +625,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     / \  | |   | |   / _ \|  _ \    / \
                    / _ \ | |   | |  | | | | |_) |  / _ \
                   / ___ \| |___| |__| |_| |  _ <  / ___ \        Chain:   {self._chain_id}
-                 /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id})
+                 /_/   \_\_____|_____\___/|_| \_\/_/   \_\       Topic:   {topic.metadata if topic else '-'} (ID: {self.topic_id})
                  __        _____  ____  _  _______ ____          Address: {self.address}
                  \ \      / / _ \|  _ \| |/ / ____|  _ \         Role:    {self.use_case.name().upper()}
                   \ \ /\ / / | | | |_) | ' /|  _| | |_) |
@@ -418,11 +634,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 """
             ), "   "))
         else:
-            print(f"Allora Worker - Chain: {self._chain_id}, Topic: {resp.topic.metadata if resp.topic else '-'} (ID: {self.topic_id}), Address: {self.address}, Role: {self.use_case.name().upper()}")
+            print(f"Allora Worker - Chain: {self._chain_id}, Topic: {topic.metadata if topic else '-'} (ID: {self.topic_id}), Address: {self.address}, Role: {self.use_case.name().upper()}")
 
 
     async def _log_balance(self):
-        await self._ensure_initialized()
+        if not self._initialized:
+            await self._ensure_initialized()
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
@@ -435,7 +652,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
 
     async def _maybe_faucet_request(self):
-        await self._ensure_initialized()
+        if not self._initialized:
+            await self._ensure_initialized()
 
         if self._chain_id != "allora-testnet-1":
             return
@@ -448,13 +666,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
-            logger.error(f"    Could not check balance for {self.address}")
-            return
+            raise RuntimeError(f"could not check balance for {self.address}")
         balance = int(resp.balance.amount)
 
         if balance >= MIN_ALLO:
             return
-        logger.info(f"    Requesting ALLO from testnet faucet...")
+        logger.info("    Requesting ALLO from testnet faucet...")
 
         for faucet_attempt in range(MAX_FAUCET_RETRIES):
             try:
@@ -470,7 +687,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     },
                 )
                 faucet_resp.raise_for_status()
-                logger.info(f"    Request sent...")
+                logger.info("    Request sent...")
 
                 for _ in range(MAX_BALANCE_POLLS_PER_FAUCET_REQUEST):
                     await asyncio.sleep(5)
@@ -485,8 +702,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         return
                 logger.warning("    Faucet request succeeded but balance did not update in time, retrying...")
             except requests.HTTPError as err:
-                if err.response.status_code == 429:
-                    logger.error(f"    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
+                # `response` is None for HTTPErrors raised without one, so a
+                # bare attribute access here would crash the retry loop with an
+                # AttributeError instead of handling the failure.
+                if getattr(err.response, "status_code", None) == 429:
+                    logger.error("    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
                     self.stop()
                     sys.exit(-1)
                 logger.error(f"    Error requesting funds from wallet: {err}")
@@ -495,7 +715,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
             await asyncio.sleep(15)
 
-        logger.error(f"    Faucet request failed after {MAX_FAUCET_RETRIES} attempts")
+        # Raised, not logged-and-returned: the caller records a step as complete
+        # only when it does not raise, so swallowing this would leave the worker
+        # unfunded for the process lifetime with no further attempt.
+        raise RuntimeError(f"faucet request failed after {MAX_FAUCET_RETRIES} attempts")
 
 
     def _detect_environment(self) -> str:
@@ -558,6 +781,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             >>> async for result in worker.run():
             ...     print(f"Submitted: {result}")
         """
+        # Cleared before initialization: a worker that was stopped and is now
+        # being run again must be able to retry its startup steps.
+        self._shutting_down = False
+
         await self._ensure_initialized()
 
         if self._ctx and not self._ctx.is_cancelled():
@@ -637,7 +864,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _polling_worker(self, ctx: Context):
         await self._ensure_initialized()
 
-        logger.info(f"🔄 Starting polling worker")
+        logger.info("🔄 Starting polling worker")
 
         while not ctx.is_cancelled():
             try:
@@ -677,6 +904,24 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         )
         self._subscription_ids.append(id)
 
+        # Before the diagnostics below: this one drives autostaking, so it must
+        # not be the subscription a capped server rejects.
+        if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
+            id = await self.client.events.subscribe_new_block_events_typed(
+                EventRewardsSettled,
+                [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
+                self.use_case.handle_rewards_settled,
+            )
+            self._subscription_ids.append(id)
+            logger.info(
+                f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
+            )
+
+        # Diagnostics only -- these callbacks log and drive nothing, so they go
+        # last. Under a server-side max_subscriptions_per_client the trailing
+        # subscription is the one rejected, and losing a log line is the
+        # cheapest thing to lose: the heartbeat is sent first in _connect, and
+        # the functional rewards subscription above precedes these.
         id = await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
@@ -689,18 +934,6 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
         )
         self._subscription_ids.append(id)
-
-        # Subscribe to rewards events for autostaking if configured on the use case
-        if isinstance(self.use_case, SupportsAutoStake) and self.use_case.autostake is not None:
-            id = await self.client.events.subscribe_new_block_events_typed(
-                EventRewardsSettled,
-                [EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"')],
-                self.use_case.handle_rewards_settled,
-            )
-            self._subscription_ids.append(id)
-            logger.info(
-                f"   Auto-stake enabled: subscribed to rewards events for topic {self.topic_id}"
-            )
 
 
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
@@ -845,6 +1078,23 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
+
+        # Set before cancelling: a concurrent poller reaching
+        # _spawn_startup_step_retry between the cancel and ctx.cleanup() would
+        # otherwise start a replacement that survives shutdown.
+        self._shutting_down = True
+
+        # A detached startup retry outlives the worker otherwise: the faucet
+        # step polls balance for minutes, so it would keep issuing network
+        # requests after shutdown.
+        task = self._startup_retry_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._startup_retry_task = None
 
         for id in self._subscription_ids:
             try:
