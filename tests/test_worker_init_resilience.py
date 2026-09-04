@@ -668,7 +668,7 @@ def test_restarting_a_stopped_worker_re_enables_startup_retries():
         assert w._startup_retry_task is not None, (
             "a restarted worker never retries its startup steps"
         )
-        await w._startup_retry_task
+        await asyncio.wait_for(w._startup_retry_task, timeout=1.0)
 
     asyncio.run(drive())
 
