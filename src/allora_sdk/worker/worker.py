@@ -403,6 +403,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self._optional_steps_completed: set[str] = set()
         self._optional_steps_attempted = False
         self._startup_retry_task: Optional[asyncio.Task] = None
+        self._shutting_down = False
         self._optional_steps_done = False
         self._optional_steps_running = False
         self._polling_interval_derived = False
@@ -507,6 +508,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
     def _spawn_startup_step_retry(self, topic) -> None:
         """Retry the incomplete startup steps off the submission path."""
+        # A poller or window event can reach here while _cleanup is running;
+        # without this the replacement outlives the cancellation that just
+        # happened.
+        if self._shutting_down:
+            return
         if self._startup_retry_task is not None and not self._startup_retry_task.done():
             return
         self._startup_retry_task = asyncio.create_task(self._run_startup_steps(topic))
@@ -1068,6 +1074,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
+
+        # Set before cancelling: a concurrent poller reaching
+        # _spawn_startup_step_retry between the cancel and ctx.cleanup() would
+        # otherwise start a replacement that survives shutdown.
+        self._shutting_down = True
 
         # A detached startup retry outlives the worker otherwise: the faucet
         # step polls balance for minutes, so it would keep issuing network

@@ -40,6 +40,7 @@ def _worker(fail_times: int = 0):
     w._optional_steps_running = False
     w._optional_steps_attempted = False
     w._startup_retry_task = None
+    w._shutting_down = False
     w._polling_interval_derived = False
     w.topic_id = 1
     w.polling_interval = DEFAULT_POLLING_INTERVAL_SECS
@@ -591,5 +592,62 @@ def test_cleanup_cancels_an_in_flight_startup_retry():
 
         assert cancelled == [1], "the in-flight retry was not cancelled"
         assert w._startup_retry_task is None
+
+    asyncio.run(drive())
+
+
+def test_no_replacement_retry_is_spawned_during_shutdown():
+    """Cancelling the in-flight retry is not enough on its own.
+
+    _cleanup cancels the task and then awaits ctx.cleanup(); a polling cycle or
+    window event arriving in that gap would call _spawn_startup_step_retry and
+    start a replacement that outlives the shutdown the cancel just performed.
+    """
+    import types as _types
+
+    w = _worker()
+    started = asyncio.Event()
+
+    spawned_during_shutdown = []
+
+    async def hanging_faucet():
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            # The `await task` in _cleanup yields here. This is the earliest
+            # point a concurrent poller could reach _spawn_startup_step_retry,
+            # so the guard has to be set before the cancel, not after it.
+            before = w._startup_retry_task
+            w._spawn_startup_step_retry(None)
+            if w._startup_retry_task is not before:
+                spawned_during_shutdown.append("during-cancel")
+            raise
+
+    w._maybe_faucet_request = hanging_faucet
+    w._subscription_ids = []
+
+    async def ctx_cleanup():
+        # And again once cancellation has completed.
+        before = w._startup_retry_task
+        w._spawn_startup_step_retry(None)
+        if w._startup_retry_task is not before:
+            spawned_during_shutdown.append("during-ctx-cleanup")
+
+    w.client = _types.SimpleNamespace(
+        events=_types.SimpleNamespace(unsubscribe=lambda _i: asyncio.sleep(0))
+    )
+
+    async def drive():
+        w._optional_steps_attempted = True
+        w._spawn_startup_step_retry(None)
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        ctx = _types.SimpleNamespace(cleanup=ctx_cleanup)
+        await asyncio.wait_for(w._cleanup(ctx), timeout=2.0)
+
+        assert not spawned_during_shutdown, (
+            f"a replacement retry was started during shutdown: {spawned_during_shutdown}"
+        )
 
     asyncio.run(drive())
