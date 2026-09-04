@@ -38,6 +38,8 @@ def _worker(fail_times: int = 0):
     w._optional_steps_completed = set()
     w._optional_steps_done = False
     w._optional_steps_running = False
+    w._optional_steps_attempted = False
+    w._startup_retry_task = None
     w._polling_interval_derived = False
     w.topic_id = 1
     w.polling_interval = DEFAULT_POLLING_INTERVAL_SECS
@@ -503,3 +505,49 @@ def test_real_faucet_request_raises_when_retries_are_exhausted(monkeypatch):
 async def _balance(amount):
     import types as _types
     return _types.SimpleNamespace(balance=_types.SimpleNamespace(amount=str(amount)))
+
+
+def test_a_retrying_startup_step_does_not_block_the_submission_path():
+    """`_ensure_initialized` runs on every poll and every window event.
+
+    A failing faucet retries internally for minutes, so awaiting a *retry*
+    there would push submissions past short windows. Only the first pass is
+    awaited; later ones run detached.
+    """
+    w = _worker()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = []
+
+    async def slow_faucet():
+        started.set()
+        await release.wait()
+        finished.append(1)
+        raise RuntimeError("faucet still down")
+
+    w._maybe_faucet_request = slow_faucet
+
+    async def drive():
+        # First pass: awaited, so let it fail fast.
+        release.set()
+        await w._ensure_initialized()
+        assert "faucet" not in w._optional_steps_completed
+        assert finished == [1]
+
+        # Second pass: the step is slow now and must NOT be awaited.
+        release.clear()
+        started.clear()
+        await asyncio.wait_for(w._ensure_initialized(), timeout=1.0)
+
+        # The retry is in flight, but the caller already returned.
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert not finished[1:], "the caller waited for the retry to finish"
+
+        release.set()
+        await asyncio.wait_for(w._startup_retry_task, timeout=1.0)
+
+    try:
+        asyncio.run(drive())
+    except RuntimeError as err:          # the retry's own failure, expected
+        if "faucet still down" not in str(err):
+            raise

@@ -401,6 +401,8 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self._init_lock = asyncio.Lock()
         self._startup_tasks = set()
         self._optional_steps_completed: set[str] = set()
+        self._optional_steps_attempted = False
+        self._startup_retry_task: Optional[asyncio.Task] = None
         self._optional_steps_done = False
         self._optional_steps_running = False
         self._polling_interval_derived = False
@@ -483,6 +485,47 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         midway -- the faucet can poll for minutes -- is retried by the next
         caller rather than skipped for the process lifetime.
         """
+        if self._optional_steps_done or self._optional_steps_running:
+            return
+
+        # The first pass is awaited: it runs at startup, before there is any
+        # submission to delay, and the banner should print before work begins.
+        #
+        # Every pass after that is detached. `_ensure_initialized` runs on the
+        # submission path -- `_maybe_submit` awaits it on every poll and every
+        # window event -- and these steps can block for minutes: a failing
+        # faucet retries five times, each polling balance for up to a minute.
+        # Awaiting a retry there would push submissions past short windows.
+        # Funding is not a precondition for submitting anyway; a fee-granted
+        # worker submits unfunded.
+        if self._optional_steps_attempted:
+            self._spawn_startup_step_retry(topic)
+            return
+        self._optional_steps_attempted = True
+        await self._run_startup_steps(topic)
+
+
+    def _spawn_startup_step_retry(self, topic) -> None:
+        """Retry the incomplete startup steps off the submission path."""
+        if self._startup_retry_task is not None and not self._startup_retry_task.done():
+            return
+        self._startup_retry_task = asyncio.create_task(self._run_startup_steps(topic))
+        # Retries are best-effort; surface a crash rather than an unretrieved
+        # exception warning at interpreter shutdown.
+        self._startup_retry_task.add_done_callback(self._log_startup_retry_result)
+
+
+    @staticmethod
+    def _log_startup_retry_result(task: "asyncio.Task") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning(f"Startup step retry failed: {exc}")
+
+
+    async def _run_startup_steps(self, topic):
+        """Run whichever startup steps have not yet succeeded."""
         if self._optional_steps_done or self._optional_steps_running:
             return
         # A flag rather than the lock: a second caller arriving mid-faucet
