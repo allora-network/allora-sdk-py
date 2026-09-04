@@ -781,6 +781,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             >>> async for result in worker.run():
             ...     print(f"Submitted: {result}")
         """
+        # Cleared before initialization: a worker that was stopped and is now
+        # being run again must be able to retry its startup steps.
+        self._shutting_down = False
+
         await self._ensure_initialized()
 
         if self._ctx and not self._ctx.is_cancelled():

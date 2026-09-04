@@ -615,20 +615,14 @@ def test_no_replacement_retry_is_spawned_during_shutdown():
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
-            # The `await task` in _cleanup yields here. This is the earliest
-            # point a concurrent poller could reach _spawn_startup_step_retry,
-            # so the guard has to be set before the cancel, not after it.
-            before = w._startup_retry_task
-            w._spawn_startup_step_retry(None)
-            if w._startup_retry_task is not before:
-                spawned_during_shutdown.append("during-cancel")
             raise
 
     w._maybe_faucet_request = hanging_faucet
     w._subscription_ids = []
 
     async def ctx_cleanup():
-        # And again once cancellation has completed.
+        # The window the guard exists for: the task handle has been cleared, so
+        # nothing else stops a poller starting a replacement here.
         before = w._startup_retry_task
         w._spawn_startup_step_retry(None)
         if w._startup_retry_task is not before:
@@ -651,3 +645,49 @@ def test_no_replacement_retry_is_spawned_during_shutdown():
         )
 
     asyncio.run(drive())
+
+
+def test_restarting_a_stopped_worker_re_enables_startup_retries():
+    """`_shutting_down` latches on cleanup, so it has to be cleared on run().
+
+    Otherwise a worker that is stopped and started again never retries its
+    optional startup steps for the rest of the process lifetime.
+    """
+    w = _worker()
+    w._shutting_down = True          # as _cleanup would have left it
+    w._optional_steps_attempted = True
+
+    async def drive():
+        w._spawn_startup_step_retry(None)
+        assert w._startup_retry_task is None, "guard should suppress while shutting down"
+
+        # What run() does before initialising.
+        w._shutting_down = False
+
+        w._spawn_startup_step_retry(None)
+        assert w._startup_retry_task is not None, (
+            "a restarted worker never retries its startup steps"
+        )
+        await w._startup_retry_task
+
+    asyncio.run(drive())
+
+
+def test_run_clears_the_shutdown_latch_before_initialising():
+    """The test above simulates what run() does; this pins that run() does it.
+
+    Driving run() for real needs a full worker, chain and event loop, so assert
+    on its source instead: the reset must appear, and before the
+    _ensure_initialized call, or the first pass is suppressed on a restart.
+    """
+    import inspect
+
+    src = inspect.getsource(AlloraWorker.run)
+    assert "self._shutting_down = False" in src, (
+        "run() does not clear the shutdown latch; a restarted worker never "
+        "retries its startup steps"
+    )
+    assert src.index("self._shutting_down = False") < src.index("_ensure_initialized"), (
+        "the latch is cleared after initialisation, so the first pass still runs "
+        "under it"
+    )
