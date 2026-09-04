@@ -35,6 +35,7 @@ def _worker(fail_times: int = 0):
     w._initialized = False
     w._init_lock = asyncio.Lock()
     w._startup_tasks = set()
+    w._optional_steps_completed = set()
     w._optional_steps_done = False
     w._optional_steps_running = False
     w._polling_interval_derived = False
@@ -204,7 +205,7 @@ def test_optional_step_failure_does_not_fail_startup(caplog):
         _run(w._ensure_initialized())
 
     assert w._initialized is True
-    assert any("Optional startup step failed" in r.getMessage() for r in caplog.records), \
+    assert any("Optional startup step" in r.getMessage() for r in caplog.records), \
         [r.getMessage() for r in caplog.records]
 
 
@@ -372,3 +373,58 @@ def test_concurrent_retries_derive_once():
 
     asyncio.run(drive())
     assert calls == [1], f"derivation retried {len(calls)} times concurrently"
+
+
+def test_a_failed_optional_step_is_retried_by_the_next_caller():
+    """A failed step must not be treated as a completed one.
+
+    Cancellation is already retried; a transient failure was not — the flag was
+    set unconditionally after the loop, so a faucet 5xx or a balance blip left a
+    worker permanently unfunded for the process lifetime behind one warning.
+    """
+    w = _worker()
+    calls = {"balance": 0}
+
+    async def flaky_balance():
+        calls["balance"] += 1
+        if calls["balance"] == 1:
+            raise RuntimeError("transient balance failure")
+
+    w._log_balance = flaky_balance
+
+    _run(w._ensure_initialized())
+    assert calls["balance"] == 1
+    assert w._optional_steps_done is False, "a failed step was marked complete"
+
+    _run(w._ensure_initialized())
+    assert calls["balance"] == 2, "the failed step was never retried"
+    assert w._optional_steps_done is True
+
+
+def test_steps_that_succeeded_are_not_repeated_on_retry():
+    """Only the failed step is retried; the rest must not run twice.
+
+    Otherwise one flaky step would re-request the faucet on every cycle.
+    """
+    w = _worker()
+    calls = {"faucet": 0, "balance": 0}
+
+    async def ok_faucet():
+        calls["faucet"] += 1
+
+    async def flaky_balance():
+        calls["balance"] += 1
+        if calls["balance"] == 1:
+            raise RuntimeError("transient balance failure")
+
+    w._maybe_faucet_request = ok_faucet
+    w._log_balance = flaky_balance
+
+    _run(w._ensure_initialized())
+    _run(w._ensure_initialized())
+
+    assert calls["balance"] == 2, "the failed step should have been retried"
+    assert calls["faucet"] == 1, (
+        "a step that already succeeded ran again; a flaky sibling would re-request "
+        "the faucet on every cycle"
+    )

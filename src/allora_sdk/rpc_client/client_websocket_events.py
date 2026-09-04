@@ -182,11 +182,14 @@ class EventFilter:
         return EventFilter().event_type('NewBlock')
 
     @staticmethod
-    def new_block_headers():
-        """Filter for new block headers.
+    def _new_block_headers():
+        """The liveness heartbeat's filter. Private on purpose.
 
-        Fires once per block like NewBlock but carries only the header, so it is
-        the cheapest way to keep traffic on the wire.
+        CometBFT keys a subscription by (connection, query), not by JSON-RPC id,
+        so a caller subscribing to this same query would be rejected as a
+        duplicate of the heartbeat -- and their `unsubscribe` would remove the
+        heartbeat's subscription, silencing the wire and leaving the watchdog
+        reconnecting on every interval.
         """
         return EventFilter().event_type('NewBlockHeader')
 
@@ -317,6 +320,25 @@ class AlloraWebsocketSubscriber:
             self.websocket = None
         
 
+    def _reject_heartbeat_query(self, query: str) -> None:
+        """A caller cannot subscribe to the heartbeat's own query.
+
+        CometBFT keys subscriptions by (connection, query): a second one with
+        this query is rejected as a duplicate, and unsubscribing it removes the
+        heartbeat's. Raised rather than ignored because both failures are
+        silent -- no events, or a wire that goes quiet and reconnects forever.
+
+        Only subscribe() needs this: the two subscribe_new_block_events*
+        helpers hardcode event_type('NewBlockEvents') and cannot produce the
+        heartbeat's query.
+        """
+        if self._heartbeat and query == EventFilter._new_block_headers().to_query():
+            raise ValueError(
+                f"query {query!r} is used by the liveness heartbeat on this "
+                "connection; subscribe to a different event, or construct the "
+                "client with websocket_heartbeat=False"
+            )
+
     async def subscribe(
         self,
         event_filter: EventFilter,
@@ -342,6 +364,7 @@ class AlloraWebsocketSubscriber:
             subscription_id = f"sub_{self._subscription_id_counter}"
         
         query = event_filter.to_query()
+        self._reject_heartbeat_query(query)
         
         # Store subscription info
         async with self._state_lock:
@@ -403,7 +426,7 @@ class AlloraWebsocketSubscriber:
                     # caller; a rejected heartbeat only looks like flakiness.
                     if self._heartbeat:
                         await self._send_subscription(
-                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter.new_block_headers().to_query()
+                            _HEARTBEAT_SUBSCRIPTION_ID, EventFilter._new_block_headers().to_query()
                         )
 
                     for subscription_id, info in items:

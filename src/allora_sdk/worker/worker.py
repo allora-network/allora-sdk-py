@@ -400,6 +400,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self._initialized = False
         self._init_lock = asyncio.Lock()
         self._startup_tasks = set()
+        self._optional_steps_completed: set[str] = set()
         self._optional_steps_done = False
         self._optional_steps_running = False
         self._polling_interval_derived = False
@@ -488,13 +489,23 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         # returns immediately instead of queueing behind minutes of polling.
         self._optional_steps_running = True
         try:
-            for step in (lambda: self._show_banner(topic), self._log_balance,
-                         self._maybe_faucet_request):
+            steps = (
+                ("banner", lambda: self._show_banner(topic)),
+                ("balance", self._log_balance),
+                ("faucet", self._maybe_faucet_request),
+            )
+            for name, step in steps:
+                if name in self._optional_steps_completed:
+                    continue
                 try:
                     await step()
                 except Exception as e:
-                    logger.warning(f"Optional startup step failed, continuing: {e}")
-            self._optional_steps_done = True
+                    logger.warning(f"Optional startup step {name!r} failed, continuing: {e}")
+                    continue
+                self._optional_steps_completed.add(name)
+            self._optional_steps_done = all(
+                name in self._optional_steps_completed for name, _ in steps
+            )
         finally:
             self._optional_steps_running = False
 

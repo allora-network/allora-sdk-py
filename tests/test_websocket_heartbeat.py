@@ -7,6 +7,7 @@ subscription from a deaf connection. The heartbeat puts traffic on the wire so
 the threshold measures the connection instead.
 """
 
+import pytest
 import asyncio
 import json
 
@@ -382,3 +383,61 @@ def test_caller_ids_cannot_collide_with_the_heartbeat_id():
     assert not _HEARTBEAT_SUBSCRIPTION_ID, (
         "a truthy int id would survive the falsy-check in subscribe() and collide"
     )
+
+
+def test_caller_cannot_subscribe_the_heartbeats_query():
+    """CometBFT keys a subscription by (connection, query), not by JSON-RPC id.
+
+    So a caller reusing the heartbeat's query is rejected server-side as a
+    duplicate and never receives events -- and worse, unsubscribing it removes
+    the heartbeat's own subscription, silencing the wire and leaving the
+    watchdog reconnecting on every interval. Both failures are silent, so the
+    SDK refuses the query up front.
+
+    Only subscribe() takes a caller-supplied filter; the two
+    subscribe_new_block_events* helpers hardcode NewBlockEvents and cannot
+    reach this query.
+    """
+    import asyncio
+
+    from allora_sdk.rpc_client.client_websocket_events import (
+        AlloraWebsocketSubscriber,
+        EventFilter,
+    )
+
+    sub = AlloraWebsocketSubscriber(url="wss://x")
+    heartbeat_query = EventFilter._new_block_headers().to_query()
+
+    async def cb(*_a, **_k):
+        return None
+
+    with pytest.raises(ValueError, match="liveness heartbeat"):
+        asyncio.run(sub.subscribe(EventFilter._new_block_headers(), cb))
+
+    assert not any(
+        v.get("query") == heartbeat_query for v in sub.subscriptions.values()
+    ), "the rejected subscription was still registered"
+
+    # A caller hand-building the same query is refused too -- the check is on
+    # the query string, not on which helper produced it.
+    with pytest.raises(ValueError, match="liveness heartbeat"):
+        asyncio.run(sub.subscribe(EventFilter().event_type("NewBlockHeader"), cb))
+
+
+def test_the_heartbeat_query_is_allowed_when_the_heartbeat_is_off():
+    """The query is only reserved because the heartbeat is using it."""
+    import asyncio
+
+    from allora_sdk.rpc_client.client_websocket_events import (
+        AlloraWebsocketSubscriber,
+        EventFilter,
+    )
+
+    sub = AlloraWebsocketSubscriber(url="wss://x", heartbeat=False)
+    sub._ensure_started = lambda: asyncio.sleep(0)
+
+    async def cb(*_a, **_k):
+        return None
+
+    sid = asyncio.run(sub.subscribe(EventFilter._new_block_headers(), cb))
+    assert sid in sub.subscriptions
