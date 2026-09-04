@@ -1069,6 +1069,18 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
     async def _cleanup(self, ctx: Context):
         logger.debug("Cleaning up worker resources")
 
+        # A detached startup retry outlives the worker otherwise: the faucet
+        # step polls balance for minutes, so it would keep issuing network
+        # requests after shutdown.
+        task = self._startup_retry_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._startup_retry_task = None
+
         for id in self._subscription_ids:
             try:
                 await self.client.events.unsubscribe(id)

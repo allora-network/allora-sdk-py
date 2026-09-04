@@ -543,11 +543,53 @@ def test_a_retrying_startup_step_does_not_block_the_submission_path():
         await asyncio.wait_for(started.wait(), timeout=1.0)
         assert not finished[1:], "the caller waited for the retry to finish"
 
+        # No try/except around drive(): a broad one would let a first-pass
+        # regression raise the same error and route the test through its pass
+        # path. The step's exception is caught and logged inside
+        # _run_startup_steps, so the retry task completes normally.
         release.set()
         await asyncio.wait_for(w._startup_retry_task, timeout=1.0)
+        assert finished == [1, 1], "the retry did not run to completion"
+        assert "faucet" not in w._optional_steps_completed
 
-    try:
-        asyncio.run(drive())
-    except RuntimeError as err:          # the retry's own failure, expected
-        if "faucet still down" not in str(err):
+    asyncio.run(drive())
+
+
+def test_cleanup_cancels_an_in_flight_startup_retry():
+    """A detached retry must not outlive the worker.
+
+    The faucet step polls balance for minutes, so a retry left running after
+    shutdown keeps issuing network requests against a stopped worker.
+    """
+    import types as _types
+
+    w = _worker()
+    started = asyncio.Event()
+    cancelled = []
+
+    async def hanging_faucet():
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.append(1)
             raise
+
+    w._maybe_faucet_request = hanging_faucet
+    w._subscription_ids = []
+    w.client = _types.SimpleNamespace(
+        events=_types.SimpleNamespace(unsubscribe=lambda _i: asyncio.sleep(0))
+    )
+
+    async def drive():
+        w._optional_steps_attempted = True
+        w._spawn_startup_step_retry(None)
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        ctx = _types.SimpleNamespace(cleanup=lambda: asyncio.sleep(0))
+        await asyncio.wait_for(w._cleanup(ctx), timeout=2.0)
+
+        assert cancelled == [1], "the in-flight retry was not cancelled"
+        assert w._startup_retry_task is None
+
+    asyncio.run(drive())
