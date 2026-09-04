@@ -419,13 +419,18 @@ class AlloraWebsocketSubscriber:
                             info["sent"] = False
                             info["active"] = False
                     
-                    # Sent before the caller's queries, not after. Servers cap
-                    # subscriptions per client (5 on allora-testnet-1), and a
-                    # caller that fills the budget would otherwise push the
-                    # heartbeat over it -- leaving the watchdog with no traffic
-                    # to measure and tearing down healthy sockets on every quiet
-                    # interval. A rejected caller subscription is visible to the
-                    # caller; a rejected heartbeat only looks like flakiness.
+                    # Sent before the caller's queries, not after. A server may
+                    # cap subscriptions per client (CometBFT's default is 5),
+                    # and a caller that fills the budget would otherwise push
+                    # the heartbeat over it -- leaving the watchdog with no
+                    # traffic to measure and tearing down healthy sockets on
+                    # every quiet interval.
+                    #
+                    # Ordering matters because neither rejection raises: the
+                    # server replies with a JSON-RPC error frame, which is
+                    # logged and leaves the subscription inactive. A caller can
+                    # at least see their own events never arrive; a rejected
+                    # heartbeat just looks like flakiness.
                     if self._heartbeat:
                         await self._send_subscription(
                             _HEARTBEAT_SUBSCRIPTION_ID, EventFilter._new_block_headers().to_query()
