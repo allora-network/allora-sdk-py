@@ -428,3 +428,78 @@ def test_steps_that_succeeded_are_not_repeated_on_retry():
         "a step that already succeeded ran again; a flaky sibling would re-request "
         "the faucet on every cycle"
     )
+
+
+def test_faucet_exhaustion_is_not_recorded_as_success():
+    """A faucet that gives up must not mark its step complete.
+
+    It retries internally and previously fell out of the loop returning None,
+    which is indistinguishable from 'funded' to the caller — so the worker
+    stayed unfunded for the process lifetime with no further attempt.
+    """
+    w = _worker()
+    attempts = {"n": 0}
+
+    async def exhausted_faucet():
+        attempts["n"] += 1
+        raise RuntimeError("faucet request failed after 5 attempts")
+
+    w._maybe_faucet_request = exhausted_faucet
+
+    _run(w._ensure_initialized())
+    assert "faucet" not in w._optional_steps_completed, (
+        "an exhausted faucet was recorded as a completed step"
+    )
+    assert w._optional_steps_done is False
+
+    _run(w._ensure_initialized())
+    assert attempts["n"] == 2, "funding was never retried"
+
+
+def test_real_faucet_request_raises_when_retries_are_exhausted(monkeypatch):
+    """Exercise the real _maybe_faucet_request, not a stub.
+
+    The previous test replaced the method with a raising fake, so it only
+    proved the caller handles an exception — it passed even with the real
+    function still swallowing exhaustion. This drives the actual retry loop.
+    """
+    import types as _types
+
+    import requests
+
+    w = _worker()
+    # _worker() stubs this method; put the real one back — the point of this
+    # test is the production retry loop, not the harness.
+    w._maybe_faucet_request = AlloraWorker._maybe_faucet_request.__get__(w)
+    w._initialized = True
+    w._chain_id = "allora-testnet-1"
+    w.address = "allo1test"
+
+    class _Resp:
+        def raise_for_status(self):
+            raise requests.HTTPError("500 Server Error")
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp())
+    # Never sleep through the retry/poll backoff.
+    async def _no_sleep(_s):
+        return None
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    # Balance is readable but always below the funding threshold, so the loop
+    # runs to exhaustion rather than returning early as already-funded.
+    w.client = _types.SimpleNamespace(
+        network=_types.SimpleNamespace(faucet_url="https://faucet.example"),
+        bank=_types.SimpleNamespace(
+            query=_types.SimpleNamespace(
+                balance=lambda *a, **k: _balance(0)
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="faucet request failed"):
+        _run(w._maybe_faucet_request())
+
+
+async def _balance(amount):
+    import types as _types
+    return _types.SimpleNamespace(balance=_types.SimpleNamespace(amount=str(amount)))

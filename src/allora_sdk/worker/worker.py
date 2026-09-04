@@ -617,8 +617,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         resp = await self.client.bank.query.balance(QueryBalanceRequest(address=self.address, denom="uallo"))
         if resp.balance is None:
-            logger.error(f"    Could not check balance for {self.address}")
-            return
+            raise RuntimeError(f"could not check balance for {self.address}")
         balance = int(resp.balance.amount)
 
         if balance >= MIN_ALLO:
@@ -654,7 +653,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         return
                 logger.warning("    Faucet request succeeded but balance did not update in time, retrying...")
             except requests.HTTPError as err:
-                if err.response.status_code == 429:
+                # `response` is None for HTTPErrors raised without one, so a
+                # bare attribute access here would crash the retry loop with an
+                # AttributeError instead of handling the failure.
+                if getattr(err.response, "status_code", None) == 429:
                     logger.error("    Too many faucet requests. Try sending ALLO to your worker's wallet manually from another wallet, or visit https://faucet.testnet.allora.network")
                     self.stop()
                     sys.exit(-1)
@@ -664,7 +666,10 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
             await asyncio.sleep(15)
 
-        logger.error(f"    Faucet request failed after {MAX_FAUCET_RETRIES} attempts")
+        # Raised, not logged-and-returned: the caller records a step as complete
+        # only when it does not raise, so swallowing this would leave the worker
+        # unfunded for the process lifetime with no further attempt.
+        raise RuntimeError(f"faucet request failed after {MAX_FAUCET_RETRIES} attempts")
 
 
     def _detect_environment(self) -> str:

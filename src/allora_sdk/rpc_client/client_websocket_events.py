@@ -356,15 +356,17 @@ class AlloraWebsocketSubscriber:
         Returns:
             Subscription ID for managing the subscription
         """
+        # Validate before any side effect: a rejected call must not leave a
+        # reconnecting event-loop task behind on its way out.
+        query = event_filter.to_query()
+        self._reject_heartbeat_query(query)
+
         # Auto-start the event subscription service if not already running
         await self._ensure_started()
 
         if not subscription_id:
             self._subscription_id_counter += 1
             subscription_id = f"sub_{self._subscription_id_counter}"
-        
-        query = event_filter.to_query()
-        self._reject_heartbeat_query(query)
         
         # Store subscription info
         async with self._state_lock:

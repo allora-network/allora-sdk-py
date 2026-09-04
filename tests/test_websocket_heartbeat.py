@@ -441,3 +441,34 @@ def test_the_heartbeat_query_is_allowed_when_the_heartbeat_is_off():
 
     sid = asyncio.run(sub.subscribe(EventFilter._new_block_headers(), cb))
     assert sid in sub.subscriptions
+
+
+def test_a_rejected_subscription_does_not_start_the_event_loop():
+    """Validation must precede _ensure_started().
+
+    Otherwise a rejected call leaves a reconnecting background task behind on a
+    subscriber the caller has just been told it cannot use.
+    """
+    import asyncio
+
+    from allora_sdk.rpc_client.client_websocket_events import (
+        AlloraWebsocketSubscriber,
+        EventFilter,
+    )
+
+    started = []
+
+    sub = AlloraWebsocketSubscriber(url="wss://x")
+
+    async def _fake_start():
+        started.append(1)
+
+    sub._ensure_started = _fake_start
+
+    async def cb(*_a, **_k):
+        return None
+
+    with pytest.raises(ValueError, match="liveness heartbeat"):
+        asyncio.run(sub.subscribe(EventFilter._new_block_headers(), cb))
+
+    assert not started, "the event loop was started before the query was validated"
