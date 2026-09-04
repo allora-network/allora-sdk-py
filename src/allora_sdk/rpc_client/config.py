@@ -73,9 +73,10 @@ class AlloraNetworkConfig:
     # recv(); max_event_silence_secs gates the deaf-subscription watchdog (force a
     # reconnect+resubscribe after this long with no message). Defaults match the
     # subscriber's own, so behavior is unchanged unless overridden. Raise
-    # max_event_silence_secs for subscriptions that are legitimately idle longer.
+    # max_event_silence_secs for subscriptions that are legitimately idle
+    # longer, or set it to None/0 to disable the watchdog entirely.
     event_recv_timeout_secs: float = 30.0
-    max_event_silence_secs: float = 60.0
+    max_event_silence_secs: "float | None" = 60.0
     # Subscribe to NewBlockHeader alongside the caller's queries purely to keep
     # traffic on the wire. Without it, a subscription filtered server-side to
     # one topic is silent between events, and the watchdog above cannot tell a
@@ -90,11 +91,15 @@ class AlloraNetworkConfig:
             raise ValueError(
                 f"event_recv_timeout_secs must be > 0, got {self.event_recv_timeout_secs!r}"
             )
-        if self.max_event_silence_secs <= self.event_recv_timeout_secs:
-            raise ValueError(
-                "max_event_silence_secs must be greater than event_recv_timeout_secs "
-                f"({self.max_event_silence_secs!r} <= {self.event_recv_timeout_secs!r})"
-            )
+        # None/0 disables the watchdog; anything else at or below the recv
+        # timeout would trip it every idle cycle, so that stays an error.
+        if self.max_event_silence_secs is not None and self.max_event_silence_secs != 0:
+            if self.max_event_silence_secs <= self.event_recv_timeout_secs:
+                raise ValueError(
+                    "max_event_silence_secs must be greater than event_recv_timeout_secs, "
+                    "or None/0 to disable the watchdog "
+                    f"({self.max_event_silence_secs!r} <= {self.event_recv_timeout_secs!r})"
+                )
 
     @classmethod
     def testnet(
@@ -112,7 +117,7 @@ class AlloraNetworkConfig:
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
         event_recv_timeout_secs=30.0,
-        max_event_silence_secs=60.0,
+        max_event_silence_secs: "float | None" = 60.0,
         websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(
@@ -148,7 +153,7 @@ class AlloraNetworkConfig:
         grpc_max_connection_age_secs=1800,
         grpc_drain_window_secs=5,
         event_recv_timeout_secs=30.0,
-        max_event_silence_secs=60.0,
+        max_event_silence_secs: "float | None" = 60.0,
         websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(
@@ -185,7 +190,7 @@ class AlloraNetworkConfig:
         port: int = 9090,
         url: str | None = None,
         event_recv_timeout_secs=30.0,
-        max_event_silence_secs=60.0,
+        max_event_silence_secs: "float | None" = 60.0,
         websocket_heartbeat=True,
     ) -> 'AlloraNetworkConfig':
         return cls(

@@ -219,13 +219,16 @@ class AlloraWebsocketSubscriber:
         url: str,
         connect_fn: ConnectFn = default_websocket_connect,
         event_recv_timeout_secs: float = _EVENT_RECV_TIMEOUT_SECS,
-        max_event_silence_secs: float = _MAX_EVENT_SILENCE_SECS,
+        max_event_silence_secs: "float | None" = _MAX_EVENT_SILENCE_SECS,
         heartbeat: bool = True,
     ):
         """Initialize event subscriber with Allora client.
 
         ``max_event_silence_secs`` gates the deaf-subscription watchdog: after
-        this long with no message the loop forces a reconnect+resubscribe.
+        this long with no message the loop forces a reconnect+resubscribe. Set
+        it to ``None`` or ``0`` to disable the watchdog entirely, leaving
+        liveness to the websocket library's own ping/pong -- which detects a
+        dead transport but not a subscription the server has stopped pushing.
 
         With ``heartbeat`` enabled (the default) a NewBlockHeader subscription is
         added to every connection, so the wire carries a message roughly per
@@ -247,16 +250,21 @@ class AlloraWebsocketSubscriber:
             raise ValueError(
                 f"event_recv_timeout_secs must be > 0, got {event_recv_timeout_secs!r}"
             )
-        if max_event_silence_secs <= event_recv_timeout_secs:
-            raise ValueError(
-                "max_event_silence_secs must be greater than event_recv_timeout_secs "
-                f"({max_event_silence_secs!r} <= {event_recv_timeout_secs!r})"
-            )
+        # None/0 disables the watchdog. Any other value at or below the recv
+        # timeout would trip it on every idle recv cycle and reconnect-storm,
+        # so that stays an error rather than a silent near-miss.
+        if max_event_silence_secs is not None and max_event_silence_secs != 0:
+            if max_event_silence_secs <= event_recv_timeout_secs:
+                raise ValueError(
+                    "max_event_silence_secs must be greater than event_recv_timeout_secs, "
+                    f"or None/0 to disable the watchdog "
+                    f"({max_event_silence_secs!r} <= {event_recv_timeout_secs!r})"
+                )
 
         self.url = url
         self.connect_fn = connect_fn
         self._event_recv_timeout_secs = event_recv_timeout_secs
-        self._max_event_silence_secs = max_event_silence_secs
+        self._max_event_silence_secs = max_event_silence_secs or None
         self._heartbeat = heartbeat
         self.websocket: Optional['WebSocketLike'] = None
         self.subscriptions: Dict[str, Dict[str, Any]] = {}
@@ -483,7 +491,8 @@ class AlloraWebsocketSubscriber:
 
                 except asyncio.TimeoutError:
                     silent = time.monotonic() - last_msg
-                    if silent >= self._max_event_silence_secs:
+                    if (self._max_event_silence_secs is not None
+                            and silent >= self._max_event_silence_secs):
                         # Alive at the ping/pong layer but no events arriving —
                         # force a full reconnect; _connect() re-sends every
                         # subscription.
