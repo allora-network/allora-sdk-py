@@ -79,6 +79,19 @@ class Reputer:
         return EventReputerSubmissionWindowOpened
 
 
+    def requires_sequential_nonces(self) -> bool:
+        # The chain keeps a single loss bundle per (topic, reputer) with no
+        # nonce in the key, and closing a nonce consumes and then wipes that
+        # slot. On topics whose ground truth lag is not a multiple of the
+        # epoch length, the window of nonce B opens while nonce A is still
+        # open. A bundle for B stored in that overlap is read by A's close,
+        # discarded because its nonce does not match, and deleted; the chain
+        # then refuses a second submission for B. Submitting only the oldest
+        # open nonce, and waiting for it to close before the next, keeps the
+        # slot holding the bundle of the nonce that closes next.
+        return True
+
+
     async def initialize(self) -> bool:
         # Check if reputer is already registered
         resp = await self.client.emissions.query.is_reputer_registered_in_topic_id(

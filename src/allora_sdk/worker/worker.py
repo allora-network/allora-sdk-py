@@ -978,16 +978,27 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             self.stop()
             return
 
+        sequential = self.use_case.requires_sequential_nonces()
+
         # catch errors so that `nonce` is still processed if query fails
         try:
             nonces = await self.use_case.get_unfulfilled_nonces()
         except Exception as err:
             logger.warning(f"   Failed querying unfulfilled nonces for topic {self.topic_id}: {err}")
+            if sequential:
+                # Without the full set of open nonces it is unknown whether an
+                # older one is still open, and submitting a newer nonce past
+                # an open older one loses the submission. Wait for the next cycle.
+                logger.warning(f"   Skipping this cycle for topic {self.topic_id}: open nonces unknown")
+                return
             nonces = set()
-        new_nonces = { n for n in nonces if n not in self.submitted_nonces }
 
-        if nonce is not None and nonce not in self.submitted_nonces:
-            new_nonces.add(nonce)
+        if sequential:
+            new_nonces = self._select_sequential_nonce(nonces, nonce)
+        else:
+            new_nonces = { n for n in nonces if n not in self.submitted_nonces }
+            if nonce is not None and nonce not in self.submitted_nonces:
+                new_nonces.add(nonce)
 
         nonces_str     = f"{nonces}" if len(nonces) > 0 else "-"
         new_nonces_str = f"{new_nonces}" if len(new_nonces) > 0 else "-"
@@ -1074,6 +1085,30 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting... account_seq={next_sequence}")
             # Cosmos account sequence values are strictly ordered; submit serially to avoid races.
             await submit(nonce, next_sequence)
+
+
+    def _select_sequential_nonce(self, open_nonces: set[int], event_nonce: Optional[int]) -> set[int]:
+        """Pick the single nonce to submit when nonces must be handled in order.
+
+        Only the oldest open nonce is eligible. If it was already submitted
+        (or given up on) nothing is submitted until it closes, even when newer
+        windows are open, because a newer submission made while an older nonce
+        is open is consumed and discarded by the older nonce's close.
+        """
+        candidates = set(open_nonces)
+        if event_nonce is not None:
+            candidates.add(event_nonce)
+        if not candidates:
+            return set()
+        oldest = min(candidates)
+        if oldest in self.submitted_nonces:
+            newer = sorted(n for n in candidates if n > oldest)
+            if newer:
+                logger.info(
+                    f"   Topic {self.topic_id}: waiting for nonce {oldest} to close before submitting {newer}"
+                )
+            return set()
+        return {oldest}
 
 
     async def _cleanup(self, ctx: Context):

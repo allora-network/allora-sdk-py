@@ -58,6 +58,11 @@ class Forecaster:
     def submission_window_event_type(self):
         return EventWorkerSubmissionWindowOpened
 
+    def requires_sequential_nonces(self) -> bool:
+        # Worker nonces are independent: inferences are stored per nonce, so
+        # several open nonces can be submitted in the same cycle.
+        return False
+
     async def initialize(self) -> bool:
         # Validate autostake config early to fail fast
         await validate_autostake_config(
