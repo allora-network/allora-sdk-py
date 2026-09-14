@@ -106,6 +106,7 @@ class TestWorkerSubmitLock:
         mock_use_case.name.return_value = "inferer"
         mock_use_case.worker_is_whitelisted = AsyncMock(return_value=True)
         mock_use_case.get_unfulfilled_nonces = AsyncMock(return_value={101, 202})
+        mock_use_case.requires_sequential_nonces.return_value = False
         mock_use_case.submit = AsyncMock(return_value=Exception("simulated submit failure"))
 
         mock_client = MagicMock()
