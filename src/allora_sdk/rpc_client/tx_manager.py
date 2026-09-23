@@ -818,10 +818,15 @@ class TxManager:
 
         start = datetime.now()
         while True:
+            # Each poll gets only the remaining budget, so a slow node cannot
+            # stretch the wait by a whole gRPC deadline.
+            remaining = (timeout - (datetime.now() - start)).total_seconds()
             try:
-                return await self._get_tx(hash)
+                return await asyncio.wait_for(self._get_tx(hash), timeout=remaining)
             except TxNotFoundError:
                 pass
+            except asyncio.TimeoutError:
+                raise TxTimeoutError()
 
             delta = datetime.now() - start
             if delta >= timeout:
