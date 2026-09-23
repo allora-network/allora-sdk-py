@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import math
 from enum import Enum
 import bech32
@@ -78,7 +79,21 @@ class PendingTx:
         self._same_seq_rebroadcast: bool = False
 
     async def wait(self) -> TxResponse:
-        return await self._final_future
+        try:
+            return await self._final_future
+        except asyncio.CancelledError:
+            # Nobody can receive the outcome any more; stop the orphaned submission.
+            if self._task is not None:
+                self._task.cancel()
+            raise
+
+    def _set_result(self, resp: TxResponse) -> None:
+        if not self._final_future.done():
+            self._final_future.set_result(resp)
+
+    def _set_exception(self, err: BaseException) -> None:
+        if not self._final_future.done():
+            self._final_future.set_exception(err)
 
     def __await__(self):
         return self.wait().__await__()
@@ -132,6 +147,15 @@ class TxNotFoundError(Exception):
 
 class TxTimeoutError(Exception):
     pass
+
+class BroadcastTimeoutError(TxTimeoutError):
+    """broadcast_tx hit its deadline; the tx may or may not be in the mempool."""
+    def __init__(self, tx_hash: str, gas_limit: int, fee: Coin, sequence: int):
+        super().__init__(f"broadcast deadline exceeded for {tx_hash}")
+        self.tx_hash = tx_hash
+        self.gas_limit = gas_limit
+        self.fee = fee
+        self.sequence = sequence
 
 
 # Errors the submission loop recovers from by re-attempting (fresh sequence /
@@ -470,7 +494,7 @@ class TxManager:
         await asyncio.sleep(delay)
         if expired or (pending.timeout and start + pending.timeout < datetime.now()):
             err = AccountSequenceMismatchError("Transaction deadline exceeded after account sequence retry delay")
-            pending._final_future.set_exception(err)
+            pending._set_exception(err)
             return True
         return False
 
@@ -513,14 +537,14 @@ class TxManager:
 
                 logger.debug(f"✅ Transaction included in block!")
                 # Success
-                pending._final_future.set_result(resp.tx_response)
+                pending._set_result(resp.tx_response)
                 return
 
             except OutOfGasError as oog_err:
                 gas_multiplier = 1.0 + (attempt * 0.3)
 
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
-                    pending._final_future.set_exception(oog_err)
+                    pending._set_exception(oog_err)
                     return
 
                 suggested_limit = (
@@ -552,7 +576,7 @@ class TxManager:
                 fee_multiplier = 1.0 + attempt * 0.5
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     err = InsufficientFeesError("Transaction failed after multiple attempts due to insufficient fees")
-                    pending._final_future.set_exception(err)
+                    pending._set_exception(err)
                     return
                 logger.debug("Insufficient fees, retrying with refreshed gas price...")
                 continue
@@ -591,7 +615,7 @@ class TxManager:
                         # expired during the grace window.
                         if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                             err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
-                            pending._final_future.set_exception(err)
+                            pending._set_exception(err)
                             return
                         logger.debug("Account sequence mismatch, retrying...")
                         if await self._await_sequence_retry_delay(pending, start):
@@ -608,14 +632,20 @@ class TxManager:
                 next_account_seq = None
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     err = AccountSequenceMismatchError("Transaction failed after multiple attempts due to repeated account sequence mismatches")
-                    pending._final_future.set_exception(err)
+                    pending._set_exception(err)
                     return
                 logger.debug("Account sequence mismatch, retrying...")
                 if await self._await_sequence_retry_delay(pending, start):
                     return
                 continue
 
-            except TxTimeoutError:
+            except TxTimeoutError as timeout_err:
+                if isinstance(timeout_err, BroadcastTimeoutError):
+                    pending.last_tx_hash = timeout_err.tx_hash
+                    pending.last_gas_limit = timeout_err.gas_limit
+                    pending.last_fee = timeout_err.fee
+                    current_gas_limit = timeout_err.gas_limit
+                    next_account_seq = timeout_err.sequence
                 # wait_for_tx timed out — but the tx may still have landed
                 # (slow to index on a load-balanced endpoint). Re-broadcasting a
                 # tx that actually landed wastes a fee and is rejected as a
@@ -658,7 +688,7 @@ class TxManager:
                 #      optimization, not the correctness guarantee.
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     logger.error("Transaction timed out after multiple attempts")
-                    pending._final_future.set_exception(TxTimeoutError())
+                    pending._set_exception(TxTimeoutError())
                     return
                 logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
@@ -674,15 +704,15 @@ class TxManager:
                     attempt,
                     err,
                 )
-                pending._final_future.set_exception(err)
+                pending._set_exception(err)
                 return
 
             except Exception as err:
-                pending._final_future.set_exception(err)
+                pending._set_exception(err)
                 return
 
         # Exhausted attempts without setting result
-        pending._final_future.set_exception(TxTimeoutError("Transaction failed after maximum retries"))
+        pending._set_exception(TxTimeoutError("Transaction failed after maximum retries"))
 
 
     async def _build_and_broadcast(
@@ -750,7 +780,11 @@ class TxManager:
             mode=BroadcastMode.SYNC,
         )
 
-        broadcast_result = await self.tx_client.broadcast_tx(req)
+        try:
+            broadcast_result = await self.tx_client.broadcast_tx(req)
+        except asyncio.TimeoutError as e:
+            tx_hash = hashlib.sha256(tx_bytes).hexdigest().upper()
+            raise BroadcastTimeoutError(tx_hash, gas_limit, fee, resolved_seq) from e
 
         if broadcast_result is None or broadcast_result.tx_response is None:
             raise Exception('broadcast_tx returned None - check network connectivity')
@@ -806,6 +840,9 @@ class TxManager:
             if details is not None and "not found" in details:
                 raise TxNotFoundError() from e
             raise
+        except asyncio.TimeoutError as e:
+            # A slow poll is not a verdict; wait_for_tx owns the overall timeout.
+            raise TxNotFoundError() from e
         except RuntimeError as e:
             details = str(e)
             if "tx" in details and "not found" in details:
@@ -929,9 +966,9 @@ class TxManager:
             # escape would leave the caller awaiting forever. asyncio.CancelledError
             # and KeyboardInterrupt are BaseException (py>=3.10), so cancellation
             # still propagates correctly and is not swallowed here.
-            pending._final_future.set_exception(err)
+            pending._set_exception(err)
             return
-        pending._final_future.set_result(tx_response)
+        pending._set_result(tx_response)
 
     def _classify_error_from_message(self, error_msg: str) -> type[Exception]:
         """

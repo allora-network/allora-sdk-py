@@ -12,7 +12,6 @@ from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.grpc.cosmos_auth_v1beta1_grpc_wrapper import CosmosAuthV1Beta1QueryGrpcWrapper
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.utils import Context
-from allora_sdk.worker import worker as worker_module
 from allora_sdk.worker.worker import AlloraWorker
 
 
@@ -71,7 +70,6 @@ async def test_generated_wrapper_forwards_the_deadline():
 
 @pytest.mark.asyncio
 async def test_hung_submission_releases_the_shared_lock(monkeypatch):
-    monkeypatch.setattr(worker_module, "SUBMIT_LOCK_HOLD_TIMEOUT_SECS", 0.1)
     use_case = MagicMock()
     use_case.name.return_value = "reputer"
     client = MagicMock()
@@ -79,6 +77,7 @@ async def test_hung_submission_releases_the_shared_lock(monkeypatch):
     worker = AlloraWorker(use_case=use_case, client=client, address="allo1test", topic_id=1, polling_interval=999)
     worker._initialized = True
     worker._ctx = Context()
+    worker.submit_hold_timeout_secs = 0.1
     monkeypatch.setattr(worker, "_ensure_initialized", AsyncMock())
 
     async def hang(*_):

@@ -97,8 +97,9 @@ def test_huge_window_is_capped():
     assert _run(_Worker(10_000)) == DEFAULT_POLLING_INTERVAL_SECS
 
 
+@pytest.mark.parametrize("param", ["block_duration_secs", "submit_hold_timeout_secs"])
 @pytest.mark.parametrize("factory", ["inferer", "reputer", "forecaster"])
-def test_factories_actually_forward_block_duration(factory):
+def test_factories_actually_forward_block_duration(factory, param):
     """Accepting the argument is not the same as passing it on.
 
     A factory that took `block_duration_secs` and dropped it would satisfy a
@@ -118,12 +119,11 @@ def test_factories_actually_forward_block_duration(factory):
         if not isinstance(node, ast.Call):
             continue
         for kw in node.keywords:
-            if kw.arg == "block_duration_secs" and isinstance(kw.value, ast.Name) \
-                    and kw.value.id == "block_duration_secs":
+            if kw.arg == param and isinstance(kw.value, ast.Name) and kw.value.id == param:
                 forwarded = True
 
     assert forwarded, (
-        f"AlloraWorker.{factory} accepts block_duration_secs but never passes it down"
+        f"AlloraWorker.{factory} accepts {param} but never passes it down"
     )
 
 
@@ -138,9 +138,8 @@ def test_block_duration_is_last_so_positional_callers_are_unaffected(factory):
         n for n, prm in inspect.signature(getattr(AlloraWorker, factory)).parameters.items()
         if prm.kind is prm.POSITIONAL_OR_KEYWORD
     ]
-    assert names[-1] == "block_duration_secs", (
-        f"{factory} has block_duration_secs at position {names.index('block_duration_secs')} "
-        f"of {len(names) - 1}; a mid-signature insertion rebinds positional callers"
+    assert names[-2:] == ["block_duration_secs", "submit_hold_timeout_secs"], (
+        f"{factory} ends with {names[-2:]}; a mid-signature insertion rebinds positional callers"
     )
 
 
