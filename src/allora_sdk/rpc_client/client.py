@@ -206,18 +206,20 @@ class AlloraRPCClient:
                 drain_window_secs=self.network.grpc_drain_window_secs,
             )
 
-            # Set up gRPC services
-            auth_query = cast(rest.CosmosAuthV1Beta1QueryLike, cosmos_auth_v1beta1.QueryStub(self.grpc_client))
-            bank_query = cast(rest.CosmosBankV1Beta1QueryLike, cosmos_bank_v1beta1.QueryStub(self.grpc_client))
+            # Set up gRPC services. The default deadline bounds every unary call;
+            # without it a stream that never gets headers waits forever.
+            timeout = self.network.query_timeout_secs
+            auth_query = cast(rest.CosmosAuthV1Beta1QueryLike, cosmos_auth_v1beta1.QueryStub(self.grpc_client, timeout=timeout))
+            bank_query = cast(rest.CosmosBankV1Beta1QueryLike, cosmos_bank_v1beta1.QueryStub(self.grpc_client, timeout=timeout))
             tendermint_query = cast(
                 rest.CosmosBaseTendermintV1Beta1ServiceLike,
-                tendermint_v1beta1.ServiceStub(self.grpc_client),
+                tendermint_v1beta1.ServiceStub(self.grpc_client, timeout=timeout),
             )
-            tx_query = cast(rest.CosmosTxV1Beta1ServiceLike, cosmos_tx_v1beta1.ServiceStub(self.grpc_client))
-            emissions_query = cast(rest.EmissionsV10QueryServiceLike, emissions_v10.QueryServiceStub(self.grpc_client))
-            mint_query = cast(rest.MintV5QueryServiceLike, mint_v5.QueryServiceStub(self.grpc_client))
-            feemarket_query = cast(rest.FeemarketFeemarketV1QueryLike, feemarket_v1.QueryStub(self.grpc_client))
-            staking_query = cosmos_staking_v1beta1.QueryStub(self.grpc_client)
+            tx_query = cast(rest.CosmosTxV1Beta1ServiceLike, cosmos_tx_v1beta1.ServiceStub(self.grpc_client, timeout=timeout))
+            emissions_query = cast(rest.EmissionsV10QueryServiceLike, emissions_v10.QueryServiceStub(self.grpc_client, timeout=timeout))
+            mint_query = cast(rest.MintV5QueryServiceLike, mint_v5.QueryServiceStub(self.grpc_client, timeout=timeout))
+            feemarket_query = cast(rest.FeemarketFeemarketV1QueryLike, feemarket_v1.QueryStub(self.grpc_client, timeout=timeout))
+            staking_query = cosmos_staking_v1beta1.QueryStub(self.grpc_client, timeout=timeout)
         else:
             # Set up REST (Cosmos-LCD) services
             auth_query: rest.CosmosAuthV1Beta1QueryLike = rest.CosmosAuthV1Beta1RestQueryClient(parsed_url.rest_url)

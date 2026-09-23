@@ -71,6 +71,9 @@ DEFAULT_BLOCK_DURATION_SECS = 6.0
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES = 10
+# Every RPC has its own deadline; this bounds the whole lock hold, so one stuck
+# await cannot freeze every topic sharing the lock.
+SUBMIT_LOCK_HOLD_TIMEOUT_SECS = 30 * 60
 
 
 class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
@@ -965,7 +968,17 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
 
         async with self._submit_lock:
-            await self._maybe_submit_impl(ctx, nonce)
+            hold = async_timeout.timeout(SUBMIT_LOCK_HOLD_TIMEOUT_SECS)
+            try:
+                async with hold:
+                    await self._maybe_submit_impl(ctx, nonce)
+            except asyncio.TimeoutError:
+                # gRPC deadlines are also TimeoutError; only swallow our own.
+                if not hold.expired:
+                    raise
+                logger.error(
+                    f"❌ Submission for topic {self.topic_id} exceeded {SUBMIT_LOCK_HOLD_TIMEOUT_SECS}s; abandoned"
+                )
 
     async def _maybe_submit_impl(self, ctx: Context, nonce: Optional[int] = None):
         """Core submission logic; must be called while holding _submit_lock."""
