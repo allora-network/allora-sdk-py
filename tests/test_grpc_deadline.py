@@ -5,9 +5,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from grpclib.client import Channel
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.grpc.cosmos_auth_v1beta1_grpc_wrapper import CosmosAuthV1Beta1QueryGrpcWrapper
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.utils import Context
 from allora_sdk.worker import worker as worker_module
@@ -43,8 +45,29 @@ async def test_grpc_query_fails_with_deadline_when_node_never_answers():
         server.close()
         for writer in writers:
             writer.close()
+            await writer.wait_closed()
         await asyncio.wait_for(server.wait_closed(), timeout=5)
 
+
+
+@pytest.mark.asyncio
+async def test_generated_wrapper_forwards_the_deadline():
+    server, writers, port = await _silent_server()
+    channel = Channel("127.0.0.1", port)
+    wrapper = CosmosAuthV1Beta1QueryGrpcWrapper(channel, timeout=1)
+    try:
+        with pytest.raises(asyncio.TimeoutError, match="Deadline exceeded"):
+            await asyncio.wait_for(
+                wrapper.account_info(QueryAccountInfoRequest(address="allo1test")),
+                timeout=10,
+            )
+    finally:
+        channel.close()
+        server.close()
+        for writer in writers:
+            writer.close()
+            await writer.wait_closed()
+        await asyncio.wait_for(server.wait_closed(), timeout=5)
 
 @pytest.mark.asyncio
 async def test_hung_submission_releases_the_shared_lock(monkeypatch):
