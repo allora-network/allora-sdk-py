@@ -18,13 +18,14 @@ from {{ interface_import_path }}.{{ module_name }} import {{ protocol_name }}
 class {{ service.wrapper_class_name }}({{ service.protocol_name }}):
     """gRPC wrapper for {{ service.service_name }} that conforms to {{ service.protocol_name }}."""
 
-    def __init__(self, channel: Channel):
+    def __init__(self, channel: Channel, timeout: float | None = None):
         """
         Initialize gRPC wrapper.
 
         :param channel: gRPC channel for communication
+        :param timeout: default deadline in seconds for every call
         """
-        self.stub = {{ service.stub_class_name }}(channel)
+        self.stub = {{ service.stub_class_name }}(channel, timeout=timeout)
 {%- for method in service.methods %}
 
 {% if method.has_path_params %}

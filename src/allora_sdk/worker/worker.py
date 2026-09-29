@@ -71,6 +71,10 @@ DEFAULT_BLOCK_DURATION_SECS = 6.0
 DEFAULT_MAX_UNFULFILLED_WORKER_NONCES = 10
 # Default per-cycle cap for reputer unfulfilled nonce processing.
 DEFAULT_MAX_UNFULFILLED_REPUTER_NONCES = 10
+# Every RPC has its own deadline; this bounds the whole lock hold, so one stuck
+# await cannot freeze every topic sharing the lock. User predict/loss code for
+# every nonce in the cycle counts against it.
+DEFAULT_SUBMIT_HOLD_TIMEOUT_SECS = 30 * 60
 
 
 class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
@@ -105,6 +109,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
         block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
+        submit_hold_timeout_secs: float = DEFAULT_SUBMIT_HOLD_TIMEOUT_SECS,
     ):
         """
         Create an AlloraWorker configured as an inferer.
@@ -168,6 +173,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             block_duration_secs=block_duration_secs,
+            submit_hold_timeout_secs=submit_hold_timeout_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -196,6 +202,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
         block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
+        submit_hold_timeout_secs: float = DEFAULT_SUBMIT_HOLD_TIMEOUT_SECS,
     ) -> "AlloraWorker[EventReputerSubmissionWindowOpened, InputValueBundle]":
         """
         Create an AlloraWorker configured as a reputer.
@@ -261,6 +268,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             block_duration_secs=block_duration_secs,
+            submit_hold_timeout_secs=submit_hold_timeout_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -289,6 +297,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
         block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
+        submit_hold_timeout_secs: float = DEFAULT_SUBMIT_HOLD_TIMEOUT_SECS,
     ) -> "AlloraWorker[EventWorkerSubmissionWindowOpened, TForecasterRunFnResult]":
         """
         Create an AlloraWorker configured as a forecaster.
@@ -352,6 +361,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             fee_tier=fee_tier,
             polling_interval=polling_interval,
             block_duration_secs=block_duration_secs,
+            submit_hold_timeout_secs=submit_hold_timeout_secs,
             max_unfulfilled_nonces=max_unfulfilled_nonces,
             lock=lock,
             debug=debug,
@@ -373,6 +383,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         debug: bool = False,
         show_banner: bool = True,
         block_duration_secs: float = DEFAULT_BLOCK_DURATION_SECS,
+        submit_hold_timeout_secs: float = DEFAULT_SUBMIT_HOLD_TIMEOUT_SECS,
     ) -> None:
         """
         Initialize the Allora worker.
@@ -390,6 +401,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 [MIN_POLLING_INTERVAL_SECS, DEFAULT_POLLING_INTERVAL_SECS].
             max_unfulfilled_nonces: Maximum number of nonces to process per cycle
             lock: if multiple AlloraWorkers are using the same address, pass the same asyncio.Lock to all of them to avoid account sequence issues
+            submit_hold_timeout_secs: Cap on one submission cycle while holding the lock, including user predict/loss code
             debug: Enable debug logging
         """
         if use_case is None:
@@ -420,6 +432,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             polling_interval if polling_interval is not None else DEFAULT_POLLING_INTERVAL_SECS
         )
         self.block_duration_secs = block_duration_secs
+        self.submit_hold_timeout_secs = submit_hold_timeout_secs
         self.max_unfulfilled_nonces = max(1, max_unfulfilled_nonces)
         self.show_banner = show_banner
 
@@ -965,7 +978,17 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
 
         async with self._submit_lock:
-            await self._maybe_submit_impl(ctx, nonce)
+            hold = async_timeout.timeout(self.submit_hold_timeout_secs)
+            try:
+                async with hold:
+                    await self._maybe_submit_impl(ctx, nonce)
+            except asyncio.TimeoutError:
+                # gRPC deadlines are also TimeoutError; only swallow our own.
+                if not hold.expired:
+                    raise
+                logger.error(
+                    f"❌ Submission for topic {self.topic_id} exceeded {self.submit_hold_timeout_secs}s; abandoned"
+                )
 
     async def _maybe_submit_impl(self, ctx: Context, nonce: Optional[int] = None):
         """Core submission logic; must be called while holding _submit_lock."""
