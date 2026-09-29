@@ -10,10 +10,10 @@ from cosmpy.aerial.wallet import LocalWallet
 from cosmpy.crypto.keypairs import PrivateKey
 from grpclib.client import Channel
 
-from allora_sdk.rpc_client.client import AlloraRPCClient, ReconnectingGRPCChannel
-from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.grpc.cosmos_auth_v1beta1_grpc_wrapper import CosmosAuthV1Beta1QueryGrpcWrapper
-from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryStub
+from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import MsgSend
 from allora_sdk.rpc_client.tx_manager import PendingTx, TxManager, TxTimeoutError
 from allora_sdk.utils import Context
@@ -31,6 +31,14 @@ async def _silent_server():
     return server, writers, server.sockets[0].getsockname()[1]
 
 
+async def _teardown_silent_server(server, writers):
+    server.close()
+    for writer in writers:
+        writer.close()
+        await writer.wait_closed()
+    await asyncio.wait_for(server.wait_closed(), timeout=5)
+
+
 @pytest.mark.asyncio
 async def test_grpc_query_fails_with_deadline_when_node_never_answers():
     server, writers, port = await _silent_server()
@@ -46,11 +54,7 @@ async def test_grpc_query_fails_with_deadline_when_node_never_answers():
             )
     finally:
         await client.close()
-        server.close()
-        for writer in writers:
-            writer.close()
-            await writer.wait_closed()
-        await asyncio.wait_for(server.wait_closed(), timeout=5)
+        await _teardown_silent_server(server, writers)
 
 
 
@@ -67,11 +71,7 @@ async def test_generated_wrapper_forwards_the_deadline():
             )
     finally:
         channel.close()
-        server.close()
-        for writer in writers:
-            writer.close()
-            await writer.wait_closed()
-        await asyncio.wait_for(server.wait_closed(), timeout=5)
+        await _teardown_silent_server(server, writers)
 
 @pytest.mark.asyncio
 async def test_hung_submission_releases_the_shared_lock(monkeypatch):
@@ -111,14 +111,6 @@ async def test_rpc_deadline_inside_the_hold_is_not_reported_as_lock_timeout(monk
         await worker._maybe_submit(worker._ctx)
 
     assert not worker._submit_lock.locked()
-
-
-async def _teardown_silent_server(server, writers):
-    server.close()
-    for writer in writers:
-        writer.close()
-        await writer.wait_closed()
-    await asyncio.wait_for(server.wait_closed(), timeout=5)
 
 
 def _worker_client_for_submit() -> Mock:
@@ -222,8 +214,8 @@ async def test_hold_cancels_a_live_pending_submission(monkeypatch):
     previous_handler = loop.get_exception_handler()
     loop.set_exception_handler(lambda _loop, ctx: retrieved.append(ctx))
     pending_task = None
+    hold_task = asyncio.create_task(worker._maybe_submit(worker._ctx))
     try:
-        hold_task = asyncio.create_task(worker._maybe_submit(worker._ctx))
         await asyncio.wait_for(broadcast_started.wait(), timeout=2)
         await asyncio.wait_for(hold_task, timeout=5)
 
@@ -234,12 +226,14 @@ async def test_hold_cancels_a_live_pending_submission(monkeypatch):
             await asyncio.wait_for(pending_task, timeout=2)
         await asyncio.sleep(0.05)
     finally:
+        hold_task.cancel()
+        await asyncio.gather(hold_task, return_exceptions=True)
         loop.set_exception_handler(previous_handler)
         await manager.close()
 
     assert not worker._submit_lock.locked()
     assert pending_task is not None and pending_task.cancelled()
-    assert use_case.pending is not None and use_case.pending._final_future.done()
+    assert use_case.pending is not None and use_case.pending._final_future.cancelled()
     assert not [
         ctx
         for ctx in retrieved
@@ -250,8 +244,10 @@ async def test_hold_cancels_a_live_pending_submission(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_terminal_pre_broadcast_deadline_does_not_mark_the_nonce_submitted(monkeypatch):
-    """A terminal pre-broadcast deadline surfaces as TxTimeoutError, which the
-    worker does not record as submitted, so the epoch can be retried."""
+    """The roles return a terminal TxTimeoutError rather than raising it; the
+    worker must not record that nonce as submitted, so the next cycle retries it.
+    The tx-path mapping to TxTimeoutError is pinned by
+    test_real_grpc_deadline_before_broadcast_is_retried_on_the_tx_path."""
     use_case = MagicMock()
     use_case.name.return_value = "inferer"
     use_case.requires_sequential_nonces.return_value = False
@@ -274,9 +270,10 @@ async def test_terminal_pre_broadcast_deadline_does_not_mark_the_nonce_submitted
     monkeypatch.setattr(worker, "_maybe_faucet_request", AsyncMock())
 
     await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
-
-    use_case.submit.assert_awaited_once()
     assert 7 not in worker.submitted_nonces
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+    assert use_case.submit.await_count == 2
 
 
 class _CountingAccountInfo:
@@ -293,26 +290,20 @@ class _CountingAccountInfo:
 
 @pytest.mark.asyncio
 async def test_real_grpc_deadline_before_broadcast_is_retried_on_the_tx_path():
-    """A real gRPC deadline on a pre-broadcast query (not a mocked TimeoutError)
-    must be caught by the tx-path handler, retried, and end as TxTimeoutError
-    with nothing broadcast."""
+    """The auth stub AlloraRPCClient wires into its TxManager carries the default
+    deadline, and that real gRPC deadline on a pre-broadcast query is retried and
+    ends as TxTimeoutError with nothing broadcast."""
     server, writers, port = await _silent_server()
-    channel = ReconnectingGRPCChannel(host="127.0.0.1", port=port, ssl=False)
-    counting_auth = _CountingAccountInfo(QueryStub(channel, timeout=0.3))
-    config = AlloraNetworkConfig.testnet()
-    config.use_dynamic_gas_price = False
-    config.congestion_aware_fees = False
-    tx_client = Mock()
-    tx_client.broadcast_tx = AsyncMock()
-    manager = TxManager(
-        wallet=LocalWallet(PrivateKey(), prefix="allo"),
-        tx_client=tx_client,
-        auth_client=counting_auth,
-        bank_client=Mock(),
-        feemarket_client=None,
-        config=config,
+    client = AlloraRPCClient(
+        wallet=AlloraWalletConfig(wallet=LocalWallet(PrivateKey(), prefix="allo")),
+        network=AlloraNetworkConfig.local(url=f"grpc+http://127.0.0.1:{port}", query_timeout_secs=0.3),
         simulate_gas_from_start=False,
     )
+    manager = client.tx_manager
+    assert manager is not None
+    counting_auth = _CountingAccountInfo(manager.auth_client)
+    manager.auth_client = counting_auth
+    manager.tx_client = Mock(broadcast_tx=AsyncMock())
     manager._pre_flight_checks = AsyncMock()
     try:
         pending = await manager.submit_transaction(
@@ -324,9 +315,8 @@ async def test_real_grpc_deadline_before_broadcast_is_retried_on_the_tx_path():
         with pytest.raises(TxTimeoutError):
             await asyncio.wait_for(pending.wait(), timeout=5)
     finally:
-        await manager.close()
-        channel.close()
+        await client.close()
         await _teardown_silent_server(server, writers)
 
     assert counting_auth.calls == 2
-    assert tx_client.broadcast_tx.await_count == 0
+    assert manager.tx_client.broadcast_tx.await_count == 0

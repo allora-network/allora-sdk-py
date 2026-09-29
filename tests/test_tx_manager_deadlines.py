@@ -232,30 +232,39 @@ async def test_late_outcome_after_abandon_does_not_raise():
 
 @pytest.mark.asyncio
 async def test_broadcast_deadline_confirms_inclusion_before_rebroadcasting():
-    """A timed-out broadcast must be confirmed by a wait_for_tx inclusion poll
-    before any same-sequence re-broadcast is attempted."""
+    """A timed-out broadcast must be confirmed by hash (wait_for_tx, then the
+    landed re-check) before any same-sequence re-broadcast is attempted."""
     manager = _signing_manager()
     events: list[str] = []
+    sent: list[bytes] = []
+    waited: list[str] = []
+    ok = _accepted()
 
-    async def broadcast(_req):
+    async def broadcast(req):
         events.append("broadcast")
-        if events.count("broadcast") == 1:
+        sent.append(req.tx_bytes)
+        if len(sent) == 1:
             raise asyncio.TimeoutError("Deadline exceeded")
         return _accepted()
 
-    manager.tx_client.broadcast_tx = broadcast
-
-    async def wait_for_tx(_hash, **_kwargs):
+    async def wait_for_tx(tx_hash, **_kwargs):
         events.append("wait_for_tx")
-        if events.count("wait_for_tx") == 1:
+        waited.append(tx_hash)
+        if len(waited) == 1:
             raise TxTimeoutError()
-        return _accepted()
+        return ok
 
+    async def get_tx(_hash):
+        events.append("get_tx")
+        raise TxNotFoundError()
+
+    manager.tx_client.broadcast_tx = broadcast
     manager.wait_for_tx = wait_for_tx
-    manager._get_tx = AsyncMock(side_effect=TxNotFoundError())
+    manager._get_tx = get_tx
 
     pending = _signing_pending(manager)
     await manager._attempt_submissions(pending, gas_limit=200_000, account_seq=7)
 
-    assert await pending.wait() is not None
-    assert events == ["broadcast", "wait_for_tx", "broadcast", "wait_for_tx"]
+    assert await pending.wait() is ok.tx_response
+    assert events == ["broadcast", "wait_for_tx", "get_tx", "broadcast", "wait_for_tx"]
+    assert waited[0] == hashlib.sha256(sent[0]).hexdigest().upper()
