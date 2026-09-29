@@ -238,6 +238,7 @@ async def test_broadcast_deadline_confirms_inclusion_before_rebroadcasting():
     events: list[str] = []
     sent: list[bytes] = []
     waited: list[str] = []
+    checked: list[str] = []
     ok = _accepted()
 
     async def broadcast(req):
@@ -254,8 +255,9 @@ async def test_broadcast_deadline_confirms_inclusion_before_rebroadcasting():
             raise TxTimeoutError()
         return ok
 
-    async def get_tx(_hash):
+    async def get_tx(tx_hash):
         events.append("get_tx")
+        checked.append(tx_hash)
         raise TxNotFoundError()
 
     manager.tx_client.broadcast_tx = broadcast
@@ -267,4 +269,6 @@ async def test_broadcast_deadline_confirms_inclusion_before_rebroadcasting():
 
     assert await pending.wait() is ok.tx_response
     assert events == ["broadcast", "wait_for_tx", "get_tx", "broadcast", "wait_for_tx"]
-    assert waited[0] == hashlib.sha256(sent[0]).hexdigest().upper()
+    first_hash = hashlib.sha256(sent[0]).hexdigest().upper()
+    assert waited[0] == first_hash
+    assert checked == [first_hash]
