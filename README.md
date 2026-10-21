@@ -14,7 +14,7 @@ A Python SDK for interacting with the Allora Network. Submit machine learning pr
 - [Allora RPC Client](#rpc-client)
   - [Basic Usage](#basic-usage-1)
   - [Capabilities](#capabilities)
-- [Allora API Client](#api-client)
+- [Allora API Client](#allora-api-client)
   - [Basic Usage](#basic-usage-2)
   - [Features](#features)
 - [Command-line Tools](#command-line-tools)
@@ -309,35 +309,63 @@ Wire protocol is determined by the RPC url string passed to the config construct
 
 ## Allora API Client
 
-Slim, high-level HTTP client for querying a list of all topics, individual topic metadata, and network inference results.
+Async HTTP client for the **Forge API Gateway** — same two methods as before:
 
-**NOTE:** you will need an Allora API key.  You can obtain one for free at [https://developer.allora.network](https://developer.allora.network).
+- `get_all_topics()`
+- `get_inference_by_topic_id(topic_id)`
+
+Obtain a `forge_sk_…` key from the [Developer Portal](https://developer.allora.network).
+
+### Defaults
+
+| Setting | Default |
+|---------|---------|
+| Gateway base | `https://api.developer.allora.network` |
+| Network path | `mainnet` (`testnet` \| `mainnet` \| `offchain`) |
+
+Gateway calls use `Authorization: Bearer {key}`.
+
+### Breaking changes (Upshot → Forge)
+
+- Constructor **requires** `api_key=` — there is no embedded default key
+- Keys must start with `forge_sk_` (legacy `UP-…` keys are rejected)
+- Default base is the Forge gateway (not Upshot `/v2`)
+- Default network is **mainnet** path segment (not Cosmos `allora-testnet-1`)
+- **`Topic` no longer includes** fields the Forge catalog does not provide:
+  `description`, `worker_count`, `reputer_count`, `total_staked_allo`,
+  `total_emissions_allo`, `is_active`, `updated_at`. Use on-chain / explorer APIs
+  if you still need that metadata.
 
 ### Basic Usage
 
 ```python
 import asyncio
-from allora_sdk.api_client import AlloraAPIClient
-
-client = AlloraAPIClient()
+from allora_sdk.api_client import AlloraAPIClient, APIError, Network
 
 async def main():
-    # Get all active topics
-    topics = await client.get_all_topics()
-    print(f"Found {len(topics)} topics")
+    async with AlloraAPIClient(
+        api_key="forge_sk_…",
+        # network=Network.TESTNET,  # optional
+        # base_url="…",             # optional gateway override
+    ) as client:
+        try:
+            topics = await client.get_all_topics()
+            print(f"Found {len(topics)} topics")
+            if not topics:
+                return
 
-    # Get latest inference
-    inference = await client.get_inference_by_topic_id(13)
-    print(f"ETH price in 5 minutes: ${inference.inference_data.network_inference_normalized}")
+            inference = await client.get_inference_by_topic_id(topics[0].topic_id)
+            print(inference.inference_data.network_inference_normalized)
+        except APIError as e:
+            print(f"API error {e.status_code}: {e.message}")
 
 asyncio.run(main())
 ```
 
 ### Features
 
-- **Price predictions**: BTC, ETH, SOL, etc. across multiple timeframes
-- **Topic index**: Browse all network topics and their metadata
-- **Confidence intervals**: Access prediction uncertainty bounds
+- **Topics**: Browse the gateway topic catalog
+- **Inferences**: Same nested `Inference` shape as before (normalized preferred over raw base-unit)
 - **Async/await**: Fully asynchronous API
 
 
