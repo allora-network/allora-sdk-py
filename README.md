@@ -312,9 +312,12 @@ Wire protocol is determined by the RPC url string passed to the config construct
 Async HTTP client for the **Forge API Gateway** — same two methods as before:
 
 - `get_all_topics()`
-- `get_inference_by_topic_id(topic_id)`
+- `get_inference_by_topic_id(topic_id, signature_format=None)`
 
-Obtain a `forge_sk_…` key from the [Developer Portal](https://developer.allora.network).
+Obtain a `forge_sk_…` API key from your Allora Forge key provisioner (legacy
+Upshot `UP-…` keys and the old developer portal key page are not used).
+
+More detail: [`docs/FORGE_API_CLIENT.md`](docs/FORGE_API_CLIENT.md).
 
 ### Defaults
 
@@ -325,12 +328,21 @@ Obtain a `forge_sk_…` key from the [Developer Portal](https://developer.allora
 
 Gateway calls use `Authorization: Bearer {key}`.
 
-### Breaking changes (Upshot → Forge)
+Pass `signature_format` (a `SignatureFormat`, chain id, or legacy slug) when you
+need a populated `Inference.signature`; omitting it sends no `evm_chain_id`.
+
+### Breaking changes (Upshot → Forge) — v1.5.0
 
 - Constructor **requires** `api_key=` — there is no embedded default key
 - Keys must start with `forge_sk_` (legacy `UP-…` keys are rejected)
 - Default base is the Forge gateway (not Upshot `/v2`)
 - Default network is **mainnet** path segment (not Cosmos `allora-testnet-1`)
+- **`signature_format` defaults to `None`** — no `evm_chain_id` query; signature
+  is typically empty unless you pass a chain id / `SignatureFormat`
+- Removed exports: `ChainID`, `TopicsResponse`, `APIResponse`
+- Removed methods: `fetch_api_response()`, `get_request_url()`
+- `Fetcher` protocol is now `(method, url, headers)` and requires `aclose()`
+- Empty inference payloads raise `EmptyInferenceError` (not a blank `Inference`)
 - **`Topic` no longer includes** fields the Forge catalog does not provide:
   `description`, `worker_count`, `reputer_count`, `total_staked_allo`,
   `total_emissions_allo`, `is_active`, `updated_at`. Use on-chain / explorer APIs
@@ -340,7 +352,7 @@ Gateway calls use `Authorization: Bearer {key}`.
 
 ```python
 import asyncio
-from allora_sdk.api_client import AlloraAPIClient, APIError, Network
+from allora_sdk.api_client import AlloraAPIClient, APIError, Network, SignatureFormat
 
 async def main():
     async with AlloraAPIClient(
@@ -356,6 +368,13 @@ async def main():
 
             inference = await client.get_inference_by_topic_id(topics[0].topic_id)
             print(inference.inference_data.network_inference_normalized)
+
+            # Optional: request a chain-specific consumer signature
+            signed = await client.get_inference_by_topic_id(
+                topics[0].topic_id,
+                SignatureFormat.ETHEREUM_SEPOLIA,
+            )
+            print(signed.signature)
         except APIError as e:
             print(f"API error {e.status_code}: {e.message}")
 

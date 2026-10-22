@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -33,12 +34,16 @@ requires_api_key = pytest.mark.skipif(
 
 
 @pytest_asyncio.fixture
-def client() -> AlloraAPIClient:
-    return AlloraAPIClient(
+async def client() -> AsyncIterator[AlloraAPIClient]:
+    c = AlloraAPIClient(
         os.environ["ALLORA_API_KEY"],
         base_url=os.getenv("ALLORA_API_BASE_URL", DefaultAPIBaseURL),
         network=Network.MAINNET,
     )
+    try:
+        yield c
+    finally:
+        await c.aclose()
 
 
 @requires_api_key

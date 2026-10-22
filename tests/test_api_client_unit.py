@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pytest
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from allora_sdk.api_client import (
     APIError,
     AlloraAPIClient,
     DefaultAPIBaseURL,
+    EmptyInferenceError,
     Network,
     SignatureFormat,
 )
@@ -61,6 +62,11 @@ def test_constructor_defaults_and_overrides():
     assert client.base_url == "http://gateway.example"
 
 
+def test_constructor_coerces_network_string():
+    client = AlloraAPIClient("forge_sk_test", network="testnet")
+    assert client.network is Network.TESTNET
+
+
 def test_constructor_rejects_bad_network():
     with pytest.raises(ValueError, match="unsupported network"):
         AlloraAPIClient("forge_sk_test", network="bogus")  # type: ignore[arg-type]
@@ -73,7 +79,7 @@ def test_map_prefers_normalized():
         combined_value=[LabeledValueWire(label_name="y", value="should-not-win")],
         timestamp_ms=1784025644244,
     )
-    inf = map_gateway_inference(wire)
+    inf = map_gateway_inference(wire, requested_topic_id=72)
     assert inf.inference_data.network_inference_normalized == "0.00006678"
     assert inf.inference_data.network_inference == "66781380725120668592"
     assert inf.inference_data.timestamp == 1784025644244
@@ -88,14 +94,18 @@ def test_map_single_label_only_never_raw_fallback():
         ],
         network_inference="999999",
     )
-    inf = map_gateway_inference(wire)
+    inf = map_gateway_inference(wire, requested_topic_id=1)
     assert inf.inference_data.network_inference_normalized == ""
     assert inf.inference_data.network_inference == "999999"
 
 
 def test_map_timestamp_seconds_fallback():
-    wire = GatewayInferenceWire(timestamp_ms=0, timestamp=1700000000)
-    inf = map_gateway_inference(wire)
+    wire = GatewayInferenceWire(
+        timestamp_ms=0,
+        timestamp=1700000000,
+        network_inference_normalized="0.1",
+    )
+    inf = map_gateway_inference(wire, requested_topic_id=1)
     assert inf.inference_data.timestamp == 1700000000 * 1000
 
 
@@ -104,8 +114,13 @@ def test_map_single_labeled_combined_when_normalized_empty():
         network_inference_normalized="",
         combined_value=[LabeledValueWire(label_name="y", value="0.42")],
     )
-    inf = map_gateway_inference(wire)
+    inf = map_gateway_inference(wire, requested_topic_id=1)
     assert inf.inference_data.network_inference_normalized == "0.42"
+
+
+def test_map_empty_payload_raises():
+    with pytest.raises(EmptyInferenceError):
+        map_gateway_inference(GatewayInferenceWire(), requested_topic_id=72)
 
 
 @pytest.mark.asyncio
@@ -134,6 +149,15 @@ async def test_get_all_topics():
 
 
 @pytest.mark.asyncio
+async def test_get_all_topics_rejects_non_object():
+    server = MockServer()
+    server.on("/testnet/topics", lambda r: ["not", "an", "object"])
+    client = make_client(server)
+    with pytest.raises(APIError, match="JSON object"):
+        await client.get_all_topics()
+
+
+@pytest.mark.asyncio
 async def test_get_inference_by_topic_id_no_chain_by_default():
     server = MockServer()
     saw_query = {}
@@ -152,6 +176,25 @@ async def test_get_inference_by_topic_id_no_chain_by_default():
         inference.inference_data.network_inference_normalized == "0.00006678"
     )
     assert inference.inference_data.network_inference == "66781380725120668592"
+
+
+@pytest.mark.asyncio
+async def test_get_inference_empty_body_raises():
+    server = MockServer()
+    server.on("/testnet/inference/72", lambda r: {})
+    client = make_client(server)
+    with pytest.raises(EmptyInferenceError):
+        await client.get_inference_by_topic_id(72)
+
+
+@pytest.mark.asyncio
+async def test_get_inference_rejects_bad_topic_id():
+    server = MockServer()
+    client = make_client(server)
+    with pytest.raises(ValueError, match="non-negative int"):
+        await client.get_inference_by_topic_id(-1)
+    with pytest.raises(ValueError, match="non-negative int"):
+        await client.get_inference_by_topic_id("72/../x")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -201,3 +244,49 @@ async def test_get_inference_maps_http_errors():
         await client.get_inference_by_topic_id(1)
     assert exc_info.value.status_code == 402
     assert "insufficient balance" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_inference_non_json_error_includes_body():
+    server = MockServer()
+    server.on(
+        "/testnet/inference/1",
+        lambda r: PlainTextResponse("bad gateway", status_code=502),
+    )
+    client = make_client(server)
+    with pytest.raises(APIError) as exc_info:
+        await client.get_inference_by_topic_id(1)
+    assert exc_info.value.status_code == 502
+    assert "bad gateway" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_inference_non_json_200_raises_api_error():
+    server = MockServer()
+    server.on(
+        "/testnet/inference/1",
+        lambda r: PlainTextResponse("not-json", status_code=200),
+    )
+    client = make_client(server)
+    with pytest.raises(APIError, match="invalid JSON"):
+        await client.get_inference_by_topic_id(1)
+
+
+@pytest.mark.asyncio
+async def test_aclose_does_not_close_injected_fetcher():
+    server = MockServer()
+    fetcher = StarletteMockFetcher(server)
+    closed = {"n": 0}
+
+    async def mark_closed() -> None:
+        closed["n"] += 1
+
+    fetcher.aclose = mark_closed  # type: ignore[method-assign]
+    client = AlloraAPIClient(
+        "forge_sk_test",
+        base_url="http://gateway.example",
+        network=Network.TESTNET,
+        fetcher=fetcher,
+    )
+    await client.aclose()
+    assert closed["n"] == 0

@@ -6,6 +6,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from .errors import EmptyInferenceError
 from .models import Inference, InferenceData, SignatureFormat
 
 
@@ -39,20 +40,29 @@ def _single_labeled_value(values: List[LabeledValueWire]) -> str:
     return values[0].value
 
 
-def map_gateway_inference(wire: GatewayInferenceWire) -> Inference:
+def map_gateway_inference(
+    wire: GatewayInferenceWire, *, requested_topic_id: int
+) -> Inference:
     """Map flat gateway inference onto the public nested Inference shape.
 
     Prefers ``network_inference_normalized``; else a single labeled
     ``combined_value`` entry. Never uses raw ``network_inference`` for the
-    normalized field.
+    normalized field. Raises EmptyInferenceError when the payload has no
+    usable prediction.
     """
     normalized = wire.network_inference_normalized.strip()
     if not normalized:
         normalized = _single_labeled_value(wire.combined_value)
 
+    raw = wire.network_inference.strip()
     timestamp = wire.timestamp_ms
     if not timestamp and wire.timestamp > 0:
         timestamp = wire.timestamp * 1000
+
+    if not normalized and not raw:
+        raise EmptyInferenceError(requested_topic_id)
+
+    topic_id = wire.topic_id if wire.topic_id else requested_topic_id
 
     return Inference(
         signature=wire.signature,
@@ -69,7 +79,7 @@ def map_gateway_inference(wire: GatewayInferenceWire) -> Inference:
             confidence_interval_values_normalized=(
                 wire.confidence_interval_values_normalized or None
             ),
-            topic_id=str(wire.topic_id),
+            topic_id=str(topic_id),
             timestamp=timestamp,
             extra_data=wire.extra_data,
         ),

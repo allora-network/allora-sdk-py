@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Protocol, Union, runtime_checkable
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
+from pydantic import ValidationError
 
-from .errors import APIError
+from .errors import APIError, AlloraAPIError
 from .gateway import (
     GatewayInferenceWire,
     map_gateway_inference,
@@ -40,35 +42,32 @@ class Fetcher(Protocol):
 
 
 class DefaultFetcher:
-    """aiohttp-backed fetcher that reuses one ClientSession."""
+    """aiohttp-backed fetcher (one ClientSession per request)."""
 
     def __init__(self, timeout: float = 30.0) -> None:
         self.timeout = timeout
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _session_get(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            )
-        return self._session
 
     async def fetch(
         self, method: str, url: str, headers: Dict[str, str]
     ) -> HTTPResult:
-        session = await self._session_get()
-        async with session.request(method, url, headers=headers) as response:
-            body = await response.read()
-            return HTTPResult(
-                status=response.status,
-                body=body,
-                headers={k: v for k, v in response.headers.items()},
-            )
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, headers=headers) as response:
+                    body = await response.content.read(MAX_API_RESPONSE_BYTES + 1)
+                    return HTTPResult(
+                        status=response.status,
+                        body=body,
+                        headers={k: v for k, v in response.headers.items()},
+                    )
+        except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as exc:
+            raise APIError(
+                status_code=0,
+                message=f"transport error: {exc}",
+            ) from exc
 
     async def aclose(self) -> None:
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
-        self._session = None
+        return None
 
 
 class AlloraAPIClient:
@@ -81,9 +80,6 @@ class AlloraAPIClient:
 
     Requires a Developer Portal key (``forge_sk_…``). Requests use
     ``Authorization: Bearer {api_key}``.
-
-    Prefer ``async with AlloraAPIClient(...) as client:`` so the shared HTTP
-    session is closed, or call ``await client.aclose()``.
     """
 
     def __init__(
@@ -91,24 +87,30 @@ class AlloraAPIClient:
         api_key: str,
         *,
         base_url: str = DefaultAPIBaseURL,
-        network: Network = Network.MAINNET,
+        network: Network | str = Network.MAINNET,
         timeout: float = 30.0,
         fetcher: Optional[Fetcher] = None,
     ) -> None:
-        api_key = api_key.strip()
+        if api_key is None:
+            raise ValueError("ALLORA_API_KEY is required (forge_sk_…)")
+        api_key = str(api_key).strip()
         if not api_key:
             raise ValueError("ALLORA_API_KEY is required (forge_sk_…)")
         if not api_key.startswith(FORGE_API_KEY_PREFIX):
             raise ValueError(f"API key must start with {FORGE_API_KEY_PREFIX}")
-        if network not in (Network.TESTNET, Network.MAINNET, Network.OFFCHAIN):
+
+        try:
+            network = Network(network)
+        except ValueError as exc:
             raise ValueError(
                 f"unsupported network {network!r} (want testnet|mainnet|offchain)"
-            )
+            ) from exc
 
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.network = network
         self.timeout = timeout
+        self._owns_fetcher = fetcher is None
         self.fetcher: Fetcher = fetcher or DefaultFetcher(timeout=timeout)
 
     async def __aenter__(self) -> AlloraAPIClient:
@@ -118,16 +120,38 @@ class AlloraAPIClient:
         await self.aclose()
 
     async def aclose(self) -> None:
-        await self.fetcher.aclose()
+        if self._owns_fetcher:
+            await self.fetcher.aclose()
 
     async def get_all_topics(self) -> List[Topic]:
         """Fetch all topics from the Forge gateway catalog."""
         data = await self._get(f"{self.network.value}/topics")
         if not isinstance(data, dict):
-            return []
-        return [
-            Topic.model_validate(item) for item in (data.get("topics") or [])
-        ]
+            raise APIError(
+                status_code=200,
+                message="topics response must be a JSON object",
+                body=repr(data),
+            )
+        if "topics" not in data:
+            raise APIError(
+                status_code=200,
+                message="topics field missing",
+                body=repr(data),
+            )
+        raw = data["topics"]
+        if not isinstance(raw, list):
+            raise APIError(
+                status_code=200,
+                message="topics field must be a list",
+                body=repr(raw),
+            )
+        try:
+            return [Topic.model_validate(item) for item in raw]
+        except ValidationError as exc:
+            raise APIError(
+                status_code=200,
+                message=f"invalid topic catalog: {exc}",
+            ) from exc
 
     async def get_inference_by_topic_id(
         self,
@@ -137,17 +161,27 @@ class AlloraAPIClient:
         """Fetch the latest inference for a topic.
 
         ``signature_format`` is optional. When omitted, no ``evm_chain_id`` query
-        is sent. When set, accepts a ``SignatureFormat``, raw chain id
-        (``8453`` / ``"8453"``), or legacy slug (``ethereum-11155111``).
+        is sent and ``Inference.signature`` is typically empty. When set, accepts
+        a ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
+        slug (``ethereum-11155111``).
         """
+        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
+            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
+
         query: Dict[str, str] = {}
         chain = resolve_evm_chain_id(signature_format)
         if chain:
             query["evm_chain_id"] = chain
 
         data = await self._get(f"{self.network.value}/inference/{topic_id}", query)
-        wire = GatewayInferenceWire.model_validate(data or {})
-        return map_gateway_inference(wire)
+        try:
+            wire = GatewayInferenceWire.model_validate(data or {})
+            return map_gateway_inference(wire, requested_topic_id=topic_id)
+        except ValidationError as exc:
+            raise APIError(
+                status_code=200,
+                message=f"invalid inference payload: {exc}",
+            ) from exc
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         url = urljoin(self.base_url + "/", path.lstrip("/"))
@@ -165,27 +199,49 @@ class AlloraAPIClient:
             "Accept": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
-        result = await self.fetcher.fetch("GET", self._url(path, query), headers)
+        try:
+            result = await self.fetcher.fetch("GET", self._url(path, query), headers)
+        except AlloraAPIError:
+            raise
+        except Exception as exc:
+            raise APIError(
+                status_code=0,
+                message=f"transport error: {exc}",
+            ) from exc
 
         if len(result.body) > MAX_API_RESPONSE_BYTES:
-            raise ValueError(
-                f"response body exceeds {MAX_API_RESPONSE_BYTES} bytes"
+            raise APIError(
+                status_code=result.status,
+                message=f"response body exceeds {MAX_API_RESPONSE_BYTES} bytes",
             )
+
+        body_text = result.body.decode("utf-8", errors="replace")
 
         if result.status != 200:
             message = ""
             try:
                 parsed = json.loads(result.body)
                 if isinstance(parsed, dict):
-                    message = str(parsed.get("error") or "")
+                    err = parsed.get("error")
+                    if isinstance(err, str):
+                        message = err
+                    elif err is not None:
+                        message = str(err)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
             raise APIError(
                 status_code=result.status,
                 message=message,
-                body=result.body.decode("utf-8", errors="replace"),
+                body=body_text,
             )
 
         if not result.body:
             return None
-        return json.loads(result.body)
+        try:
+            return json.loads(result.body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise APIError(
+                status_code=result.status,
+                message="invalid JSON in successful response",
+                body=body_text,
+            ) from exc
