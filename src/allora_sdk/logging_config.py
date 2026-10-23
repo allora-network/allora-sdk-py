@@ -82,7 +82,7 @@ def setup_sdk_logging(debug: bool = False, force: bool = False, use_color: bool 
         'allora_sdk.worker',
         'allora_sdk.worker.worker',
         'allora_sdk.rpc_client',
-        'allora_sdk.api_client_v2',
+        'allora_sdk.api_client',
         'allora_sdk.protobuf_client',
     ]
 
