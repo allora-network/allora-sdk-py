@@ -376,6 +376,7 @@ async def main():
             )
             print(signed.signature)
         except APIError as e:
+            # Includes EmptyInferenceError (status 200, empty prediction payload)
             print(f"API error {e.status_code}: {e.message}")
 
 asyncio.run(main())

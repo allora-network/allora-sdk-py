@@ -119,8 +119,12 @@ def test_map_single_labeled_combined_when_normalized_empty():
 
 
 def test_map_empty_payload_raises():
-    with pytest.raises(EmptyInferenceError):
+    with pytest.raises(EmptyInferenceError) as exc_info:
         map_gateway_inference(GatewayInferenceWire(), requested_topic_id=72)
+    err = exc_info.value
+    assert isinstance(err, APIError)
+    assert err.status_code == 200
+    assert err.topic_id == 72
 
 
 @pytest.mark.asyncio
