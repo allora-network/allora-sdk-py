@@ -37,7 +37,7 @@ class GatewayInferenceWire(BaseModel):
 def _single_labeled_value(values: List[LabeledValueWire]) -> str:
     if len(values) != 1:
         return ""
-    return values[0].value
+    return values[0].value.strip()
 
 
 def map_gateway_inference(

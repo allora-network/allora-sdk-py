@@ -54,12 +54,38 @@ class DefaultFetcher:
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.request(method, url, headers=headers) as response:
-                    body = await response.content.read(MAX_API_RESPONSE_BYTES + 1)
+                    content_length = response.headers.get("Content-Length")
+                    if content_length is not None:
+                        try:
+                            if int(content_length) > MAX_API_RESPONSE_BYTES:
+                                raise APIError(
+                                    status_code=response.status,
+                                    message=(
+                                        f"response body exceeds "
+                                        f"{MAX_API_RESPONSE_BYTES} bytes"
+                                    ),
+                                )
+                        except ValueError:
+                            pass
+
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        body.extend(chunk)
+                        if len(body) > MAX_API_RESPONSE_BYTES:
+                            raise APIError(
+                                status_code=response.status,
+                                message=(
+                                    f"response body exceeds "
+                                    f"{MAX_API_RESPONSE_BYTES} bytes"
+                                ),
+                            )
                     return HTTPResult(
                         status=response.status,
-                        body=body,
+                        body=bytes(body),
                         headers={k: v for k, v in response.headers.items()},
                     )
+        except AlloraAPIError:
+            raise
         except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as exc:
             raise APIError(
                 status_code=0,
@@ -111,7 +137,9 @@ class AlloraAPIClient:
         self.network = network
         self.timeout = timeout
         self._owns_fetcher = fetcher is None
-        self.fetcher: Fetcher = fetcher or DefaultFetcher(timeout=timeout)
+        self.fetcher: Fetcher = (
+            fetcher if fetcher is not None else DefaultFetcher(timeout=timeout)
+        )
 
     async def __aenter__(self) -> AlloraAPIClient:
         return self

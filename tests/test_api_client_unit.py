@@ -127,6 +127,16 @@ def test_map_empty_payload_raises():
     assert err.topic_id == 72
 
 
+def test_map_whitespace_only_combined_value_raises():
+    wire = GatewayInferenceWire(
+        network_inference="",
+        network_inference_normalized="",
+        combined_value=[LabeledValueWire(label_name="y", value=" ")],
+    )
+    with pytest.raises(EmptyInferenceError):
+        map_gateway_inference(wire, requested_topic_id=72)
+
+
 @pytest.mark.asyncio
 async def test_get_all_topics():
     server = MockServer()
@@ -294,3 +304,90 @@ async def test_aclose_does_not_close_injected_fetcher():
     )
     await client.aclose()
     assert closed["n"] == 0
+
+
+def test_falsy_injected_fetcher_is_kept():
+    class FalsyFetcher:
+        def __bool__(self) -> bool:
+            return False
+
+        async def fetch(
+            self, method: str, url: str, headers: dict
+        ):  # pragma: no cover
+            raise AssertionError("not used")
+
+        async def aclose(self) -> None:
+            return None
+
+    injected = FalsyFetcher()
+    client = AlloraAPIClient(
+        "forge_sk_test",
+        base_url="http://gateway.example",
+        network=Network.TESTNET,
+        fetcher=injected,  # type: ignore[arg-type]
+    )
+    assert client.fetcher is injected
+    assert client._owns_fetcher is False
+
+
+@pytest.mark.asyncio
+async def test_default_fetcher_reads_chunked_body_to_eof():
+    from aiohttp import web
+
+    from allora_sdk.api_client.client import DefaultFetcher
+
+    payload = b'{"ok":true}' + (b"x" * 100_000)
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(status=200)
+        await resp.prepare(request)
+        for i in range(0, len(payload), 4096):
+            await resp.write(payload[i : i + 4096])
+        await resp.write_eof()
+        return resp
+
+    app = web.Application()
+    app.router.add_get("/chunked", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+        fetcher = DefaultFetcher(timeout=5.0)
+        result = await fetcher.fetch(
+            "GET", f"http://127.0.0.1:{port}/chunked", {}
+        )
+        assert result.status == 200
+        assert result.body == payload
+    finally:
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_default_fetcher_rejects_oversized_body():
+    from aiohttp import web
+
+    from allora_sdk.api_client import MAX_API_RESPONSE_BYTES
+    from allora_sdk.api_client.client import DefaultFetcher
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.Response(
+            status=200,
+            body=b"x" * (MAX_API_RESPONSE_BYTES + 1),
+            headers={"Content-Length": str(MAX_API_RESPONSE_BYTES + 1)},
+        )
+
+    app = web.Application()
+    app.router.add_get("/big", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+        fetcher = DefaultFetcher(timeout=5.0)
+        with pytest.raises(APIError, match="exceeds"):
+            await fetcher.fetch("GET", f"http://127.0.0.1:{port}/big", {})
+    finally:
+        await runner.cleanup()
