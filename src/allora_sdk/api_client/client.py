@@ -25,6 +25,12 @@ FORGE_API_KEY_PREFIX = "forge_sk_"
 MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
 
 
+def _transport_message(exc: BaseException) -> str:
+    """Stable transport-error message for DefaultFetcher and AlloraAPIClient._get."""
+    detail = str(exc).strip() or "deadline exceeded"
+    return f"transport error ({type(exc).__name__}): {detail}"
+
+
 @dataclass
 class HTTPResult:
     status: int
@@ -87,10 +93,9 @@ class DefaultFetcher:
         except AlloraAPIError:
             raise
         except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as exc:
-            detail = str(exc).strip() or "deadline exceeded"
             raise APIError(
                 status_code=0,
-                message=f"transport error ({type(exc).__name__}): {detail}",
+                message=_transport_message(exc),
             ) from exc
 
     async def aclose(self) -> None:
@@ -235,7 +240,7 @@ class AlloraAPIClient:
         except Exception as exc:
             raise APIError(
                 status_code=0,
-                message=f"transport error: {exc}",
+                message=_transport_message(exc),
             ) from exc
 
         if len(result.body) > MAX_API_RESPONSE_BYTES:
