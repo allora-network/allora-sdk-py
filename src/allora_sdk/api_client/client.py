@@ -28,7 +28,7 @@ MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
 @dataclass
 class HTTPResult:
     status: int
-    body: bytes
+    body: Union[bytes, bytearray]
     headers: Mapping[str, str]
 
 
@@ -81,15 +81,16 @@ class DefaultFetcher:
                             )
                     return HTTPResult(
                         status=response.status,
-                        body=bytes(body),
+                        body=body,
                         headers={k: v for k, v in response.headers.items()},
                     )
         except AlloraAPIError:
             raise
         except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as exc:
+            detail = str(exc).strip() or "deadline exceeded"
             raise APIError(
                 status_code=0,
-                message=f"transport error: {exc}",
+                message=f"transport error ({type(exc).__name__}): {detail}",
             ) from exc
 
     async def aclose(self) -> None:
