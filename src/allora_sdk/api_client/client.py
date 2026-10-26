@@ -27,7 +27,12 @@ MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
 
 def _transport_message(exc: BaseException) -> str:
     """Stable transport-error message for DefaultFetcher and AlloraAPIClient._get."""
-    detail = str(exc).strip() or "deadline exceeded"
+    detail = str(exc).strip()
+    if not detail:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            detail = "deadline exceeded"
+        else:
+            detail = type(exc).__name__
     return f"transport error ({type(exc).__name__}): {detail}"
 
 
