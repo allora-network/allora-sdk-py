@@ -312,7 +312,7 @@ Wire protocol is determined by the RPC url string passed to the config construct
 Async HTTP client for the **Forge API Gateway**. Public types match the gateway
 wire JSON (same contract as the Go SDK):
 
-- `get_all_topics()` / `get_topics()` → `list[Topic]`
+- `get_all_topics()` → `list[Topic]`
 - `get_topic(topic_id)` → `Topic` (+ best-effort `latest_network_inference`)
 - `get_network_inference(topic_id, evm_chain_id=None)` → `NetworkInference`
 
@@ -340,8 +340,9 @@ need a populated `NetworkInference.signature`; omitting it sends no
 - **`Topic`**: gateway fields `id` / `metadata` (removed Upshot-style
   `topic_id` / `topic_name` aliases)
 - **`NetworkInference`**: flat gateway payload (removed nested `Inference` /
-  `InferenceData`)
+  `InferenceData`); decoded as-is (no emptiness remap)
 - **`get_network_inference`** replaces `get_inference_by_topic_id`
+- Removed `EmptyInferenceError`
 - Added `get_topic` and `TopicNotFoundError`
 
 ### Breaking changes (Upshot → Forge) — v1.5.0
@@ -353,7 +354,6 @@ need a populated `NetworkInference.signature`; omitting it sends no
 - Removed exports: `ChainID`, `TopicsResponse`, `APIResponse`
 - Removed methods: `fetch_api_response()`, `get_request_url()`
 - `Fetcher` protocol is now `(method, url, headers)` and requires `aclose()`
-- Empty inference payloads raise `EmptyInferenceError`
 - **`Topic` catalog** does not include Upshot-only fields (`description`,
   counts, stakes, `is_active`, `updated_at`)
 
@@ -385,7 +385,6 @@ async def main():
             )
             print(signed.signature)
         except APIError as e:
-            # Includes EmptyInferenceError (status 200, empty prediction payload)
             print(f"API error {e.status_code}: {e.message}")
 
 asyncio.run(main())

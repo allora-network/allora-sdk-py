@@ -6,7 +6,7 @@ native gateway wire shapes (aligned with Go) — see
 
 ## Public API
 
-- `get_all_topics()` / `get_topics()` → `list[Topic]`
+- `get_all_topics()` → `list[Topic]`
 - `get_topic(topic_id)` → `Topic` (catalog scan + best-effort `latest_network_inference`)
 - `get_network_inference(topic_id, evm_chain_id=None)` → `NetworkInference`
 
@@ -19,9 +19,10 @@ Gateway catalog fields: `id`, `creator`, `metadata`, `loss_method`,
 
 ### `NetworkInference`
 
-Flat gateway JSON (combined/naive labeled values, normalized + raw inference,
-confidence intervals, optional consumer signature fields). Prefer
-`network_inference_normalized` for human-readable prices.
+Flat gateway JSON decoded as-is (combined/naive labeled values, normalized +
+raw inference, confidence intervals, optional consumer signature fields).
+Prefer `network_inference_normalized` for human-readable prices. Empty or
+sparse payloads are still returned as a `NetworkInference` with defaults.
 
 ### `evm_chain_id`
 

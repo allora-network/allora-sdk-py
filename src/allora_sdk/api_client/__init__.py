@@ -7,7 +7,7 @@ from .client import (
     HTTPResult,
     MAX_API_RESPONSE_BYTES,
 )
-from .errors import APIError, AlloraAPIError, EmptyInferenceError, TopicNotFoundError
+from .errors import APIError, AlloraAPIError, TopicNotFoundError
 from .models import (
     LabeledValue,
     Network,
@@ -23,7 +23,6 @@ __all__ = [
     "APIError",
     "DefaultAPIBaseURL",
     "DefaultFetcher",
-    "EmptyInferenceError",
     "Fetcher",
     "FORGE_API_KEY_PREFIX",
     "HTTPResult",

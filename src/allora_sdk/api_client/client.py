@@ -5,20 +5,37 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Protocol, Union, runtime_checkable
+from typing import (
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from .errors import APIError, AlloraAPIError, EmptyInferenceError, TopicNotFoundError
-from .gateway import has_usable_prediction, resolve_evm_chain_id
-from .models import Network, NetworkInference, SignatureFormat, Topic
+from .errors import APIError, AlloraAPIError, TopicNotFoundError
+from .models import (
+    Network,
+    NetworkInference,
+    SignatureFormat,
+    Topic,
+    TopicsResponse,
+)
 
 DefaultAPIBaseURL = "https://api.developer.allora.network"
 
 FORGE_API_KEY_PREFIX = "forge_sk_"
 MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
+
+_T = TypeVar("_T", bound=BaseModel)
 
 
 def _transport_message(exc: BaseException) -> str:
@@ -30,6 +47,42 @@ def _transport_message(exc: BaseException) -> str:
         else:
             detail = type(exc).__name__
     return f"transport error ({type(exc).__name__}): {detail}"
+
+
+def _require_topic_id(topic_id: object) -> int:
+    if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
+        raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
+    return topic_id
+
+
+def _resolve_evm_chain_id(value: object) -> str:
+    """Normalize SignatureFormat / int / str into a gateway ``evm_chain_id`` value."""
+    if value is None:
+        return ""
+    if isinstance(value, SignatureFormat):
+        value = value.value
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    if not text:
+        return ""
+    if "-" in text:
+        suffix = text.rsplit("-", 1)[-1]
+        if suffix.isdigit():
+            return suffix
+    return text
+
+
+def _parse_model(model: Type[_T], data: object, *, what: str) -> _T:
+    try:
+        return model.model_validate(data if data is not None else {})
+    except ValidationError as exc:
+        raise APIError(
+            status_code=200,
+            message=f"invalid {what}: {exc}",
+        ) from exc
 
 
 @dataclass
@@ -108,7 +161,7 @@ class AlloraAPIClient:
 
     Public surface (aligned with Go):
 
-    - ``get_all_topics()`` / ``get_topics()``
+    - ``get_all_topics()``
     - ``get_topic(topic_id)``
     - ``get_network_inference(topic_id, …)``
 
@@ -159,39 +212,10 @@ class AlloraAPIClient:
         if self._owns_fetcher:
             await self.fetcher.aclose()
 
-    async def get_topics(self) -> List[Topic]:
-        """Fetch all topics from the Forge gateway catalog."""
-        return await self.get_all_topics()
-
     async def get_all_topics(self) -> List[Topic]:
         """Fetch all topics from the Forge gateway catalog."""
         data = await self._get(f"{self.network.value}/topics")
-        if not isinstance(data, dict):
-            raise APIError(
-                status_code=200,
-                message="topics response must be a JSON object",
-                body=repr(data),
-            )
-        if "topics" not in data:
-            raise APIError(
-                status_code=200,
-                message="topics field missing",
-                body=repr(data),
-            )
-        raw = data["topics"]
-        if not isinstance(raw, list):
-            raise APIError(
-                status_code=200,
-                message="topics field must be a list",
-                body=repr(raw),
-            )
-        try:
-            return [Topic.model_validate(item) for item in raw]
-        except ValidationError as exc:
-            raise APIError(
-                status_code=200,
-                message=f"invalid topic catalog: {exc}",
-            ) from exc
+        return _parse_model(TopicsResponse, data, what="topic catalog").topics
 
     async def get_topic(self, topic_id: int) -> Topic:
         """Return one catalog topic and best-effort attach latest inference.
@@ -199,9 +223,7 @@ class AlloraAPIClient:
         The gateway has no single-topic route yet, so this scans the catalog.
         Inference failures leave ``latest_network_inference`` as ``None``.
         """
-        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
-            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
-
+        topic_id = _require_topic_id(topic_id)
         topics = await self.get_all_topics()
         match = next((t for t in topics if t.id == topic_id), None)
         if match is None:
@@ -225,28 +247,14 @@ class AlloraAPIClient:
         ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
         slug (``ethereum-11155111``).
         """
-        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
-            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
-
+        topic_id = _require_topic_id(topic_id)
         query: Dict[str, str] = {}
-        chain = resolve_evm_chain_id(evm_chain_id)
+        chain = _resolve_evm_chain_id(evm_chain_id)
         if chain:
             query["evm_chain_id"] = chain
 
         data = await self._get(f"{self.network.value}/inference/{topic_id}", query)
-        try:
-            inf = NetworkInference.model_validate(data or {})
-        except ValidationError as exc:
-            raise APIError(
-                status_code=200,
-                message=f"invalid inference payload: {exc}",
-            ) from exc
-
-        if not has_usable_prediction(inf):
-            raise EmptyInferenceError(topic_id)
-        if not inf.topic_id:
-            inf.topic_id = topic_id
-        return inf
+        return _parse_model(NetworkInference, data, what="inference payload")
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         url = urljoin(self.base_url + "/", path.lstrip("/"))

@@ -96,3 +96,14 @@ class Topic(BaseModel):
     worker_submission_window: int = 0
     created_at: Optional[datetime] = None
     latest_network_inference: Optional[NetworkInference] = None
+
+
+class TopicsResponse(BaseModel):
+    """Gateway ``GET /{network}/topics`` envelope (decode-only)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    network: str = ""
+    count: int = 0
+    cached_at: Optional[datetime] = None
+    topics: List[Topic]

@@ -10,13 +10,11 @@ from allora_sdk.api_client import (
     APIError,
     AlloraAPIClient,
     DefaultAPIBaseURL,
-    EmptyInferenceError,
     Network,
     NetworkInference,
     SignatureFormat,
     TopicNotFoundError,
 )
-from allora_sdk.api_client.gateway import has_usable_prediction
 from .mock_data import (
     GATEWAY_INFERENCE_72,
     GATEWAY_TOPICS_RESPONSE,
@@ -78,28 +76,6 @@ def test_network_inference_decodes_wire_fields():
     assert inf.signature == "0xabc"
     assert inf.timestamp_ms == 1784025644244
     assert inf.combined_value[0].value == "0.00006678"
-    assert has_usable_prediction(inf)
-
-
-def test_empty_prediction_detection():
-    assert not has_usable_prediction(NetworkInference())
-    assert has_usable_prediction(
-        NetworkInference(network_inference_normalized="0.1")
-    )
-    assert has_usable_prediction(NetworkInference(network_inference="999"))
-    assert has_usable_prediction(
-        NetworkInference(
-            combined_value=[{"label_name": "y", "value": "0.42"}]
-        )
-    )
-    assert not has_usable_prediction(
-        NetworkInference(
-            combined_value=[
-                {"label_name": "a", "value": "1"},
-                {"label_name": "b", "value": "2"},
-            ]
-        )
-    )
 
 
 @pytest.mark.asyncio
@@ -130,21 +106,11 @@ async def test_get_all_topics():
 
 
 @pytest.mark.asyncio
-async def test_get_topics_alias():
-    server = MockServer()
-    server.on("/testnet/topics", lambda r: GATEWAY_TOPICS_RESPONSE)
-    client = make_client(server)
-    topics = await client.get_topics()
-    assert len(topics) == 1
-    assert topics[0].id == 72
-
-
-@pytest.mark.asyncio
 async def test_get_all_topics_rejects_non_object():
     server = MockServer()
     server.on("/testnet/topics", lambda r: ["not", "an", "object"])
     client = make_client(server)
-    with pytest.raises(APIError, match="JSON object"):
+    with pytest.raises(APIError, match="invalid topic catalog"):
         await client.get_all_topics()
 
 
@@ -209,14 +175,14 @@ async def test_get_network_inference_no_chain_by_default():
 
 
 @pytest.mark.asyncio
-async def test_get_network_inference_empty_body_raises():
+async def test_get_network_inference_empty_body_returns_defaults():
     server = MockServer()
     server.on("/testnet/inference/72", lambda r: {})
     client = make_client(server)
-    with pytest.raises(EmptyInferenceError) as exc_info:
-        await client.get_network_inference(72)
-    assert exc_info.value.topic_id == 72
-    assert isinstance(exc_info.value, APIError)
+    inference = await client.get_network_inference(72)
+    assert inference.topic_id == 0
+    assert inference.network_inference_normalized == ""
+    assert inference.combined_value == []
 
 
 @pytest.mark.asyncio

@@ -5,8 +5,9 @@
 ## Unreleased
 
 - **Breaking:** Public Forge HTTP types are now native gateway wire shapes (aligned with Go): `Topic` uses `id` / `metadata` (not `topic_id` / `topic_name`); inference is flat `NetworkInference` (removed nested `Inference` / `InferenceData`).
-- **Breaking:** `get_inference_by_topic_id(...)` replaced by `get_network_inference(topic_id, evm_chain_id=None)`.
-- Added `get_topic(topic_id)` (catalog scan + best-effort `latest_network_inference`) and `get_topics()` alias; `TopicNotFoundError` when the id is missing.
+- **Breaking:** `get_inference_by_topic_id(...)` replaced by `get_network_inference(topic_id, evm_chain_id=None)`. Decode returns the wire model as-is (no emptiness remap / `topic_id` backfill).
+- **Breaking:** Removed `EmptyInferenceError` — empty inference JSON is a valid `NetworkInference` with default fields (matches Go).
+- Added `get_topic(topic_id)` (catalog scan + best-effort `latest_network_inference`); `TopicNotFoundError` when the id is missing.
 - Documented wire contract in `docs/FORGE_API_RESPONSE_SHAPES.md`.
 
 ## v1.5.0

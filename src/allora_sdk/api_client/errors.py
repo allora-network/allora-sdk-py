@@ -28,17 +28,6 @@ class APIError(AlloraAPIError):
             super().__init__(f"API error: status={status_code}")
 
 
-class EmptyInferenceError(APIError):
-    """Raised when a 200 inference response carries no usable prediction."""
-
-    def __init__(self, topic_id: int) -> None:
-        self.topic_id = topic_id
-        super().__init__(
-            status_code=200,
-            message=f"empty inference payload for topic_id={topic_id}",
-        )
-
-
 class TopicNotFoundError(APIError):
     """Raised when ``get_topic`` cannot find the id in the gateway catalog."""
 
