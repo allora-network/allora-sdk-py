@@ -115,7 +115,7 @@ Optional query: `evm_chain_id=<uint|slug>` (consumer signatures).
   "next_prediction_expected_at": "2026-07-14T10:45:00Z",
   "is_stale": false,
   "seconds_late": null,
-  "network_inference": "66781380725120668592",
+  "network_inference": "66780000000000",
   "network_inference_normalized": "0.00006678",
   "token_decimals": 18,
   "timestamp": 1784025644,
@@ -241,14 +241,14 @@ Either aggregate top-level OHLC **or** nested `values`:
 
 | Capability | Go | Suggested other SDKs |
 |------------|-----|----------------------|
-| List topics | `GetTopics()` → stream of `Topic` | `get_topics` / `getAllTopics` → `Topic[]` |
+| List topics | `GetTopics()` → stream of `Topic` | `get_all_topics` / `getAllTopics` → `Topic[]` (one name per SDK) |
 | One topic + best-effort inference | `GetTopic(id)` → `Topic` | `get_topic` |
 | Full inference | `GetNetworkInference(id, …)` → `NetworkInference` | `get_network_inference` |
 | One candle page | `GetCandles(query)` → `CandlePage` | `get_candles` |
 | All candle pages | `IterCandles(query)` | async iterator / generator |
 | Datasets | `ListDatasets`, `FindDatasetsByTicker` | same |
 
-Constructor: require API key; dual base URLs; default network `mainnet`; optional HTTP client / timeout / backoff.
+Go/reference constructor: require API key; dual base URLs (gateway + Atlas); default network `mainnet`; optional HTTP client / timeout / backoff. Python in this repo currently exposes the gateway client only (`base_url`).
 
 ---
 
