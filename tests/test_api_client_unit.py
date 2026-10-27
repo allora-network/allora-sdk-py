@@ -12,13 +12,11 @@ from allora_sdk.api_client import (
     DefaultAPIBaseURL,
     EmptyInferenceError,
     Network,
+    NetworkInference,
     SignatureFormat,
+    TopicNotFoundError,
 )
-from allora_sdk.api_client.gateway import (
-    GatewayInferenceWire,
-    LabeledValueWire,
-    map_gateway_inference,
-)
+from allora_sdk.api_client.gateway import has_usable_prediction
 from .mock_data import (
     GATEWAY_INFERENCE_72,
     GATEWAY_TOPICS_RESPONSE,
@@ -72,69 +70,36 @@ def test_constructor_rejects_bad_network():
         AlloraAPIClient("forge_sk_test", network="bogus")  # type: ignore[arg-type]
 
 
-def test_map_prefers_normalized():
-    wire = GatewayInferenceWire(
-        network_inference="66781380725120668592",
-        network_inference_normalized="0.00006678",
-        combined_value=[LabeledValueWire(label_name="y", value="should-not-win")],
-        timestamp_ms=1784025644244,
+def test_network_inference_decodes_wire_fields():
+    inf = NetworkInference.model_validate(GATEWAY_INFERENCE_72)
+    assert inf.topic_id == 72
+    assert inf.network_inference_normalized == "0.00006678"
+    assert inf.network_inference == "66781380725120668592"
+    assert inf.signature == "0xabc"
+    assert inf.timestamp_ms == 1784025644244
+    assert inf.combined_value[0].value == "0.00006678"
+    assert has_usable_prediction(inf)
+
+
+def test_empty_prediction_detection():
+    assert not has_usable_prediction(NetworkInference())
+    assert has_usable_prediction(
+        NetworkInference(network_inference_normalized="0.1")
     )
-    inf = map_gateway_inference(wire, requested_topic_id=72)
-    assert inf.inference_data.network_inference_normalized == "0.00006678"
-    assert inf.inference_data.network_inference == "66781380725120668592"
-    assert inf.inference_data.timestamp == 1784025644244
-
-
-def test_map_single_label_only_never_raw_fallback():
-    wire = GatewayInferenceWire(
-        network_inference_normalized="",
-        combined_value=[
-            LabeledValueWire(label_name="a", value="1"),
-            LabeledValueWire(label_name="b", value="2"),
-        ],
-        network_inference="999999",
+    assert has_usable_prediction(NetworkInference(network_inference="999"))
+    assert has_usable_prediction(
+        NetworkInference(
+            combined_value=[{"label_name": "y", "value": "0.42"}]
+        )
     )
-    inf = map_gateway_inference(wire, requested_topic_id=1)
-    assert inf.inference_data.network_inference_normalized == ""
-    assert inf.inference_data.network_inference == "999999"
-
-
-def test_map_timestamp_seconds_fallback():
-    wire = GatewayInferenceWire(
-        timestamp_ms=0,
-        timestamp=1700000000,
-        network_inference_normalized="0.1",
+    assert not has_usable_prediction(
+        NetworkInference(
+            combined_value=[
+                {"label_name": "a", "value": "1"},
+                {"label_name": "b", "value": "2"},
+            ]
+        )
     )
-    inf = map_gateway_inference(wire, requested_topic_id=1)
-    assert inf.inference_data.timestamp == 1700000000 * 1000
-
-
-def test_map_single_labeled_combined_when_normalized_empty():
-    wire = GatewayInferenceWire(
-        network_inference_normalized="",
-        combined_value=[LabeledValueWire(label_name="y", value="0.42")],
-    )
-    inf = map_gateway_inference(wire, requested_topic_id=1)
-    assert inf.inference_data.network_inference_normalized == "0.42"
-
-
-def test_map_empty_payload_raises():
-    with pytest.raises(EmptyInferenceError) as exc_info:
-        map_gateway_inference(GatewayInferenceWire(), requested_topic_id=72)
-    err = exc_info.value
-    assert isinstance(err, APIError)
-    assert err.status_code == 200
-    assert err.topic_id == 72
-
-
-def test_map_whitespace_only_combined_value_raises():
-    wire = GatewayInferenceWire(
-        network_inference="",
-        network_inference_normalized="",
-        combined_value=[LabeledValueWire(label_name="y", value=" ")],
-    )
-    with pytest.raises(EmptyInferenceError):
-        map_gateway_inference(wire, requested_topic_id=72)
 
 
 @pytest.mark.asyncio
@@ -154,12 +119,24 @@ async def test_get_all_topics():
     assert seen["path"] == "/testnet/topics"
     assert seen["auth"] == "Bearer forge_sk_test"
     assert len(topics) == 1
-    assert topics[0].topic_id == 72
-    assert topics[0].topic_name == "BTC 5min"
+    assert topics[0].id == 72
+    assert topics[0].metadata == "BTC 5min"
+    assert topics[0].creator == "allo1creator"
     assert topics[0].epoch_length == 720
     assert topics[0].ground_truth_lag == 1
     assert topics[0].loss_method == "mse"
     assert topics[0].worker_submission_window == 10
+    assert topics[0].latest_network_inference is None
+
+
+@pytest.mark.asyncio
+async def test_get_topics_alias():
+    server = MockServer()
+    server.on("/testnet/topics", lambda r: GATEWAY_TOPICS_RESPONSE)
+    client = make_client(server)
+    topics = await client.get_topics()
+    assert len(topics) == 1
+    assert topics[0].id == 72
 
 
 @pytest.mark.asyncio
@@ -172,7 +149,47 @@ async def test_get_all_topics_rejects_non_object():
 
 
 @pytest.mark.asyncio
-async def test_get_inference_by_topic_id_no_chain_by_default():
+async def test_get_topic_attaches_inference():
+    server = MockServer()
+    server.on("/testnet/topics", lambda r: GATEWAY_TOPICS_RESPONSE)
+    server.on("/testnet/inference/72", lambda r: GATEWAY_INFERENCE_72)
+    client = make_client(server)
+
+    topic = await client.get_topic(72)
+    assert topic.id == 72
+    assert topic.latest_network_inference is not None
+    assert (
+        topic.latest_network_inference.network_inference_normalized
+        == "0.00006678"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_topic_not_found():
+    server = MockServer()
+    server.on("/testnet/topics", lambda r: GATEWAY_TOPICS_RESPONSE)
+    client = make_client(server)
+    with pytest.raises(TopicNotFoundError) as exc_info:
+        await client.get_topic(999)
+    assert exc_info.value.topic_id == 999
+
+
+@pytest.mark.asyncio
+async def test_get_topic_keeps_catalog_when_inference_fails():
+    server = MockServer()
+    server.on("/testnet/topics", lambda r: GATEWAY_TOPICS_RESPONSE)
+    server.on(
+        "/testnet/inference/72",
+        lambda r: JSONResponse(content={"error": "nope"}, status_code=402),
+    )
+    client = make_client(server)
+    topic = await client.get_topic(72)
+    assert topic.id == 72
+    assert topic.latest_network_inference is None
+
+
+@pytest.mark.asyncio
+async def test_get_network_inference_no_chain_by_default():
     server = MockServer()
     saw_query = {}
 
@@ -183,36 +200,37 @@ async def test_get_inference_by_topic_id_no_chain_by_default():
     server.on("/testnet/inference/72", handler)
     client = make_client(server)
 
-    inference = await client.get_inference_by_topic_id(72)
+    inference = await client.get_network_inference(72)
     assert "evm_chain_id" not in saw_query["raw"]
+    assert isinstance(inference, NetworkInference)
     assert inference.signature == "0xabc"
-    assert (
-        inference.inference_data.network_inference_normalized == "0.00006678"
-    )
-    assert inference.inference_data.network_inference == "66781380725120668592"
+    assert inference.network_inference_normalized == "0.00006678"
+    assert inference.network_inference == "66781380725120668592"
 
 
 @pytest.mark.asyncio
-async def test_get_inference_empty_body_raises():
+async def test_get_network_inference_empty_body_raises():
     server = MockServer()
     server.on("/testnet/inference/72", lambda r: {})
     client = make_client(server)
-    with pytest.raises(EmptyInferenceError):
-        await client.get_inference_by_topic_id(72)
+    with pytest.raises(EmptyInferenceError) as exc_info:
+        await client.get_network_inference(72)
+    assert exc_info.value.topic_id == 72
+    assert isinstance(exc_info.value, APIError)
 
 
 @pytest.mark.asyncio
-async def test_get_inference_rejects_bad_topic_id():
+async def test_get_network_inference_rejects_bad_topic_id():
     server = MockServer()
     client = make_client(server)
     with pytest.raises(ValueError, match="non-negative int"):
-        await client.get_inference_by_topic_id(-1)
+        await client.get_network_inference(-1)
     with pytest.raises(ValueError, match="non-negative int"):
-        await client.get_inference_by_topic_id("72/../x")  # type: ignore[arg-type]
+        await client.get_network_inference("72/../x")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
-async def test_get_inference_by_topic_id_signature_format():
+async def test_get_network_inference_signature_format():
     server = MockServer()
     saw_query = {}
 
@@ -223,12 +241,12 @@ async def test_get_inference_by_topic_id_signature_format():
     server.on("/testnet/inference/72", handler)
     client = make_client(server)
 
-    await client.get_inference_by_topic_id(72, SignatureFormat.ETHEREUM_SEPOLIA)
+    await client.get_network_inference(72, SignatureFormat.ETHEREUM_SEPOLIA)
     assert "evm_chain_id=11155111" in saw_query["raw"]
 
 
 @pytest.mark.asyncio
-async def test_get_inference_by_topic_id_numeric_chain_id():
+async def test_get_network_inference_numeric_chain_id():
     server = MockServer()
     saw_query = {}
 
@@ -239,12 +257,12 @@ async def test_get_inference_by_topic_id_numeric_chain_id():
     server.on("/testnet/inference/72", handler)
     client = make_client(server)
 
-    await client.get_inference_by_topic_id(72, 8453)
+    await client.get_network_inference(72, 8453)
     assert "evm_chain_id=8453" in saw_query["raw"]
 
 
 @pytest.mark.asyncio
-async def test_get_inference_maps_http_errors():
+async def test_get_network_inference_maps_http_errors():
     server = MockServer()
     server.on(
         "/testnet/inference/1",
@@ -255,7 +273,7 @@ async def test_get_inference_maps_http_errors():
     client = make_client(server)
 
     with pytest.raises(APIError) as exc_info:
-        await client.get_inference_by_topic_id(1)
+        await client.get_network_inference(1)
     assert exc_info.value.status_code == 402
     assert "insufficient balance" in str(exc_info.value)
 
@@ -269,7 +287,7 @@ async def test_get_inference_non_json_error_includes_body():
     )
     client = make_client(server)
     with pytest.raises(APIError) as exc_info:
-        await client.get_inference_by_topic_id(1)
+        await client.get_network_inference(1)
     assert exc_info.value.status_code == 502
     assert "bad gateway" in str(exc_info.value)
 
@@ -283,7 +301,7 @@ async def test_get_inference_non_json_200_raises_api_error():
     )
     client = make_client(server)
     with pytest.raises(APIError, match="invalid JSON"):
-        await client.get_inference_by_topic_id(1)
+        await client.get_network_inference(1)
 
 
 @pytest.mark.asyncio

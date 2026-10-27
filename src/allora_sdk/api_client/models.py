@@ -1,7 +1,8 @@
-"""Public models for the Forge API Gateway client."""
+"""Public models for the Forge API Gateway client (native wire shapes)."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
@@ -22,36 +23,76 @@ class SignatureFormat(str, Enum):
     ETHEREUM_SEPOLIA = "ethereum-11155111"
 
 
-class Topic(BaseModel):
-    """Topic catalog entry from the Forge gateway.
+class LabeledValue(BaseModel):
+    """One label entry in a network-inference bundle."""
 
-    Accepts gateway wire names (``id``, ``metadata``) via aliases.
-    Upshot-era fields (description, counts, stakes, is_active, updated_at) are gone.
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    topic_id: int = Field(alias="id")
-    topic_name: str = Field(default="", alias="metadata")
-    epoch_length: int = 0
-    ground_truth_lag: int = 0
-    loss_method: str = ""
-    worker_submission_window: int = 0
+    label_name: str = ""
+    value: str = ""
 
 
-class InferenceData(BaseModel):
+class WorkerInference(BaseModel):
+    """One worker's labeled values (inferer or forecaster)."""
+
+    worker: str = ""
+    values: List[LabeledValue] = Field(default_factory=list)
+
+
+class NetworkInference(BaseModel):
+    """Forge gateway inference payload — public type equals wire JSON."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    network: str = ""
+    topic_id: int = 0
+    combined_value: List[LabeledValue] = Field(default_factory=list)
+    naive_value: List[LabeledValue] = Field(default_factory=list)
+    label_names: List[str] = Field(default_factory=list)
+    nonce: int = 0
+    extra_data: str = ""
+    timestamp_ms: int = 0
+    consensus_time: Optional[datetime] = None
+    height_tx: int = 0
+    inference_block_height: str = ""
+    inferer_values: List[WorkerInference] = Field(default_factory=list)
+    forecaster_values: List[WorkerInference] = Field(default_factory=list)
+    cached_at: Optional[datetime] = None
+    next_prediction_expected_at: Optional[datetime] = None
+    is_stale: bool = False
+    seconds_late: Optional[float] = None
     network_inference: str = ""
     network_inference_normalized: str = ""
-    confidence_interval_percentiles: Optional[List[str]] = None
-    confidence_interval_percentiles_normalized: Optional[List[str]] = None
-    confidence_interval_values: Optional[List[str]] = None
-    confidence_interval_values_normalized: Optional[List[str]] = None
-    topic_id: str = ""
+    token_decimals: int = 0
     timestamp: int = 0
-    extra_data: str = ""
-
-
-class Inference(BaseModel):
     signature: str = ""
-    token_decimals: Optional[int] = None
-    inference_data: InferenceData
+    confidence_interval_percentiles: List[str] = Field(default_factory=list)
+    confidence_interval_percentiles_normalized: List[str] = Field(
+        default_factory=list
+    )
+    confidence_interval_values: List[str] = Field(default_factory=list)
+    confidence_interval_values_normalized: List[str] = Field(default_factory=list)
+    evm_chain_id: Optional[int] = None
+    consumer_address: str = ""
+    vector_signature: str = ""
+    vector_signature_public: str = ""
+    signature_extra_data: str = ""
+
+
+class Topic(BaseModel):
+    """Forge gateway catalog entry — public type equals wire JSON.
+
+    ``latest_network_inference`` is attached client-side by ``get_topic``
+    (best-effort) and is not part of the gateway topics list payload.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    creator: str = ""
+    metadata: str = ""
+    loss_method: str = ""
+    epoch_last_ended: int = 0
+    epoch_length: int = 0
+    ground_truth_lag: int = 0
+    worker_submission_window: int = 0
+    created_at: Optional[datetime] = None
+    latest_network_inference: Optional[NetworkInference] = None

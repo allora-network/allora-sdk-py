@@ -11,13 +11,9 @@ from urllib.parse import urlencode, urljoin
 import aiohttp
 from pydantic import ValidationError
 
-from .errors import APIError, AlloraAPIError
-from .gateway import (
-    GatewayInferenceWire,
-    map_gateway_inference,
-    resolve_evm_chain_id,
-)
-from .models import Inference, Network, SignatureFormat, Topic
+from .errors import APIError, AlloraAPIError, EmptyInferenceError, TopicNotFoundError
+from .gateway import has_usable_prediction, resolve_evm_chain_id
+from .models import Network, NetworkInference, SignatureFormat, Topic
 
 DefaultAPIBaseURL = "https://api.developer.allora.network"
 
@@ -110,10 +106,11 @@ class DefaultFetcher:
 class AlloraAPIClient:
     """Async Forge API Gateway client.
 
-    Public surface matches the prior SDK:
+    Public surface (aligned with Go):
 
-    - ``get_all_topics()``
-    - ``get_inference_by_topic_id(topic_id, …)``
+    - ``get_all_topics()`` / ``get_topics()``
+    - ``get_topic(topic_id)``
+    - ``get_network_inference(topic_id, …)``
 
     Requires a Developer Portal key (``forge_sk_…``). Requests use
     ``Authorization: Bearer {api_key}``.
@@ -162,6 +159,10 @@ class AlloraAPIClient:
         if self._owns_fetcher:
             await self.fetcher.aclose()
 
+    async def get_topics(self) -> List[Topic]:
+        """Fetch all topics from the Forge gateway catalog."""
+        return await self.get_all_topics()
+
     async def get_all_topics(self) -> List[Topic]:
         """Fetch all topics from the Forge gateway catalog."""
         data = await self._get(f"{self.network.value}/topics")
@@ -192,35 +193,60 @@ class AlloraAPIClient:
                 message=f"invalid topic catalog: {exc}",
             ) from exc
 
-    async def get_inference_by_topic_id(
+    async def get_topic(self, topic_id: int) -> Topic:
+        """Return one catalog topic and best-effort attach latest inference.
+
+        The gateway has no single-topic route yet, so this scans the catalog.
+        Inference failures leave ``latest_network_inference`` as ``None``.
+        """
+        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
+            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
+
+        topics = await self.get_all_topics()
+        match = next((t for t in topics if t.id == topic_id), None)
+        if match is None:
+            raise TopicNotFoundError(topic_id)
+
+        try:
+            inf = await self.get_network_inference(topic_id)
+        except AlloraAPIError:
+            return match
+        return match.model_copy(update={"latest_network_inference": inf})
+
+    async def get_network_inference(
         self,
         topic_id: int,
-        signature_format: Optional[Union[SignatureFormat, str, int]] = None,
-    ) -> Inference:
-        """Fetch the latest inference for a topic.
+        evm_chain_id: Optional[Union[SignatureFormat, str, int]] = None,
+    ) -> NetworkInference:
+        """Fetch the flat Forge gateway inference payload for a topic.
 
-        ``signature_format`` is optional. When omitted, no ``evm_chain_id`` query
-        is sent and ``Inference.signature`` is typically empty. When set, accepts
-        a ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
+        ``evm_chain_id`` is optional. When omitted, no ``evm_chain_id`` query is
+        sent and ``signature`` is typically empty. When set, accepts a
+        ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
         slug (``ethereum-11155111``).
         """
         if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
             raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
 
         query: Dict[str, str] = {}
-        chain = resolve_evm_chain_id(signature_format)
+        chain = resolve_evm_chain_id(evm_chain_id)
         if chain:
             query["evm_chain_id"] = chain
 
         data = await self._get(f"{self.network.value}/inference/{topic_id}", query)
         try:
-            wire = GatewayInferenceWire.model_validate(data or {})
-            return map_gateway_inference(wire, requested_topic_id=topic_id)
+            inf = NetworkInference.model_validate(data or {})
         except ValidationError as exc:
             raise APIError(
                 status_code=200,
                 message=f"invalid inference payload: {exc}",
             ) from exc
+
+        if not has_usable_prediction(inf):
+            raise EmptyInferenceError(topic_id)
+        if not inf.topic_id:
+            inf.topic_id = topic_id
+        return inf
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         url = urljoin(self.base_url + "/", path.lstrip("/"))
