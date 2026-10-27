@@ -1,108 +1,128 @@
-from typing import Dict, List, Any
-from datetime import datetime
+"""Path-aware HTTP mocks for Forge API client unit tests."""
+
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Tuple
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.testclient import TestClient
-from allora_sdk.api_client import Fetcher
+
+from allora_sdk.api_client import Fetcher, HTTPResult
+
+Handler = Callable[[Request], Any]
+
 
 class MockServer:
-    def __init__(self):
+    """Starlette app that dispatches handlers by path."""
+
+    def __init__(self) -> None:
         self.app = FastAPI()
-        self.mock_responses: List[Any] = []
-        self.mock_status_codes: List[int] = []
+        self._exact: Dict[str, Handler] = {}
+        self._ordered: List[Tuple[Any, int]] = []
+        self.requests: List[Request] = []
 
-        self.app.add_api_route("/{path:path}", self.mock_endpoint, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+        self.app.add_api_route(
+            "/{path:path}",
+            self._dispatch,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        )
 
-    def add_mock_response(self, response: Any, status_code: int = 200):
-        self.mock_responses.append(response)
-        self.mock_status_codes.append(status_code)
+    def on(self, path: str, handler: Handler) -> None:
+        self._exact[path] = handler
 
-    async def mock_endpoint(self, request: Request):
-        if self.mock_responses:
-            response = self.mock_responses.pop(0)
-            status_code = self.mock_status_codes.pop(0) if self.mock_status_codes else 200
-            return JSONResponse(content=response, status_code=status_code)
+    def add_mock_response(self, response: Any, status_code: int = 200) -> None:
+        """FIFO responses for simple sequential tests."""
+        self._ordered.append((response, status_code))
 
-        return JSONResponse(content={"error": "No mock response available", "status": False}, status_code=404)
+    def _lookup(self, path: str) -> Handler | None:
+        return (
+            self._exact.get(path)
+            or self._exact.get(path.rstrip("/"))
+            or self._exact.get(path + "/")
+        )
 
-    # def run(self):
-    #     uvicorn.run(self.app, host="localhost", port=self.port, log_level="error")
+    async def _dispatch(self, request: Request) -> Response:
+        self.requests.append(request)
+        path = "/" + request.path_params.get("path", "")
+        handler = self._lookup(path)
 
-    # def stop(self):
-    #     raise NotImplementedError("Stopping the server programmatically requires custom signal handling.")
+        if handler is not None:
+            result = handler(request)
+            if isinstance(result, Response):
+                return result
+            if isinstance(result, tuple) and len(result) == 2:
+                body, status = result
+                return JSONResponse(content=body, status_code=status)
+            return JSONResponse(content=result, status_code=200)
+
+        if self._ordered:
+            body, status = self._ordered.pop(0)
+            return JSONResponse(content=body, status_code=status)
+
+        return JSONResponse(
+            content={"error": "No mock response available"}, status_code=404
+        )
 
 
 class StarletteMockFetcher(Fetcher):
-    def __init__(self, server: MockServer):
+    """Fetcher that routes through a MockServer via Starlette TestClient."""
+
+    def __init__(self, server: MockServer) -> None:
         self.server = server
 
-    async def fetch(self, url: str, headers: dict) -> Any:
+    async def fetch(
+        self, method: str, url: str, headers: Dict[str, str]
+    ) -> HTTPResult:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+
         client = TestClient(self.server.app)
-        response = client.get(url, headers=headers)
-        return response.json()
+        response = client.request(method, path, headers=headers)
+        return HTTPResult(
+            status=response.status_code,
+            body=response.content,
+            headers={k: v for k, v in response.headers.items()},
+        )
+
+    async def aclose(self) -> None:
+        return None
 
 
-
-mock_topic_1: Dict[str, Any] = {
-    "topic_id": 1,
-    "topic_name": "Test Topic",
-    "description": "Test Description",
-    "epoch_length": 300,
-    "ground_truth_lag": 60,
+GATEWAY_TOPIC_72 = {
+    "id": 72,
+    "creator": "allo1creator",
+    "metadata": "BTC 5min",
     "loss_method": "mse",
-    "worker_submission_window": 30,
-    "worker_count": 5,
-    "reputer_count": 3,
-    "total_staked_allo": 1000,
-    "total_emissions_allo": 100,
-    "is_active": True,
-    "updated_at": datetime(2024, 3, 20).isoformat() + "Z",
+    "epoch_length": 720,
+    "ground_truth_lag": 1,
+    "worker_submission_window": 10,
+    "created_at": "2026-01-01T00:00:00Z",
 }
 
-mock_topic_2: Dict[str, Any] = {
-    "topic_id": 2,
-    "topic_name": "Test Topic",
-    "description": "Test Description",
-    "epoch_length": 300,
-    "ground_truth_lag": 60,
-    "loss_method": "mse",
-    "worker_submission_window": 30,
-    "worker_count": 5,
-    "reputer_count": 3,
-    "total_staked_allo": 1000,
-    "total_emissions_allo": 100,
-    "is_active": True,
-    "updated_at": datetime(2024, 3, 20).isoformat() + "Z",
+GATEWAY_TOPICS_RESPONSE = {
+    "network": "testnet",
+    "count": 1,
+    "cached_at": "2026-07-14T10:40:00Z",
+    "topics": [GATEWAY_TOPIC_72],
 }
 
-mock_topics_response: Dict[str, Any] = {
-    "request_id": "test-request-id",
-    "status": True,
-    "data": {
-        "topics": [mock_topic_1, mock_topic_2],
-        "continuation_token": None,
-    },
-}
-
-mock_inference_data: Dict[str, Any] = {
-    "network_inference": "1000000000000000000",
-    "network_inference_normalized": "1.0",
-    "confidence_interval_percentiles": ["0.25", "0.75"],
-    "confidence_interval_percentiles_normalized": ["0.25", "0.75"],
-    "confidence_interval_values": ["900000000000000000", "1100000000000000000"],
-    "confidence_interval_values_normalized": ["0.9", "1.1"],
-    "topic_id": "1",
-    "timestamp": 1679529600,
-    "extra_data": "",
-}
-
-mock_inference: Dict[str, Any] = {
-    "signature": "0x1234567890",
-    "inference_data": mock_inference_data,
-}
-
-mock_api_response: Dict[str, Any] = {
-    "request_id": "test-request-id",
-    "status": True,
-    "data": mock_inference,
+GATEWAY_INFERENCE_72 = {
+    "topic_id": 72,
+    "combined_value": [{"label_name": "y", "value": "0.00006678"}],
+    "naive_value": [{"label_name": "y", "value": "0.00006"}],
+    "timestamp_ms": 1784025644244,
+    "network_inference": "66781380725120668592",
+    "network_inference_normalized": "0.00006678",
+    "signature": "0xabc",
+    "token_decimals": 18,
+    "evm_chain_id": 8453,
+    "consumer_address": "0xconsumer",
+    "vector_signature": "0xvec",
+    "cached_at": "2026-07-14T10:40:45Z",
+    "is_stale": False,
 }

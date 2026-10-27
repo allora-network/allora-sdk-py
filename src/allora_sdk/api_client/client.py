@@ -1,159 +1,286 @@
+"""Forge HTTP client — API Gateway (topics + inferences)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from typing import Dict, List, Mapping, Optional, Protocol, Union, runtime_checkable
+from urllib.parse import urlencode, urljoin
+
 import aiohttp
-from enum import Enum
-from typing import List, Optional, Protocol, TypeVar, Generic, Any, runtime_checkable
-from pydantic import BaseModel, Field
+from pydantic import ValidationError
+
+from .errors import APIError, AlloraAPIError
+from .gateway import (
+    GatewayInferenceWire,
+    map_gateway_inference,
+    resolve_evm_chain_id,
+)
+from .models import Inference, Network, SignatureFormat, Topic
+
+DefaultAPIBaseURL = "https://api.developer.allora.network"
+
+FORGE_API_KEY_PREFIX = "forge_sk_"
+MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
 
 
-class ChainID(str, Enum):
-    TESTNET = "allora-testnet-1"
-    MAINNET = "allora-mainnet-1"
-
-class SignatureFormat(str, Enum):
-    ETHEREUM_SEPOLIA = "ethereum-11155111"
-
-class Topic(BaseModel):
-    topic_id: int
-    topic_name: str
-    description: Optional[str] = None
-    epoch_length: int
-    ground_truth_lag: int
-    loss_method: str
-    worker_submission_window: int
-    worker_count: int
-    reputer_count: int
-    total_staked_allo: float
-    total_emissions_allo: float
-    is_active: Optional[bool] = None
-    updated_at: str
-
-class InferenceData(BaseModel):
-    network_inference: str
-    network_inference_normalized: str
-    confidence_interval_percentiles: Optional[list[str]] = Field(None)
-    confidence_interval_percentiles_normalized: Optional[list[str]] = Field(None)
-    confidence_interval_values: Optional[list[str]] = Field(None)
-    confidence_interval_values_normalized: Optional[list[str]] = Field(None)
-    topic_id: str
-    timestamp: int
-    extra_data: str
-
-class Inference(BaseModel):
-    signature: str
-    token_decimals: Optional[int] = Field(None)
-    inference_data: InferenceData
-
-class TopicsResponse(BaseModel):
-    topics: List[Topic]
-    continuation_token: Optional[str] = None
+def _transport_message(exc: BaseException) -> str:
+    """Stable transport-error message for DefaultFetcher and AlloraAPIClient._get."""
+    detail = str(exc).strip()
+    if not detail:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            detail = "deadline exceeded"
+        else:
+            detail = type(exc).__name__
+    return f"transport error ({type(exc).__name__}): {detail}"
 
 
-T = TypeVar("T")
+@dataclass
+class HTTPResult:
+    status: int
+    body: Union[bytes, bytearray]
+    headers: Mapping[str, str]
 
-class APIResponse(BaseModel, Generic[T]):
-    request_id: str
-    status: bool
-    api_response_message: Optional[str] = Field(None, alias="apiResponseMessage")
-    data: T
 
 @runtime_checkable
 class Fetcher(Protocol):
-    async def fetch(self, url: str, headers: dict) -> Any: ...
+    async def fetch(
+        self, method: str, url: str, headers: Dict[str, str]
+    ) -> HTTPResult: ...
 
-class DefaultFetcher(Fetcher):
-    async def fetch(self, url: str, headers: dict) -> Any:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                response.raise_for_status()
-                return await response.json()
+    async def aclose(self) -> None: ...
+
+
+class DefaultFetcher:
+    """aiohttp-backed fetcher (one ClientSession per request)."""
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self.timeout = timeout
+
+    async def fetch(
+        self, method: str, url: str, headers: Dict[str, str]
+    ) -> HTTPResult:
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, headers=headers) as response:
+                    content_length = response.headers.get("Content-Length")
+                    if content_length is not None:
+                        try:
+                            if int(content_length) > MAX_API_RESPONSE_BYTES:
+                                raise APIError(
+                                    status_code=response.status,
+                                    message=(
+                                        f"response body exceeds "
+                                        f"{MAX_API_RESPONSE_BYTES} bytes"
+                                    ),
+                                )
+                        except ValueError:
+                            pass
+
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        body.extend(chunk)
+                        if len(body) > MAX_API_RESPONSE_BYTES:
+                            raise APIError(
+                                status_code=response.status,
+                                message=(
+                                    f"response body exceeds "
+                                    f"{MAX_API_RESPONSE_BYTES} bytes"
+                                ),
+                            )
+                    return HTTPResult(
+                        status=response.status,
+                        body=body,
+                        headers={k: v for k, v in response.headers.items()},
+                    )
+        except AlloraAPIError:
+            raise
+        except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as exc:
+            raise APIError(
+                status_code=0,
+                message=_transport_message(exc),
+            ) from exc
+
+    async def aclose(self) -> None:
+        return None
 
 
 class AlloraAPIClient:
+    """Async Forge API Gateway client.
+
+    Public surface matches the prior SDK:
+
+    - ``get_all_topics()``
+    - ``get_inference_by_topic_id(topic_id, …)``
+
+    Requires a Developer Portal key (``forge_sk_…``). Requests use
+    ``Authorization: Bearer {api_key}``.
+    """
+
     def __init__(
         self,
-        chain_id: Optional[ChainID] = ChainID.TESTNET,
-        api_key: Optional[str] = "UP-8cbc632a67a84ac1b4078661",
-        base_api_url: Optional[str] = "https://api.allora.network/v2",
-        fetcher: Fetcher = DefaultFetcher(),
-    ):
-        self.chain_id = chain_id
+        api_key: str,
+        *,
+        base_url: str = DefaultAPIBaseURL,
+        network: Network | str = Network.MAINNET,
+        timeout: float = 30.0,
+        fetcher: Optional[Fetcher] = None,
+    ) -> None:
+        if api_key is None:
+            raise ValueError("ALLORA_API_KEY is required (forge_sk_…)")
+        api_key = str(api_key).strip()
+        if not api_key:
+            raise ValueError("ALLORA_API_KEY is required (forge_sk_…)")
+        if not api_key.startswith(FORGE_API_KEY_PREFIX):
+            raise ValueError(f"API key must start with {FORGE_API_KEY_PREFIX}")
+
+        try:
+            network = Network(network)
+        except ValueError as exc:
+            raise ValueError(
+                f"unsupported network {network!r} (want testnet|mainnet|offchain)"
+            ) from exc
+
         self.api_key = api_key
-        self.base_api_url = base_api_url
-        self.fetcher = fetcher
+        self.base_url = base_url.rstrip("/")
+        self.network = network
+        self.timeout = timeout
+        self._owns_fetcher = fetcher is None
+        self.fetcher: Fetcher = (
+            fetcher if fetcher is not None else DefaultFetcher(timeout=timeout)
+        )
+
+    async def __aenter__(self) -> AlloraAPIClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._owns_fetcher:
+            await self.fetcher.aclose()
 
     async def get_all_topics(self) -> List[Topic]:
-        """
-        Fetches all available topics from the Allora API.
-        This method handles pagination automatically by following continuation tokens
-        until all topics have been retrieved.
-
-        :return: A list of all available topics
-        :raises: requests.RequestException if the API request fails
-        """
-        all_topics: List[Topic] = []
-        continuation_token: Optional[str] = None
-
-        while True:
-            url_str = f"allora/{self.chain_id.value}/topics"
-            if continuation_token:
-                url_str += f"?continuation_token={continuation_token}"
-            response = await self.fetch_api_response(url_str, TopicsResponse)
-            all_topics.extend(response.data.topics)
-            continuation_token = response.data.continuation_token
-            if not continuation_token:
-                break
-
-        return all_topics
+        """Fetch all topics from the Forge gateway catalog."""
+        data = await self._get(f"{self.network.value}/topics")
+        if not isinstance(data, dict):
+            raise APIError(
+                status_code=200,
+                message="topics response must be a JSON object",
+                body=repr(data),
+            )
+        if "topics" not in data:
+            raise APIError(
+                status_code=200,
+                message="topics field missing",
+                body=repr(data),
+            )
+        raw = data["topics"]
+        if not isinstance(raw, list):
+            raise APIError(
+                status_code=200,
+                message="topics field must be a list",
+                body=repr(raw),
+            )
+        try:
+            return [Topic.model_validate(item) for item in raw]
+        except ValidationError as exc:
+            raise APIError(
+                status_code=200,
+                message=f"invalid topic catalog: {exc}",
+            ) from exc
 
     async def get_inference_by_topic_id(
         self,
         topic_id: int,
-        signature_format: SignatureFormat = SignatureFormat.ETHEREUM_SEPOLIA,
+        signature_format: Optional[Union[SignatureFormat, str, int]] = None,
     ) -> Inference:
-        """
-        Fetches an inference for a specific topic from the Allora API.
+        """Fetch the latest inference for a topic.
 
-        :param topic_id: The unique identifier of the topic to get inference for
-        :param signature_format: The signature format to use
-        :return: The inference data
-        :raises: requests.RequestException if the API request fails
+        ``signature_format`` is optional. When omitted, no ``evm_chain_id`` query
+        is sent and ``Inference.signature`` is typically empty. When set, accepts
+        a ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
+        slug (``ethereum-11155111``).
         """
-        response = await self.fetch_api_response(
-            f"allora/consumer/{signature_format.value}?allora_topic_id={topic_id}&inference_value_type=uint256",
-            Inference,
-        )
+        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
+            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
 
-        if not response.data.inference_data:
-            raise ValueError("Failed to fetch price inference")
-        return response.data
+        query: Dict[str, str] = {}
+        chain = resolve_evm_chain_id(signature_format)
+        if chain:
+            query["evm_chain_id"] = chain
 
-    def get_request_url(self, endpoint: str) -> str:
-        """
-        Constructs the full request URL for a given endpoint.
+        data = await self._get(f"{self.network.value}/inference/{topic_id}", query)
+        try:
+            wire = GatewayInferenceWire.model_validate(data or {})
+            return map_gateway_inference(wire, requested_topic_id=topic_id)
+        except ValidationError as exc:
+            raise APIError(
+                status_code=200,
+                message=f"invalid inference payload: {exc}",
+            ) from exc
 
-        :param endpoint: The API endpoint
-        :return: The full request URL
-        """
-        api_url = self.base_api_url.rstrip("/")
-        endpoint = endpoint.lstrip("/")
-        return f"{api_url}/{endpoint}"
+    def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
+        url = urljoin(self.base_url + "/", path.lstrip("/"))
+        if not query:
+            return url
+        filtered = {k: v for k, v in query.items() if v}
+        if not filtered:
+            return url
+        return f"{url}?{urlencode(filtered)}"
 
-    async def fetch_api_response(self, endpoint: str, response_model: type) -> APIResponse:
-        """
-        Fetches and parses the API response for a given endpoint.
-
-        :param endpoint: The API endpoint to fetch
-        :param response_model: The Pydantic model to parse the response data into
-        :return: The parsed API response
-        :raises: requests.RequestException if the API request fails
-        """
-        url = self.get_request_url(endpoint)
-        headers: dict[str, str] = {
+    async def _get(
+        self, path: str, query: Optional[Dict[str, str]] = None
+    ) -> object:
+        headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
         }
-        if self.api_key is not None:
-            headers["x-api-key"] = self.api_key
-        response_data = await self.fetcher.fetch(url, headers)
+        try:
+            result = await self.fetcher.fetch("GET", self._url(path, query), headers)
+        except AlloraAPIError:
+            raise
+        except Exception as exc:
+            raise APIError(
+                status_code=0,
+                message=_transport_message(exc),
+            ) from exc
 
-        return APIResponse[response_model](**response_data)
+        if len(result.body) > MAX_API_RESPONSE_BYTES:
+            raise APIError(
+                status_code=result.status,
+                message=f"response body exceeds {MAX_API_RESPONSE_BYTES} bytes",
+            )
 
+        body_text = result.body.decode("utf-8", errors="replace")
+
+        if result.status != 200:
+            message = ""
+            try:
+                parsed = json.loads(result.body)
+                if isinstance(parsed, dict):
+                    err = parsed.get("error")
+                    if isinstance(err, str):
+                        message = err
+                    elif err is not None:
+                        message = str(err)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+            raise APIError(
+                status_code=result.status,
+                message=message,
+                body=body_text,
+            )
+
+        if not result.body:
+            return None
+        try:
+            return json.loads(result.body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise APIError(
+                status_code=result.status,
+                message="invalid JSON in successful response",
+                body=body_text,
+            ) from exc
