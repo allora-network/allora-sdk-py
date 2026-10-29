@@ -6,6 +6,8 @@ import pytest
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from datetime import datetime, timezone
+
 from allora_sdk.api_client import (
     APIError,
     AlloraAPIClient,
@@ -16,6 +18,7 @@ from allora_sdk.api_client import (
     TopicNotFoundError,
 )
 from .mock_data import (
+    DOCUMENTED_NETWORK_INFERENCE,
     GATEWAY_INFERENCE_72,
     GATEWAY_TOPICS_RESPONSE,
     MockServer,
@@ -72,10 +75,68 @@ def test_network_inference_decodes_wire_fields():
     inf = NetworkInference.model_validate(GATEWAY_INFERENCE_72)
     assert inf.topic_id == 72
     assert inf.network_inference_normalized == "0.00006678"
-    assert inf.network_inference == "66781380725120668592"
+    assert inf.network_inference == "66780000000000"
     assert inf.signature == "0xabc"
     assert inf.timestamp_ms == 1784025644244
     assert inf.combined_value[0].value == "0.00006678"
+
+
+def test_documented_inference_example_decodes_contract():
+    inf = NetworkInference.model_validate(DOCUMENTED_NETWORK_INFERENCE)
+    assert inf.network_inference_normalized == "0.00006678"
+    assert inf.network_inference == "66780000000000"
+    assert inf.token_decimals == 18
+    assert inf.combined_value
+    assert inf.combined_value[0].value == "0.00006678"
+    assert inf.inferer_values
+    assert inf.cached_at is not None
+    assert inf.cached_at.tzinfo is not None
+
+
+def test_json_null_fields_decode_to_defaults():
+    inf = NetworkInference.model_validate(
+        {
+            "topic_id": 72,
+            "combined_value": None,
+            "forecaster_values": None,
+            "confidence_interval_values": None,
+            "nonce": None,
+            "is_stale": None,
+            "network_inference_normalized": "0.1",
+            "label_names": None,
+        }
+    )
+    assert inf.topic_id == 72
+    assert inf.combined_value == []
+    assert inf.forecaster_values == []
+    assert inf.confidence_interval_values == []
+    assert inf.nonce == 0
+    assert inf.is_stale is False
+    assert inf.label_names == []
+    assert inf.network_inference_normalized == "0.1"
+
+    nested = NetworkInference.model_validate(
+        {
+            "combined_value": [{"label_name": None, "value": "1"}],
+        }
+    )
+    assert nested.combined_value[0].label_name == ""
+    assert nested.combined_value[0].value == "1"
+
+
+def test_zero_time_and_naive_datetimes_normalize():
+    inf = NetworkInference.model_validate(
+        {
+            "cached_at": "0001-01-01T00:00:00Z",
+            "consensus_time": "2026-07-14T10:40:00",
+            "next_prediction_expected_at": "2026-07-14T10:45:00Z",
+        }
+    )
+    assert inf.cached_at is None
+    assert inf.consensus_time == datetime(2026, 7, 14, 10, 40, tzinfo=timezone.utc)
+    assert inf.next_prediction_expected_at == datetime(
+        2026, 7, 14, 10, 45, tzinfo=timezone.utc
+    )
 
 
 @pytest.mark.asyncio
@@ -171,17 +232,42 @@ async def test_get_network_inference_no_chain_by_default():
     assert isinstance(inference, NetworkInference)
     assert inference.signature == "0xabc"
     assert inference.network_inference_normalized == "0.00006678"
-    assert inference.network_inference == "66781380725120668592"
+    assert inference.network_inference == "66780000000000"
 
 
 @pytest.mark.asyncio
-async def test_get_network_inference_empty_body_returns_defaults():
+async def test_get_network_inference_empty_object_returns_defaults():
     server = MockServer()
     server.on("/testnet/inference/72", lambda r: {})
     client = make_client(server)
     inference = await client.get_network_inference(72)
     assert inference.topic_id == 0
     assert inference.network_inference_normalized == ""
+    assert inference.combined_value == []
+
+
+@pytest.mark.asyncio
+async def test_get_network_inference_zero_byte_body_raises():
+    server = MockServer()
+    server.on(
+        "/testnet/inference/72",
+        lambda r: PlainTextResponse(content="", status_code=200),
+    )
+    client = make_client(server)
+    with pytest.raises(APIError, match="empty inference payload body"):
+        await client.get_network_inference(72)
+
+
+@pytest.mark.asyncio
+async def test_get_network_inference_json_null_returns_defaults():
+    server = MockServer()
+    server.on(
+        "/testnet/inference/72",
+        lambda r: PlainTextResponse(content="null", status_code=200),
+    )
+    client = make_client(server)
+    inference = await client.get_network_inference(72)
+    assert inference.topic_id == 0
     assert inference.combined_value == []
 
 

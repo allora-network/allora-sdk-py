@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Network(str, Enum):
@@ -23,24 +23,46 @@ class SignatureFormat(str, Enum):
     ETHEREUM_SEPOLIA = "ethereum-11155111"
 
 
-class LabeledValue(BaseModel):
+class _WireModel(BaseModel):
+    """Gateway wire decode: ignore unknowns; JSON null behaves like an absent key (Go)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return data
+
+
+def _normalize_optional_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    """Map Go zero-time to None; treat naive RFC3339-ish values as UTC."""
+    if value is None:
+        return None
+    if (value.year, value.month, value.day) == (1, 1, 1):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+class LabeledValue(_WireModel):
     """One label entry in a network-inference bundle."""
 
     label_name: str = ""
     value: str = ""
 
 
-class WorkerInference(BaseModel):
+class WorkerInference(_WireModel):
     """One worker's labeled values (inferer or forecaster)."""
 
     worker: str = ""
     values: List[LabeledValue] = Field(default_factory=list)
 
 
-class NetworkInference(BaseModel):
+class NetworkInference(_WireModel):
     """Forge gateway inference payload — public type equals wire JSON."""
-
-    model_config = ConfigDict(extra="ignore")
 
     network: str = ""
     topic_id: int = 0
@@ -76,15 +98,25 @@ class NetworkInference(BaseModel):
     vector_signature_public: str = ""
     signature_extra_data: str = ""
 
+    @field_validator(
+        "consensus_time",
+        "cached_at",
+        "next_prediction_expected_at",
+        mode="after",
+    )
+    @classmethod
+    def _normalize_datetimes(
+        cls, value: Optional[datetime]
+    ) -> Optional[datetime]:
+        return _normalize_optional_datetime(value)
 
-class Topic(BaseModel):
+
+class Topic(_WireModel):
     """Forge gateway catalog entry — public type equals wire JSON.
 
     ``latest_network_inference`` is attached client-side by ``get_topic``
     (best-effort) and is not part of the gateway topics list payload.
     """
-
-    model_config = ConfigDict(extra="ignore")
 
     id: int
     creator: str = ""
@@ -97,13 +129,25 @@ class Topic(BaseModel):
     created_at: Optional[datetime] = None
     latest_network_inference: Optional[NetworkInference] = None
 
+    @field_validator("created_at", mode="after")
+    @classmethod
+    def _normalize_created_at(
+        cls, value: Optional[datetime]
+    ) -> Optional[datetime]:
+        return _normalize_optional_datetime(value)
 
-class TopicsResponse(BaseModel):
+
+class TopicsResponse(_WireModel):
     """Gateway ``GET /{network}/topics`` envelope (decode-only)."""
-
-    model_config = ConfigDict(extra="ignore")
 
     network: str = ""
     count: int = 0
     cached_at: Optional[datetime] = None
-    topics: List[Topic]
+    topics: List[Topic] = Field(default_factory=list)
+
+    @field_validator("cached_at", mode="after")
+    @classmethod
+    def _normalize_cached_at(
+        cls, value: Optional[datetime]
+    ) -> Optional[datetime]:
+        return _normalize_optional_datetime(value)

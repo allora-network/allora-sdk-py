@@ -34,7 +34,7 @@
 | Constant | Default |
 |----------|---------|
 | Gateway | `https://api.developer.allora.network` |
-| Data (must include `/api`) | `https://forge-data.allora.run/api` |
+| Data (must include `/api`) | `https://forge-data.allora.network/api` |
 | Network path segment | `mainnet` (`testnet` \| `mainnet` \| `offchain`) |
 
 - Do **not** mix auth headers across backends.
@@ -268,7 +268,7 @@ Go/reference constructor: require API key; dual base URLs (gateway + Atlas); def
 - [ ] Public topic type uses gateway fields (`id`, `metadata`, …) — **not** Upshot `topic_id` / `topic_name`
 - [ ] Public inference type is flat `NetworkInference` (or language-native decode of the same JSON) — **not** slim `{combined_value, naive_value}` only, and not a required Upshot nested envelope unless you keep a **deprecated** adapter
 - [ ] Candles are float OHLCV + `timestamp` — **not** string OHLC + `continuation_token`
-- [ ] Prod defaults: gateway + `https://forge-data.allora.run/api`
+- [ ] Prod defaults: gateway + `https://forge-data.allora.network/api`
 - [ ] Dual auth headers correct
 - [ ] `next` URL host check + pagination cycle/cap
 - [ ] Prefer `network_inference_normalized` for human prices

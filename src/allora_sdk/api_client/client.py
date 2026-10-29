@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import (
     Dict,
@@ -36,6 +37,14 @@ FORGE_API_KEY_PREFIX = "forge_sk_"
 MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
 
 _T = TypeVar("_T", bound=BaseModel)
+logger = logging.getLogger(__name__)
+
+
+class _EmptyBody:
+    """Sentinel: HTTP 200 with a zero-byte body (not JSON null)."""
+
+
+_EMPTY_BODY = _EmptyBody()
 
 
 def _transport_message(exc: BaseException) -> str:
@@ -76,8 +85,11 @@ def _resolve_evm_chain_id(value: object) -> str:
 
 
 def _parse_model(model: Type[_T], data: object, *, what: str) -> _T:
+    if isinstance(data, _EmptyBody):
+        raise APIError(status_code=200, message=f"empty {what} body")
     try:
-        return model.model_validate(data if data is not None else {})
+        # JSON null → defaults (Go json.Unmarshal into a struct); 0-byte ≠ null.
+        return model.model_validate({} if data is None else data)
     except ValidationError as exc:
         raise APIError(
             status_code=200,
@@ -231,7 +243,10 @@ class AlloraAPIClient:
 
         try:
             inf = await self.get_network_inference(topic_id)
-        except AlloraAPIError:
+        except AlloraAPIError as exc:
+            logger.warning(
+                "latest inference unavailable for topic_id=%s: %s", topic_id, exc
+            )
             return match
         return match.model_copy(update={"latest_network_inference": inf})
 
@@ -309,7 +324,7 @@ class AlloraAPIClient:
             )
 
         if not result.body:
-            return None
+            return _EMPTY_BODY
         try:
             return json.loads(result.body)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
