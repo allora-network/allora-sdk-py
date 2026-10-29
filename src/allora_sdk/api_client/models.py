@@ -31,9 +31,18 @@ class _WireModel(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _drop_nulls(cls, data: object) -> object:
-        if isinstance(data, dict):
-            return {k: v for k, v in data.items() if v is not None}
-        return data
+        """JSON null → absent key; null list elements dropped (Go zero-tolerant decode)."""
+        if not isinstance(data, dict):
+            return data
+        cleaned: dict = {}
+        for key, value in data.items():
+            if value is None:
+                continue
+            if isinstance(value, list):
+                cleaned[key] = [item for item in value if item is not None]
+            else:
+                cleaned[key] = value
+        return cleaned
 
 
 def _normalize_optional_datetime(value: Optional[datetime]) -> Optional[datetime]:
@@ -118,7 +127,7 @@ class Topic(_WireModel):
     (best-effort) and is not part of the gateway topics list payload.
     """
 
-    id: int
+    id: int = 0
     creator: str = ""
     metadata: str = ""
     loss_method: str = ""

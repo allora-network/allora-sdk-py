@@ -15,6 +15,7 @@ from allora_sdk.api_client import (
     Network,
     NetworkInference,
     SignatureFormat,
+    Topic,
     TopicNotFoundError,
 )
 from .mock_data import (
@@ -122,6 +123,21 @@ def test_json_null_fields_decode_to_defaults():
     )
     assert nested.combined_value[0].label_name == ""
     assert nested.combined_value[0].value == "1"
+
+    with_null_elems = NetworkInference.model_validate(
+        {
+            "combined_value": [None, {"label_name": "y", "value": "1"}],
+            "label_names": [None, "y"],
+            "inferer_values": [None],
+        }
+    )
+    assert len(with_null_elems.combined_value) == 1
+    assert with_null_elems.label_names == ["y"]
+    assert with_null_elems.inferer_values == []
+
+    topic = Topic.model_validate({"id": None, "metadata": "x"})
+    assert topic.id == 0
+    assert topic.metadata == "x"
 
 
 def test_zero_time_and_naive_datetimes_normalize():
