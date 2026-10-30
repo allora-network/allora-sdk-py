@@ -129,11 +129,19 @@ def test_json_null_fields_decode_to_defaults():
             "combined_value": [None, {"label_name": "y", "value": "1"}],
             "label_names": [None, "y"],
             "inferer_values": [None],
+            "confidence_interval_percentiles": [None, "90"],
+            "confidence_interval_values": ["1", "2"],
         }
     )
-    assert len(with_null_elems.combined_value) == 1
-    assert with_null_elems.label_names == ["y"]
-    assert with_null_elems.inferer_values == []
+    assert len(with_null_elems.combined_value) == 2
+    assert with_null_elems.combined_value[0].label_name == ""
+    assert with_null_elems.combined_value[0].value == ""
+    assert with_null_elems.combined_value[1].value == "1"
+    assert with_null_elems.label_names == ["", "y"]
+    assert len(with_null_elems.inferer_values) == 1
+    assert with_null_elems.inferer_values[0].worker == ""
+    assert with_null_elems.confidence_interval_percentiles == ["", "90"]
+    assert with_null_elems.confidence_interval_values == ["1", "2"]
 
     topic = Topic.model_validate({"id": None, "metadata": "x"})
     assert topic.id == 0

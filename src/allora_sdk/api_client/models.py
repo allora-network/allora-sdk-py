@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -23,6 +23,22 @@ class SignatureFormat(str, Enum):
     ETHEREUM_SEPOLIA = "ethereum-11155111"
 
 
+def _list_null_placeholder(model: type[BaseModel], field_name: str) -> object:
+    """Zero value for a null list element (Go encoding/json element zero)."""
+    field = model.model_fields.get(field_name)
+    if field is None:
+        return {}
+    origin = get_origin(field.annotation)
+    args = get_args(field.annotation)
+    if origin is list and args:
+        elem = args[0]
+        if elem is str:
+            return ""
+        if isinstance(elem, type) and issubclass(elem, BaseModel):
+            return {}
+    return {}
+
+
 class _WireModel(BaseModel):
     """Gateway wire decode: ignore unknowns; JSON null behaves like an absent key (Go)."""
 
@@ -31,7 +47,7 @@ class _WireModel(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _drop_nulls(cls, data: object) -> object:
-        """JSON null → absent key; null list elements dropped (Go zero-tolerant decode)."""
+        """JSON null → absent key; null list elements → element zero (preserve positions)."""
         if not isinstance(data, dict):
             return data
         cleaned: dict = {}
@@ -39,7 +55,10 @@ class _WireModel(BaseModel):
             if value is None:
                 continue
             if isinstance(value, list):
-                cleaned[key] = [item for item in value if item is not None]
+                placeholder = _list_null_placeholder(cls, key)
+                cleaned[key] = [
+                    placeholder if item is None else item for item in value
+                ]
             else:
                 cleaned[key] = value
         return cleaned
