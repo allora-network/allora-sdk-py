@@ -4,25 +4,47 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Protocol, Union, runtime_checkable
+from typing import (
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 from urllib.parse import urlencode, urljoin
 
 import aiohttp
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from .errors import APIError, AlloraAPIError
-from .gateway import (
-    GatewayInferenceWire,
-    map_gateway_inference,
-    resolve_evm_chain_id,
+from .errors import APIError, AlloraAPIError, TopicNotFoundError
+from .models import (
+    Network,
+    NetworkInference,
+    SignatureFormat,
+    Topic,
+    TopicsResponse,
 )
-from .models import Inference, Network, SignatureFormat, Topic
 
 DefaultAPIBaseURL = "https://api.developer.allora.network"
 
 FORGE_API_KEY_PREFIX = "forge_sk_"
 MAX_API_RESPONSE_BYTES = 32 << 20  # 32 MiB
+
+_T = TypeVar("_T", bound=BaseModel)
+logger = logging.getLogger(__name__)
+
+
+class _EmptyBody:
+    """Sentinel: HTTP 200 with a zero-byte body (not JSON null)."""
+
+
+_EMPTY_BODY = _EmptyBody()
 
 
 def _transport_message(exc: BaseException) -> str:
@@ -34,6 +56,45 @@ def _transport_message(exc: BaseException) -> str:
         else:
             detail = type(exc).__name__
     return f"transport error ({type(exc).__name__}): {detail}"
+
+
+def _require_topic_id(topic_id: object) -> int:
+    if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
+        raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
+    return topic_id
+
+
+def _resolve_evm_chain_id(value: object) -> str:
+    """Normalize SignatureFormat / int / str into a gateway ``evm_chain_id`` value."""
+    if value is None:
+        return ""
+    if isinstance(value, SignatureFormat):
+        value = value.value
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    if not text:
+        return ""
+    if "-" in text:
+        suffix = text.rsplit("-", 1)[-1]
+        if suffix.isdigit():
+            return suffix
+    return text
+
+
+def _parse_model(model: Type[_T], data: object, *, what: str) -> _T:
+    if isinstance(data, _EmptyBody):
+        raise APIError(status_code=200, message=f"empty {what} body")
+    try:
+        # JSON null → defaults (Go json.Unmarshal into a struct); 0-byte ≠ null.
+        return model.model_validate({} if data is None else data)
+    except ValidationError as exc:
+        raise APIError(
+            status_code=200,
+            message=f"invalid {what}: {exc}",
+        ) from exc
 
 
 @dataclass
@@ -110,10 +171,11 @@ class DefaultFetcher:
 class AlloraAPIClient:
     """Async Forge API Gateway client.
 
-    Public surface matches the prior SDK:
+    Public surface (aligned with Go):
 
     - ``get_all_topics()``
-    - ``get_inference_by_topic_id(topic_id, …)``
+    - ``get_topic(topic_id)``
+    - ``get_network_inference(topic_id, …)``
 
     Requires a Developer Portal key (``forge_sk_…``). Requests use
     ``Authorization: Bearer {api_key}``.
@@ -165,62 +227,49 @@ class AlloraAPIClient:
     async def get_all_topics(self) -> List[Topic]:
         """Fetch all topics from the Forge gateway catalog."""
         data = await self._get(f"{self.network.value}/topics")
-        if not isinstance(data, dict):
-            raise APIError(
-                status_code=200,
-                message="topics response must be a JSON object",
-                body=repr(data),
-            )
-        if "topics" not in data:
-            raise APIError(
-                status_code=200,
-                message="topics field missing",
-                body=repr(data),
-            )
-        raw = data["topics"]
-        if not isinstance(raw, list):
-            raise APIError(
-                status_code=200,
-                message="topics field must be a list",
-                body=repr(raw),
-            )
-        try:
-            return [Topic.model_validate(item) for item in raw]
-        except ValidationError as exc:
-            raise APIError(
-                status_code=200,
-                message=f"invalid topic catalog: {exc}",
-            ) from exc
+        return _parse_model(TopicsResponse, data, what="topic catalog").topics
 
-    async def get_inference_by_topic_id(
+    async def get_topic(self, topic_id: int) -> Topic:
+        """Return one catalog topic and best-effort attach latest inference.
+
+        The gateway has no single-topic route yet, so this scans the catalog.
+        Inference failures leave ``latest_network_inference`` as ``None``.
+        """
+        topic_id = _require_topic_id(topic_id)
+        topics = await self.get_all_topics()
+        match = next((t for t in topics if t.id == topic_id), None)
+        if match is None:
+            raise TopicNotFoundError(topic_id)
+
+        try:
+            inf = await self.get_network_inference(topic_id)
+        except AlloraAPIError as exc:
+            logger.warning(
+                "latest inference unavailable for topic_id=%s: %s", topic_id, exc
+            )
+            return match
+        return match.model_copy(update={"latest_network_inference": inf})
+
+    async def get_network_inference(
         self,
         topic_id: int,
-        signature_format: Optional[Union[SignatureFormat, str, int]] = None,
-    ) -> Inference:
-        """Fetch the latest inference for a topic.
+        evm_chain_id: Optional[Union[SignatureFormat, str, int]] = None,
+    ) -> NetworkInference:
+        """Fetch the flat Forge gateway inference payload for a topic.
 
-        ``signature_format`` is optional. When omitted, no ``evm_chain_id`` query
-        is sent and ``Inference.signature`` is typically empty. When set, accepts
-        a ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
+        ``evm_chain_id`` is optional. When omitted, no ``evm_chain_id`` query is
+        sent and ``signature`` is typically empty. When set, accepts a
+        ``SignatureFormat``, raw chain id (``8453`` / ``\"8453\"``), or legacy
         slug (``ethereum-11155111``).
         """
-        if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id < 0:
-            raise ValueError(f"topic_id must be a non-negative int, got {topic_id!r}")
-
+        topic_id = _require_topic_id(topic_id)
         query: Dict[str, str] = {}
-        chain = resolve_evm_chain_id(signature_format)
+        chain = _resolve_evm_chain_id(evm_chain_id)
         if chain:
             query["evm_chain_id"] = chain
 
         data = await self._get(f"{self.network.value}/inference/{topic_id}", query)
-        try:
-            wire = GatewayInferenceWire.model_validate(data or {})
-            return map_gateway_inference(wire, requested_topic_id=topic_id)
-        except ValidationError as exc:
-            raise APIError(
-                status_code=200,
-                message=f"invalid inference payload: {exc}",
-            ) from exc
+        return _parse_model(NetworkInference, data, what="inference payload")
 
     def _url(self, path: str, query: Optional[Dict[str, str]] = None) -> str:
         url = urljoin(self.base_url + "/", path.lstrip("/"))
@@ -275,7 +324,7 @@ class AlloraAPIClient:
             )
 
         if not result.body:
-            return None
+            return _EMPTY_BODY
         try:
             return json.loads(result.body)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:

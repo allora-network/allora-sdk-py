@@ -7,13 +7,14 @@ from .client import (
     HTTPResult,
     MAX_API_RESPONSE_BYTES,
 )
-from .errors import APIError, AlloraAPIError, EmptyInferenceError
+from .errors import APIError, AlloraAPIError, TopicNotFoundError
 from .models import (
-    Inference,
-    InferenceData,
+    LabeledValue,
     Network,
+    NetworkInference,
     SignatureFormat,
     Topic,
+    WorkerInference,
 )
 
 __all__ = [
@@ -22,14 +23,15 @@ __all__ = [
     "APIError",
     "DefaultAPIBaseURL",
     "DefaultFetcher",
-    "EmptyInferenceError",
     "Fetcher",
     "FORGE_API_KEY_PREFIX",
     "HTTPResult",
-    "Inference",
-    "InferenceData",
+    "LabeledValue",
     "MAX_API_RESPONSE_BYTES",
     "Network",
+    "NetworkInference",
     "SignatureFormat",
     "Topic",
+    "TopicNotFoundError",
+    "WorkerInference",
 ]

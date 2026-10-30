@@ -18,8 +18,8 @@ import pytest_asyncio
 from allora_sdk.api_client import (
     AlloraAPIClient,
     DefaultAPIBaseURL,
-    Inference,
     Network,
+    NetworkInference,
     Topic,
 )
 
@@ -56,23 +56,22 @@ async def test_get_all_topics(client: AlloraAPIClient):
 
     topic = topics[0]
     assert isinstance(topic, Topic)
-    assert isinstance(topic.topic_id, int)
-    assert isinstance(topic.topic_name, str)
+    assert isinstance(topic.id, int)
+    assert isinstance(topic.metadata, str)
 
 
 @requires_api_key
 @pytest.mark.asyncio
-async def test_get_inference_by_topic_id(client: AlloraAPIClient):
+async def test_get_network_inference(client: AlloraAPIClient):
     topics = await client.get_all_topics()
     assert topics
-    topic_id = topics[0].topic_id
+    topic_id = topics[0].id
 
-    inference = await client.get_inference_by_topic_id(topic_id)
-    assert isinstance(inference, Inference)
-    data = inference.inference_data
-    assert isinstance(data.network_inference_normalized, str)
+    inference = await client.get_network_inference(topic_id)
+    assert isinstance(inference, NetworkInference)
+    assert isinstance(inference.network_inference_normalized, str)
     logger.info(
         "inference topic=%s normalized=%s",
         topic_id,
-        data.network_inference_normalized,
+        inference.network_inference_normalized,
     )

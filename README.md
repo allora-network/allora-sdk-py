@@ -309,15 +309,18 @@ Wire protocol is determined by the RPC url string passed to the config construct
 
 ## Allora API Client
 
-Async HTTP client for the **Forge API Gateway** — same two methods as before:
+Async HTTP client for the **Forge API Gateway**. Public types match the gateway
+wire JSON (same contract as the Go SDK):
 
-- `get_all_topics()`
-- `get_inference_by_topic_id(topic_id, signature_format=None)`
+- `get_all_topics()` → `list[Topic]`
+- `get_topic(topic_id)` → `Topic` (+ best-effort `latest_network_inference`)
+- `get_network_inference(topic_id, evm_chain_id=None)` → `NetworkInference`
 
 Obtain a `forge_sk_…` API key from your Allora Forge key provisioner (legacy
 Upshot `UP-…` keys and the old developer portal key page are not used).
 
-More detail: [`docs/FORGE_API_CLIENT.md`](docs/FORGE_API_CLIENT.md).
+More detail: [`docs/FORGE_API_CLIENT.md`](docs/FORGE_API_CLIENT.md) ·
+wire shapes: [`docs/FORGE_API_RESPONSE_SHAPES.md`](docs/FORGE_API_RESPONSE_SHAPES.md).
 
 ### Defaults
 
@@ -328,8 +331,19 @@ More detail: [`docs/FORGE_API_CLIENT.md`](docs/FORGE_API_CLIENT.md).
 
 Gateway calls use `Authorization: Bearer {key}`.
 
-Pass `signature_format` (a `SignatureFormat`, chain id, or legacy slug) when you
-need a populated `Inference.signature`; omitting it sends no `evm_chain_id`.
+Pass `evm_chain_id` (a `SignatureFormat`, chain id, or legacy slug) when you
+need a populated `NetworkInference.signature`; omitting it sends no
+`evm_chain_id`. Prefer `network_inference_normalized` for display prices.
+
+### Breaking changes (wire shapes) — unreleased
+
+- **`Topic`**: gateway fields `id` / `metadata` (removed Upshot-style
+  `topic_id` / `topic_name` aliases)
+- **`NetworkInference`**: flat gateway payload (removed nested `Inference` /
+  `InferenceData`); decoded as-is (no emptiness remap)
+- **`get_network_inference`** replaces `get_inference_by_topic_id`
+- Removed `EmptyInferenceError`
+- Added `get_topic` and `TopicNotFoundError`
 
 ### Breaking changes (Upshot → Forge) — v1.5.0
 
@@ -337,16 +351,11 @@ need a populated `Inference.signature`; omitting it sends no `evm_chain_id`.
 - Keys must start with `forge_sk_` (legacy `UP-…` keys are rejected)
 - Default base is the Forge gateway (not Upshot `/v2`)
 - Default network is **mainnet** path segment (not Cosmos `allora-testnet-1`)
-- **`signature_format` defaults to `None`** — no `evm_chain_id` query; signature
-  is typically empty unless you pass a chain id / `SignatureFormat`
 - Removed exports: `ChainID`, `TopicsResponse`, `APIResponse`
 - Removed methods: `fetch_api_response()`, `get_request_url()`
 - `Fetcher` protocol is now `(method, url, headers)` and requires `aclose()`
-- Empty inference payloads raise `EmptyInferenceError` (not a blank `Inference`)
-- **`Topic` no longer includes** fields the Forge catalog does not provide:
-  `description`, `worker_count`, `reputer_count`, `total_staked_allo`,
-  `total_emissions_allo`, `is_active`, `updated_at`. Use on-chain / explorer APIs
-  if you still need that metadata.
+- **`Topic` catalog** does not include Upshot-only fields (`description`,
+  counts, stakes, `is_active`, `updated_at`)
 
 ### Basic Usage
 
@@ -366,17 +375,16 @@ async def main():
             if not topics:
                 return
 
-            inference = await client.get_inference_by_topic_id(topics[0].topic_id)
-            print(inference.inference_data.network_inference_normalized)
+            inference = await client.get_network_inference(topics[0].id)
+            print(inference.network_inference_normalized)
 
             # Optional: request a chain-specific consumer signature
-            signed = await client.get_inference_by_topic_id(
-                topics[0].topic_id,
+            signed = await client.get_network_inference(
+                topics[0].id,
                 SignatureFormat.ETHEREUM_SEPOLIA,
             )
             print(signed.signature)
         except APIError as e:
-            # Includes EmptyInferenceError (status 200, empty prediction payload)
             print(f"API error {e.status_code}: {e.message}")
 
 asyncio.run(main())
@@ -384,8 +392,8 @@ asyncio.run(main())
 
 ### Features
 
-- **Topics**: Browse the gateway topic catalog
-- **Inferences**: Same nested `Inference` shape as before (normalized preferred over raw base-unit)
+- **Topics**: Gateway catalog wire shape (`id`, `metadata`, …)
+- **Inferences**: Flat `NetworkInference` (prefer normalized over raw base-unit)
 - **Async/await**: Fully asynchronous API
 
 
