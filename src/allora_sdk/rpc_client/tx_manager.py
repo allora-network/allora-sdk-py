@@ -45,6 +45,7 @@ class PendingTx:
         fee_tier: "FeeTier",
         max_retries: int,
         timeout: Optional[timedelta],
+        timeout_height: Optional[int] = None,
     ):
         self.manager = manager
         self.parent_tx_id = parent_tx_id
@@ -66,6 +67,9 @@ class PendingTx:
         self.last_landed_error: Optional[Exception] = None
         self.start = datetime.now()
         self.timeout = timeout
+        # Block height after which the chain rejects the tx (0/None = no expiry);
+        # Cosmos' TxTimeoutHeightDecorator drops it at CheckTx once passed.
+        self.timeout_height = timeout_height
         self.attempt: int = 0
 
         # Final outcome future: resolves to TxResponse or raises
@@ -296,6 +300,7 @@ class TxManager:
         max_retries: int = 2,
         timeout: Optional[timedelta] = None,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> "PendingTx":
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
@@ -328,6 +333,7 @@ class TxManager:
             fee_tier=fee_tier,
             max_retries=max_retries,
             timeout=timeout,
+            timeout_height=timeout_height,
         )
 
         # Kick off processing as a background task; caller can await the PendingTx.
@@ -511,6 +517,7 @@ class TxManager:
                     fee_multiplier,
                     gas_multiplier,
                     next_account_seq,
+                    timeout_height=pending.timeout_height,
                 )
 
                 # Update known properties
@@ -720,6 +727,7 @@ class TxManager:
         fee_multiplier: float,
         gas_multiplier: float,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> tuple[str, int, Coin, int]:
         """Build, sign, and SYNC-broadcast the tx; return (hash, gas, fee, seq).
 
@@ -754,6 +762,7 @@ class TxManager:
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self.fee_granter),
+            timeout_height=timeout_height,
         )
 
         tx.sign(

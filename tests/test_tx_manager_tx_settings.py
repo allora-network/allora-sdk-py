@@ -38,6 +38,36 @@ def _make_manager(**kwargs) -> TxManager:
     )
 
 
+@pytest.mark.asyncio
+async def test_timeout_height_is_forwarded_to_broadcast():
+    manager = _make_manager()
+    manager._pre_flight_checks = AsyncMock(return_value=None)
+
+    captured = {}
+
+    async def _broadcast(type_url, msgs, gas_limit, fee_multiplier, gas_multiplier, account_seq=None, timeout_height=None):
+        captured["timeout_height"] = timeout_height
+        raise RuntimeError("stop after the first attempt")
+
+    manager._build_and_broadcast = _broadcast
+
+    pending = PendingTx(
+        manager=manager,
+        parent_tx_id=0,
+        type_url="/cosmos.bank.v1beta1.MsgSend",
+        msgs=[Mock()],
+        fee_tier=FeeTier.ECO,
+        max_retries=0,
+        timeout=timedelta(seconds=10),
+        timeout_height=123456,
+    )
+    await manager._attempt_submissions(pending, gas_limit=150000)
+    with pytest.raises(Exception):
+        await pending
+
+    assert captured["timeout_height"] == 123456
+
+
 # --- construction validation ---
 
 def test_invalid_max_fees_rejected():

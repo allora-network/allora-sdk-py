@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Payload submissions now expire with their submission window: workers/forecasters set `timeout_height = nonce + topic.worker_submission_window`; reputers set `nonce + topic.ground_truth_lag + extra_lag + topic.epoch_length`, with `extra_lag = (-ground_truth_lag) mod epoch_length` — matching the chain's inclusive window bounds (`x/emissions/keeper/window_boundaries.go`). Once the window closes, the chain rejects the tx at CheckTx via `TxTimeoutHeightDecorator` (and evicts it from the mempool at recheck), so a stale submission expires instead of being included and failing with `emissions:75`. `TxManager.submit_transaction`, `insert_worker_payload` and `insert_reputer_payload` accept an optional `timeout_height`; custom `UseCase` implementations should accept the optional third argument on `submit`.
 - **Breaking:** Public Forge HTTP types are now native gateway wire shapes (aligned with Go): `Topic` uses `id` / `metadata` (not `topic_id` / `topic_name`); inference is flat `NetworkInference` (removed nested `Inference` / `InferenceData`).
 - **Breaking:** `get_inference_by_topic_id(...)` replaced by `get_network_inference(topic_id, evm_chain_id=None)`. Decode returns the wire model as-is (no emptiness remap / `topic_id` backfill).
 - **Breaking:** Removed `EmptyInferenceError` — empty inference JSON is a valid `NetworkInference` with default fields (matches Go).

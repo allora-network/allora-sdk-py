@@ -255,6 +255,12 @@ client = AlloraRPCClient.testnet(
 # The tx settings above are also read by the AlloraWorker factories, so a
 # deployment can configure them through the environment without going through
 # AlloraRPCClient.from_env. Explicit arguments always win over the env var.
+#
+# Payload submissions expire with their submission window: workers/forecasters
+# set timeout_height = nonce + topic.worker_submission_window; reputers set
+# nonce + ground_truth_lag + extra_lag + topic.epoch_length (extra_lag rounds the
+# ground-truth lag onto the epoch grid). A stale submission is then evicted from
+# the mempool / rejected at CheckTx instead of being included and failing later.
 client = AlloraRPCClient.from_env()
 
 # Query network data

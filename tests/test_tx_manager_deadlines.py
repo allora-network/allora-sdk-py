@@ -123,9 +123,9 @@ async def test_broadcast_deadline_not_landed_rebroadcasts_at_the_same_sequence()
     seqs: list = []
     build = manager._build_and_broadcast
 
-    async def spy(*args):
+    async def spy(*args, **kwargs):
         seqs.append(args[-1])
-        return await build(*args)
+        return await build(*args, **kwargs)
 
     manager._build_and_broadcast = spy
 
@@ -203,7 +203,7 @@ async def test_cancelled_waiter_stops_the_submission_task():
     manager._pre_flight_checks = AsyncMock()
     release = asyncio.Event()
 
-    async def slow_build(*_):
+    async def slow_build(*_, **__):
         await release.wait()
         return ("HASH1", 200_000, Mock(), 7)
 

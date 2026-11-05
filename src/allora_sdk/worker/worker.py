@@ -419,6 +419,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         self._optional_steps_done = False
         self._optional_steps_running = False
         self._polling_interval_derived = False
+        # Topic fetched at startup (worker window / ground truth lag / epoch
+        # length); each use case sizes its payload tx timeout_height from it.
+        self._topic: Any = None
         self.use_case = use_case
         self.client = client
         self.address = address
@@ -586,6 +589,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 GetTopicRequest(topic_id=int(self.topic_id))
             )
             topic = resp.topic
+            self._topic = topic
         except Exception as e:
             logger.warning(f"Could not read topic {self.topic_id}: {e}")
 
@@ -1031,7 +1035,19 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         async def submit(nonce: int, account_seq: int):
             result = None
             try:
-                result = await self.use_case.submit(nonce, account_seq)
+                # Expire the payload once its submission window closes: the chain's
+                # TxTimeoutHeightDecorator then drops a stale tx instead of
+                # including-and-failing it. Worker and reputer windows differ and
+                # each use case sizes its own boundary from the topic.
+                timeout_height = None
+                if self._topic is not None:
+                    timeout_fn = getattr(self.use_case, "submission_timeout_height", None)
+                    if callable(timeout_fn):
+                        timeout_height = timeout_fn(nonce, self._topic)
+                if timeout_height is not None:
+                    result = await self.use_case.submit(nonce, account_seq, timeout_height)
+                else:
+                    result = await self.use_case.submit(nonce, account_seq)
                 if isinstance(result, AlreadySubmittedError):
                     logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce} code={result.code}")
                     self.submitted_nonces.add(nonce)

@@ -1,7 +1,7 @@
 from decimal import Decimal
 import logging
 import math
-from typing import List, Optional, Union, Callable, Awaitable
+from typing import Any, List, Optional, Union, Callable, Awaitable
 from cosmpy.aerial.wallet import Wallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -27,7 +27,7 @@ from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import resolve_maybe_awaitable, reputer_submission_timeout_height
 
 logger = logging.getLogger("allora_sdk")
 
@@ -141,7 +141,21 @@ class Reputer:
         return {x.reputer_nonce.block_height for x in resp.nonces.nonces}
 
 
-    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
+    def submission_timeout_height(self, nonce: int, topic: Any) -> Optional[int]:
+        """Inclusive end block of this actor's submission window (see ``worker.utils``).
+
+        Reputers submit on the reputer window:
+        ``nonce + ground_truth_lag + extra_lag + epoch_length``, with
+        ``extra_lag = (-ground_truth_lag) mod epoch_length``. Returns None when the
+        topic fields are unknown.
+        """
+        return reputer_submission_timeout_height(
+            nonce,
+            int(getattr(topic, "ground_truth_lag", 0) or 0),
+            int(getattr(topic, "epoch_length", 0) or 0),
+        )
+
+    async def submit(self, nonce: int, account_seq: int, timeout_height: Optional[int] = None) -> WorkerResult[InputValueBundle] | TxError | Exception:
         """Submit a reputer payload for the given nonce.
 
         Sequence-critical: payload is submitted first. Optional stake top-up runs
@@ -186,6 +200,7 @@ class Reputer:
                 value_bundle=loss_bundle,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
+                timeout_height=timeout_height,
             )
             tx_resp = await pending.wait()
             result = WorkerResult(submission=loss_bundle, tx_result=tx_resp)

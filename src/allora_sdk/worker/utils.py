@@ -153,3 +153,30 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
         return loss
 
     return rep_func
+
+
+def worker_submission_timeout_height(nonce: int, worker_submission_window: int) -> int | None:
+    """Inclusive end block of the worker submission window for ``nonce``.
+
+    Matches the chain's worker window, ``[nonce, nonce + worker_submission_window]``
+    (x/emissions keeper `BlockWithinWorkerSubmissionWindowOfNonce`). A tx built with
+    this timeout_height stops being accepted once the window closes. Returns None
+    when the window is unknown, so callers leave the tx without an expiry.
+    """
+    if worker_submission_window <= 0:
+        return None
+    return nonce + worker_submission_window
+
+
+def reputer_submission_timeout_height(nonce: int, ground_truth_lag: int, epoch_length: int) -> int | None:
+    """Inclusive end block of the reputer submission window for a reputer nonce.
+
+    Matches the chain's reputer bounds (x/emissions keeper `ReputerSubmissionWindowBounds`):
+    ``start = nonce + ground_truth_lag + extra_lag`` and ``end = start + epoch_length``,
+    where ``extra_lag = (-ground_truth_lag) mod epoch_length`` (zero when the lag is a
+    whole multiple of the epoch). Returns None when the topic values are unknown.
+    """
+    if epoch_length <= 0 or ground_truth_lag <= 0:
+        return None
+    extra_lag = (epoch_length - (ground_truth_lag % epoch_length)) % epoch_length
+    return nonce + ground_truth_lag + extra_lag + epoch_length

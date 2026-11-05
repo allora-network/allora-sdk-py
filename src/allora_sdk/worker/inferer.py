@@ -2,7 +2,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Union
+from typing import Any, Optional, Union
 
 from cosmpy.aerial.wallet import Wallet
 
@@ -20,7 +20,7 @@ from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import resolve_maybe_awaitable, worker_submission_timeout_height
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 
 logger = logging.getLogger("allora_sdk")
@@ -173,7 +173,17 @@ class Inferer:
             self._last_autostake_key = new_key
 
 
-    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
+    def submission_timeout_height(self, nonce: int, topic: Any) -> Optional[int]:
+        """Inclusive end block of this actor's submission window (see ``worker.utils``).
+
+        Inferers submit on the worker window: ``nonce + topic.worker_submission_window``.
+        Returns None when the topic fields are unknown.
+        """
+        return worker_submission_timeout_height(
+            nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
+        )
+
+    async def submit(self, nonce: int, account_seq: int, timeout_height: Optional[int] = None) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
         try:
             if self.predict_fn is None:
                 return Exception("no predict fn configured")
@@ -209,6 +219,7 @@ class Inferer:
                 nonce=nonce,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
+                timeout_height=timeout_height,
             )
             resp = await pending.wait()
 
