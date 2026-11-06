@@ -246,6 +246,7 @@ class AlloraRPCClient:
                 gas_adjustment=gas_adjustment,
                 base_gas=base_gas,
                 simulate_gas_from_start=simulate_gas_from_start,
+                tendermint_client=tendermint_query,
             )
 
         self.auth       = AuthClient(query_client=auth_query, tx_manager=self.tx_manager)

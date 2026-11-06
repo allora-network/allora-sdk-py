@@ -183,7 +183,7 @@ class Inferer:
             nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
         )
 
-    async def submit(self, nonce: int, account_seq: int, timeout_height: Optional[int] = None) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
+    async def submit(self, nonce: int, account_seq: Optional[int], timeout_height: Optional[int] = None) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
         try:
             if self.predict_fn is None:
                 return Exception("no predict fn configured")

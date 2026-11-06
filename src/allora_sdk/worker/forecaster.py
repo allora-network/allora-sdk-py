@@ -134,7 +134,7 @@ class Forecaster:
             nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
         )
 
-    async def submit(self, nonce: int, account_seq: int, timeout_height: Optional[int] = None) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
+    async def submit(self, nonce: int, account_seq: Optional[int], timeout_height: Optional[int] = None) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
         try:
             if self.forecast_fn is None:
                 return Exception("no forecast fn configured")

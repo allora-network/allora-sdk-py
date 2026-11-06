@@ -155,7 +155,7 @@ class Reputer:
             int(getattr(topic, "epoch_length", 0) or 0),
         )
 
-    async def submit(self, nonce: int, account_seq: int, timeout_height: Optional[int] = None) -> WorkerResult[InputValueBundle] | TxError | Exception:
+    async def submit(self, nonce: int, account_seq: Optional[int], timeout_height: Optional[int] = None) -> WorkerResult[InputValueBundle] | TxError | Exception:
         """Submit a reputer payload for the given nonce.
 
         Sequence-critical: payload is submitted first. Optional stake top-up runs
