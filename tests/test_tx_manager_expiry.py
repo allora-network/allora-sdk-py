@@ -17,9 +17,14 @@ from unittest.mock import AsyncMock, Mock
 import grpc
 import pytest
 
+from allora_sdk.rpc_client.client_emissions import EmissionsTxs
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
+from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce
+from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
+from allora_sdk.rpc_client.protos.emissions.v10 import InputLabeledValue
 from allora_sdk.rpc_client.tx_manager import (
     FeeTier,
+    OutOfGasError,
     PendingTx,
     TxError,
     TxExpiredError,
@@ -33,7 +38,7 @@ def _make_manager(tendermint_client=None) -> TxManager:
     wallet = Mock()
     wallet.address.return_value = "allo1sender"
     wallet.public_key.return_value = Mock()
-    return TxManager(
+    manager = TxManager(
         wallet=wallet,
         tx_client=Mock(),
         auth_client=Mock(),
@@ -42,6 +47,10 @@ def _make_manager(tendermint_client=None) -> TxManager:
         config=AlloraNetworkConfig.testnet(),
         tendermint_client=tendermint_client,
     )
+    # Grace between confirmation lookups sleeps this long. Tests that miss
+    # still re-query; they should not wait on the wall clock.
+    manager.query_interval_secs = 0
+    return manager
 
 
 def _pending(manager: TxManager, max_retries: int = 2, timeout_height: int | None = None) -> PendingTx:
@@ -100,7 +109,7 @@ def _real_build_manager():
     return manager
 
 
-def _neutralize_signing(manager: TxManager, monkeypatch: pytest.MonkeyPatch) -> None:
+def _neutralize_signing(manager: TxManager, monkeypatch: pytest.MonkeyPatch) -> Mock:
     """Replace cosmpy's tx machinery so _build_and_broadcast only exercises the
     broadcast/classification path (mirrors test_tx_manager_retry_idempotency)."""
     import allora_sdk.rpc_client.tx_manager as txm
@@ -118,6 +127,7 @@ def _neutralize_signing(manager: TxManager, monkeypatch: pytest.MonkeyPatch) -> 
     account = Mock()
     account.info = Mock(sequence=7, account_number=3)
     manager.auth_client.account_info = AsyncMock(return_value=account)
+    return fake_tx
 
 
 # --- classification: sdk:30 -> TxExpiredError -------------------------------
@@ -402,10 +412,35 @@ async def test_landed_original_that_failed_retryably_is_final_on_expiry() -> Non
     pending = _pending(manager, timeout_height=100)
     await manager._attempt_submissions(pending, gas_limit=200_000)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(OutOfGasError):
         await pending.wait()
-    assert "out of gas" in str(exc_info.value).lower()
     assert builds == [1]
+
+
+@pytest.mark.asyncio
+async def test_expiry_confirms_landed_original_after_indexer_lag() -> None:
+    """The expiry-time lookup misses. The grace window's next lookup finds the
+    original, so a tx that landed is not reported as expired."""
+    tm = Mock()
+    tm.get_latest_block = AsyncMock(
+        side_effect=[_latest_block(90), _latest_block(101)]
+    )
+    builds: list = []
+    manager = _ready_manager(tm, builds)
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+
+    landed = _accepted()
+    # Timeout recheck misses, the immediate expiry confirm misses, grace hits.
+    manager._get_tx = AsyncMock(
+        side_effect=[TxNotFoundError(), TxNotFoundError(), landed]
+    )
+
+    pending = _pending(manager, timeout_height=100)
+    await manager._attempt_submissions(pending, gas_limit=200_000)
+
+    assert await pending.wait() is landed.tx_response
+    assert builds == [1]
+    assert manager._get_tx.await_count == 3
 
 
 # --- server-side (SYNC CheckTx) rejection -----------------------------------
@@ -416,7 +451,7 @@ async def test_checktx_expired_rejection_is_terminal_and_never_retried(monkeypat
     """A SYNC broadcast response of sdk:30 (the chain's own rejection) must be
     terminal on the first attempt: no second broadcast despite retries left."""
     manager = _real_build_manager()
-    _neutralize_signing(manager, monkeypatch)
+    fake_tx = _neutralize_signing(manager, monkeypatch)
     manager.tx_client.broadcast_tx = AsyncMock(return_value=_expired_response())
 
     pending = _pending(manager, max_retries=2, timeout_height=100)
@@ -426,6 +461,7 @@ async def test_checktx_expired_rejection_is_terminal_and_never_retried(monkeypat
         await pending.wait()
     manager.tx_client.broadcast_tx.assert_awaited_once()
     assert pending.last_tx_hash is None
+    assert fake_tx.seal.call_args.kwargs["timeout_height"] == 100
 
 
 @pytest.mark.asyncio
@@ -489,3 +525,53 @@ async def test_checktx_expired_after_timeout_without_landed_original_fails(monke
     with pytest.raises(TxExpiredError):
         await pending.wait()
     assert manager.tx_client.broadcast_tx.await_count == 2
+
+
+def _payload_txs() -> tuple[EmissionsTxs, Mock]:
+    wallet = Mock()
+    wallet.address.return_value = "allo1worker"
+    wallet.signer.return_value.sign_digest.return_value = b"sig"
+    wallet.public_key.return_value.public_key_hex = "aa"
+    txs = Mock()
+    txs.wallet = wallet
+    txs.submit_transaction = AsyncMock(return_value=Mock())
+    return EmissionsTxs(txs), txs
+
+
+@pytest.mark.asyncio
+async def test_payload_methods_forward_timeout_height() -> None:
+    """insert_worker_payload and insert_reputer_payload pass timeout_height
+    through to submit_transaction, including the unset default."""
+    client, txs = _payload_txs()
+    await client.insert_worker_payload(
+        topic_id=1,
+        inference_value=[InputLabeledValue(label="y", value="1")],
+        nonce=10,
+        timeout_height=42,
+    )
+    assert txs.submit_transaction.await_args.kwargs["timeout_height"] == 42
+
+    client, txs = _payload_txs()
+    await client.insert_worker_payload(
+        topic_id=1,
+        inference_value=[InputLabeledValue(label="y", value="1")],
+        nonce=10,
+    )
+    assert txs.submit_transaction.await_args.kwargs["timeout_height"] is None
+
+    client, txs = _payload_txs()
+    await client.insert_reputer_payload(
+        topic_id=1,
+        reputer_request_nonce=ReputerRequestNonce(reputer_nonce=Nonce(block_height=10)),
+        value_bundle=InputValueBundle(),
+        timeout_height=99,
+    )
+    assert txs.submit_transaction.await_args.kwargs["timeout_height"] == 99
+
+    client, txs = _payload_txs()
+    await client.insert_reputer_payload(
+        topic_id=1,
+        reputer_request_nonce=ReputerRequestNonce(reputer_nonce=Nonce(block_height=10)),
+        value_bundle=InputValueBundle(),
+    )
+    assert txs.submit_transaction.await_args.kwargs["timeout_height"] is None

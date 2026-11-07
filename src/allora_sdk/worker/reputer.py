@@ -23,7 +23,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputWithheldWorkerAttributedValue,
     InputWorkerAttributedValue,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxExpiredError
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
@@ -212,7 +212,9 @@ class Reputer:
             result = WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
         except TxError as err:
-            logger.error(f"❌ TX ERROR: {err}")
+            # Expiry is an expected terminal outcome. The worker logs it.
+            if not isinstance(err, TxExpiredError):
+                logger.error(f"❌ TX ERROR: {err}")
             already_submitted = False
             if err.code in (68, 75, 78):
                 already_submitted = True

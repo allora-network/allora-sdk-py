@@ -741,11 +741,20 @@ class TxManager:
                 # previous broadcast may still have landed just before the
                 # boundary while the indexer lagged (TxTimeoutHeightDecorator
                 # runs before the sequence check, so a same-sequence rebroadcast
-                # surfaces as expiry instead of a sequence mismatch), so confirm
-                # the original before reporting failure.
-                landed = await self._try_confirm_landed(pending.last_tx_hash) if pending.last_tx_hash else None
-                if landed is not None:
-                    self._resolve_landed(pending, landed)
+                # surfaces as expiry instead of a sequence mismatch). Confirm
+                # the original, and give the indexer the same grace the
+                # sequence-mismatch path uses, before reporting failure.
+                if not pending.last_tx_hash:
+                    pending._set_exception(err)
+                    return
+                outcome = await self._bail_if_landed(pending)
+                if outcome is _LandedOutcome.NOT_LANDED:
+                    outcome = await self._confirm_landed_with_grace(pending)
+                if outcome is _LandedOutcome.FINALIZED:
+                    return
+                if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                    # The window is closed. Surface the landed error and stop.
+                    pending._set_exception(pending.last_landed_error or err)
                     return
                 pending._set_exception(err)
                 return
