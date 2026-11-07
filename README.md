@@ -261,6 +261,8 @@ client = AlloraRPCClient.testnet(
 # nonce + ground_truth_lag + extra_lag + topic.epoch_length (extra_lag rounds the
 # ground-truth lag onto the epoch grid). A stale submission is then evicted from
 # the mempool / rejected at CheckTx instead of being included and failing later.
+# The actor sets that height only after it has loaded the topic and the window
+# fields are positive; otherwise the tx is left unchanged.
 client = AlloraRPCClient.from_env()
 
 # Query network data
