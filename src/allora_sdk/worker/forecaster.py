@@ -13,7 +13,7 @@ from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult
-from allora_sdk.worker.utils import resolve_maybe_awaitable, worker_submission_timeout_height
+from allora_sdk.worker.utils import resolve_maybe_awaitable, resolve_topic, worker_submission_timeout_height
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 
 logger = logging.getLogger("allora_sdk")
@@ -51,6 +51,10 @@ class Forecaster:
 
         # Simple in-memory idempotence for rewards events
         self._last_autostake_key: tuple[int, int] | None = None
+
+        # Topic metadata cache; resolved lazily so a failed lookup is retried
+        # on the next submission instead of disabling expiry for the process.
+        self._topic_cache: Any = None
 
     def name(self) -> str:
         return "forecaster"
@@ -124,17 +128,13 @@ class Forecaster:
         if new_key is not None:
             self._last_autostake_key = new_key
 
-    def submission_timeout_height(self, nonce: int, topic: Any) -> Optional[int]:
-        """Inclusive end block of this actor's submission window (see ``worker.utils``).
+    async def _cached_topic(self) -> Any:
+        """Return the topic metadata, fetching it once and retrying on failure."""
+        if self._topic_cache is None:
+            self._topic_cache = await resolve_topic(self.client, self.topic_id)
+        return self._topic_cache
 
-        Forecasters submit on the worker window: ``nonce + topic.worker_submission_window``.
-        Returns None when the topic fields are unknown.
-        """
-        return worker_submission_timeout_height(
-            nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
-        )
-
-    async def submit(self, nonce: int, account_seq: Optional[int], timeout_height: Optional[int] = None) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
+    async def submit(self, nonce: int, account_seq: Optional[int]) -> WorkerResult[TForecasterRunFnResult] | TxError | Exception:
         try:
             if self.forecast_fn is None:
                 return Exception("no forecast fn configured")
@@ -160,6 +160,14 @@ class Forecaster:
                 {"inferer": addr, "value": canonicalize_dec(pred)}
                 for addr, pred in sorted(forecasts_raw.items(), key=lambda kv: kv[0])
             ]
+
+            topic = await self._cached_topic()
+            timeout_height = (
+                worker_submission_timeout_height(
+                    nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
+                )
+                if topic is not None else None
+            )
 
             pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,

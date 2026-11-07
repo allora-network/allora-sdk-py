@@ -27,7 +27,7 @@ from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
-from allora_sdk.worker.utils import resolve_maybe_awaitable, reputer_submission_timeout_height
+from allora_sdk.worker.utils import resolve_maybe_awaitable, resolve_topic, reputer_submission_timeout_height
 
 logger = logging.getLogger("allora_sdk")
 
@@ -69,6 +69,10 @@ class Reputer:
         self.reputer_fn = reputer_fn
         self.min_stake_uallo = min_stake_uallo
         self.fee_tier = fee_tier
+
+        # Topic metadata cache; resolved lazily so a failed lookup is retried
+        # on the next submission instead of disabling expiry for the process.
+        self._topic_cache: Any = None
 
 
     def name(self) -> str:
@@ -141,21 +145,13 @@ class Reputer:
         return {x.reputer_nonce.block_height for x in resp.nonces.nonces}
 
 
-    def submission_timeout_height(self, nonce: int, topic: Any) -> Optional[int]:
-        """Inclusive end block of this actor's submission window (see ``worker.utils``).
+    async def _cached_topic(self) -> Any:
+        """Return the topic metadata, fetching it once and retrying on failure."""
+        if self._topic_cache is None:
+            self._topic_cache = await resolve_topic(self.client, self.topic_id)
+        return self._topic_cache
 
-        Reputers submit on the reputer window:
-        ``nonce + ground_truth_lag + extra_lag + epoch_length``, with
-        ``extra_lag = (-ground_truth_lag) mod epoch_length``. Returns None when the
-        topic fields are unknown.
-        """
-        return reputer_submission_timeout_height(
-            nonce,
-            int(getattr(topic, "ground_truth_lag", 0) or 0),
-            int(getattr(topic, "epoch_length", 0) or 0),
-        )
-
-    async def submit(self, nonce: int, account_seq: Optional[int], timeout_height: Optional[int] = None) -> WorkerResult[InputValueBundle] | TxError | Exception:
+    async def submit(self, nonce: int, account_seq: Optional[int]) -> WorkerResult[InputValueBundle] | TxError | Exception:
         """Submit a reputer payload for the given nonce.
 
         Sequence-critical: payload is submitted first. Optional stake top-up runs
@@ -192,6 +188,16 @@ class Reputer:
             reputer_nonce=Nonce(block_height=nonce),
         )
         loss_bundle.reputer = sender
+
+        topic = await self._cached_topic()
+        timeout_height = (
+            reputer_submission_timeout_height(
+                nonce,
+                int(getattr(topic, "ground_truth_lag", 0) or 0),
+                int(getattr(topic, "epoch_length", 0) or 0),
+            )
+            if topic is not None else None
+        )
 
         try:
             pending = await self.client.emissions.tx.insert_reputer_payload(

@@ -4,13 +4,17 @@ import os
 import math
 from datetime import datetime
 from getpass import getpass
-from typing import Awaitable, Callable, ParamSpec, TypeVar, Union, cast
+from typing import Any, Awaitable, Callable, ParamSpec, TypeVar, Union, cast
 from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
-from allora_sdk.rpc_client.protos.emissions.v10 import GetNetworkInferencesAtBlockRequest, NetworkInferenceBundle
+from allora_sdk.rpc_client.protos.emissions.v10 import (
+    GetNetworkInferencesAtBlockRequest,
+    GetTopicRequest,
+    NetworkInferenceBundle,
+)
 from .context import RunContext
 
 logger = logging.getLogger("allora_sdk")
@@ -100,6 +104,23 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
     )
     network_inferences_resp = await client.emissions.query.get_network_inferences_at_block(request)
     return network_inferences_resp.network_inferences
+
+async def resolve_topic(client: AlloraRPCClient, topic_id: int) -> Any | None:
+    """Fetch a topic's metadata, returning None when the query fails.
+
+    Actors cache a successful lookup and retry on the next submission when this
+    returns None, so a transient chain blip does not disable payload expiry for
+    the process lifetime.
+    """
+    try:
+        resp = await client.emissions.query.get_topic(
+            GetTopicRequest(topic_id=int(topic_id))
+        )
+        return resp.topic
+    except Exception as e:
+        logger.warning(f"Could not read topic {topic_id}: {e}")
+        return None
+
 
 Truth = TypeVar('Truth')
 Inference = float | dict[str, float]
