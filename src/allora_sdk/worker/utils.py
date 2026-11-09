@@ -7,6 +7,8 @@ from getpass import getpass
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar, Union, cast
 from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
@@ -72,8 +74,30 @@ async def resolve_maybe_awaitable(
     return cast(R, out)
 
 
+# The chain's wording (typo included) for a height it has not produced yet.
+# cosmos-sdk raises it as codes.InvalidArgument with this message and no error
+# details, so the message -- not the generic status code, which other query
+# errors share -- is the discriminator. Only the distinctive core is matched,
+# so a rephrased prefix still classifies.
+_BLOCK_NOT_READY_MESSAGE = "bigger then the chain length"
+
+
+def is_block_not_ready(err: BaseException) -> bool:
+    """Return True when the chain reports the requested height as not yet produced."""
+    return (
+        isinstance(err, GRPCError)
+        and err.status == Status.INVALID_ARGUMENT
+        and _BLOCK_NOT_READY_MESSAGE in (err.message or "")
+    )
+
+
 async def get_block_time(client: AlloraRPCClient, height: int) -> datetime:
     """Fetch the timestamp of a block at the given height.
+
+    A nonce's block may be delivered by the event stream before the node
+    answering queries has produced it; the chain rejects the request until it
+    does. The worker retries that specific failure at the nonce level (see
+    ``is_block_not_ready``) instead of losing the epoch.
 
     Args:
         client: The RPC client to query.

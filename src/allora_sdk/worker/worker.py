@@ -47,7 +47,7 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet
+from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready
 
 logger = logging.getLogger("allora_sdk")
 
@@ -1053,10 +1053,18 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 elif isinstance(result, TxTimeoutError):
                     logger.error(f"⚠️ Transaction timed out: topic_id={self.topic_id} nonce={nonce}")
 
+                elif isinstance(result, BaseException) and is_block_not_ready(result):
+                    # Transient: the node answering queries has not produced
+                    # this nonce's block yet. Deliberately do not record the
+                    # nonce -- the existing polling / window-event cycle
+                    # retries it, exactly like TxTimeoutError.
+                    logger.warning(
+                        f"⚠️ Block for nonce {nonce} is not produced yet; retrying: {result}"
+                    )
+
                 elif isinstance(result, Exception):
                     logger.error(
-                        f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}",
-                        exc_info=(type(result), result, result.__traceback__),
+                        f"❌ Error submitting for nonce {nonce}: {type(result).__name__}: {result}"
                     )
                     self.submitted_nonces.add(nonce)
 

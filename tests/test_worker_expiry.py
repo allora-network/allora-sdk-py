@@ -1,7 +1,8 @@
 """An expired payload submission (sdk:30 / timeout height) is a terminal,
 expected outcome: the worker records the nonce, logs it below ERROR, and never
 retries that nonce in a later cycle. A plain, non-expiry TxError must keep its
-existing error-level handling.
+existing error-level handling. A nonce whose block is not produced yet stays
+open and is retried by the next cycle.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 
 from allora_sdk.rpc_client.tx_manager import TxError, TxExpiredError
 from allora_sdk.utils import Context
@@ -136,3 +139,42 @@ async def test_expired_and_landed_nonces_are_both_resolved(monkeypatch) -> None:
     queued = [worker._queue.get_nowait() for _ in range(2)]
     assert queued[0] is expired
     assert queued[1] is landed
+
+
+@pytest.mark.asyncio
+async def test_block_not_ready_error_keeps_nonce_open_and_retries(monkeypatch, caplog) -> None:
+    not_ready = GRPCError(
+        Status.INVALID_ARGUMENT,
+        "requested block height is bigger then the chain length",
+        None,
+    )
+    use_case = _use_case_returning(not_ready)
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    caplog.set_level(logging.DEBUG, logger="allora_sdk")
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert use_case.submit.await_count == 1
+    assert 7 not in worker.submitted_nonces
+    assert "Block for nonce 7 is not produced yet" in caplog.text
+    assert "Error submitting for nonce 7" not in caplog.text
+
+    # The nonce stayed open: the next cycle retries it.
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+    assert use_case.submit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_other_invalid_argument_errors_record_the_nonce(monkeypatch, caplog) -> None:
+    other = GRPCError(Status.INVALID_ARGUMENT, "some other invalid argument", None)
+    use_case = _use_case_returning(other)
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    caplog.set_level(logging.DEBUG, logger="allora_sdk")
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 in worker.submitted_nonces
+    assert "Error submitting for nonce 7" in caplog.text
+    assert "is not produced yet" not in caplog.text

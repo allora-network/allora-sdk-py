@@ -147,7 +147,7 @@ class Forecaster:
 
             forecasts_raw = await resolve_maybe_awaitable(self.forecast_fn, run_context)
         except Exception as err:
-            logger.error("Forecast function failed", exc_info=True)
+            logger.error(f"Forecast function failed for nonce {nonce}: {err}")
             return err
 
         try:
