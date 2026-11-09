@@ -12,8 +12,9 @@ import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, Mock
 
-import grpc
 import pytest
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.tx_manager import (
@@ -172,7 +173,7 @@ async def test_timeout_transient_query_error_degrades_to_retry() -> None:
     manager._build_and_broadcast = fake_build
     manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
     manager._get_tx = AsyncMock(
-        side_effect=grpc.RpcError("transient endpoint failure")
+        side_effect=GRPCError(Status.UNAVAILABLE, "transient endpoint failure")
     )
 
     pending = _pending(manager, max_retries=1)

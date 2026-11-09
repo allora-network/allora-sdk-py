@@ -4,7 +4,8 @@ import math
 from enum import Enum
 import bech32
 import traceback
-import grpc
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
@@ -449,7 +450,7 @@ class TxManager:
                 # Add a safety margin to the estimate
                 return int(gas_used * self.gas_adjustment)
 
-            except grpc.RpcError as e:
+            except GRPCError as e:
                 err = self._exception_from_simulation_error(e)
                 if isinstance(err, OutOfGasError) and current_gas_limit < max_simulation_gas:
                     next_limit = min(max_simulation_gas, int(current_gas_limit * 1.5))
@@ -460,8 +461,8 @@ class TxManager:
                     current_gas_limit = next_limit
                     continue
 
-                logger.error(f"Simulation failed: {e.details() if hasattr(e, 'details') else str(e)}")
-                raise err
+                logger.error(f"Simulation failed: {e.message or str(e)}")
+                raise err from e
 
     async def _await_sequence_retry_delay(self, pending, start) -> bool:
         """Honour account_sequence_retry_delay before an ASM retry.
@@ -839,9 +840,9 @@ class TxManager:
             if resp is None or resp.tx_response is None:
                 raise TxNotFoundError()
             return resp
-        except grpc.RpcError as e:
-            details = e.details()
-            if details is not None and "not found" in details:
+        except GRPCError as e:
+            details = e.message or ""
+            if e.status == Status.NOT_FOUND or ("tx" in details and "not found" in details):
                 raise TxNotFoundError() from e
             raise
         except asyncio.TimeoutError as e:
@@ -1037,7 +1038,7 @@ class TxManager:
             f"{self.wallet.address()} still exists and its spend limit is not exhausted)"
         )
 
-    def _exception_from_simulation_error(self, error: grpc.RpcError) -> Exception:
+    def _exception_from_simulation_error(self, error: GRPCError) -> Exception:
         """
         Parse gRPC error from simulation and return appropriate exception.
 
@@ -1050,8 +1051,7 @@ class TxManager:
         Returns:
             Appropriate exception type based on error details
         """
-        error_details = error.details() if hasattr(error, 'details') else str(error)
-        error_msg = error_details or str(error)
+        error_msg = error.message or str(error)
         error_class = self._classify_error_from_message(error_msg)
 
         if error_class == OutOfGasError:
@@ -1061,15 +1061,9 @@ class TxManager:
         elif error_class == InsufficientFeesError:
             return InsufficientFeesError(f"Insufficient fees during simulation{self._fee_granter_hint()}: {error_msg}")
         else:
-            code = error.code() if hasattr(error, 'code') else None
-            try:
-                code_value = code.value[0] if isinstance(code.value, tuple) else int(code.value)
-            except (TypeError, IndexError, AttributeError):
-                code_value = 1
-
             return TxError(
                 codespace="simulation",
-                code=code_value,
+                code=error.status.value,
                 message=error_msg,
                 tx_hash=None
             )
