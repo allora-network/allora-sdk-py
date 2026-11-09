@@ -513,14 +513,17 @@ class TxManager:
         return False
 
     async def _raise_if_expired(self, pending: "PendingTx") -> None:
-        """Raise TxExpiredError when the tx's timeout_height is behind the chain tip.
+        """Raise TxExpiredError when the tx can no longer land within its timeout_height.
 
-        A tx sealed with an already-passed timeout_height can never land — the
-        chain's TxTimeoutHeightDecorator rejects it at CheckTx — so checking
-        here keeps an expired payload (and every rebuild of its retry ladder)
-        from being signed and broadcast again. Only queried when the tx carries
-        an expiry; any query failure degrades to the chain's own CheckTx
-        rejection instead of blocking the submission.
+        The chain accepts blocks up to and including timeout_height; the latest
+        height is the last committed block, so a tx broadcast now lands at
+        latest + 1 at the earliest. Hence latest >= timeout_height means it can
+        never land. (At equality, CheckTx still admits it -- it checks the
+        committed height -- and the tx dies in the next block's ante.) Refusing
+        here avoids signing and broadcasting a doomed tx.
+
+        Only checked when the tx carries an expiry; a failed height query
+        degrades to the chain's own CheckTx rejection.
         """
         if not pending.timeout_height or self.tendermint_client is None:
             return
@@ -533,11 +536,11 @@ class TxManager:
             logger.debug("Could not read the latest height before broadcast; relying on CheckTx: %r", exc)
             return
 
-        if height is not None and height > pending.timeout_height:
+        if height is not None and height >= pending.timeout_height:
             raise TxExpiredError(
                 codespace="sdk",
                 code=30,
-                message=f"timeout height {pending.timeout_height} already passed at height {height}",
+                message=f"timeout height {pending.timeout_height} unreachable: latest committed height is {height}",
             )
 
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
@@ -551,9 +554,8 @@ class TxManager:
             try:
                 pending.attempt = attempt
 
-                # An expired tx cannot land (CheckTx rejects it), so never
-                # (re)build or broadcast one: fail fast instead of spending a
-                # doomed build/sign/broadcast on the remaining attempts.
+                # A tx that can no longer land is doomed: fail fast instead of
+                # spending a build/sign/broadcast on the remaining attempts.
                 await self._raise_if_expired(pending)
 
                 await self._pre_flight_checks()

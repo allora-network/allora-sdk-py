@@ -1063,8 +1063,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     )
 
                 elif isinstance(result, Exception):
+                    # Errors are returned, not raised: pass the traceback
+                    # explicitly (the only trace for custom use cases).
                     logger.error(
-                        f"❌ Error submitting for nonce {nonce}: {type(result).__name__}: {result}"
+                        f"❌ Error submitting for nonce {nonce}: {type(result).__name__}: {result}",
+                        exc_info=(type(result), result, result.__traceback__),
                     )
                     self.submitted_nonces.add(nonce)
 

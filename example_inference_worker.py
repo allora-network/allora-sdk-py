@@ -34,7 +34,7 @@ async def main():
             logger.warning(f"Submission window closed before the payload landed: {result}")
             continue
         if isinstance(result, Exception):
-            logger.error(f"Inference worker error: {result}")
+            logger.error(f"Inference worker error: {result}", exc_info=result)
             continue
         logger.info(f"Prediction submitted to Allora: {result.submission}")
 

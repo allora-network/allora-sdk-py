@@ -190,11 +190,31 @@ async def test_expired_guard_fails_fast_without_build_or_broadcast() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expired_guard_allows_the_inclusive_last_block() -> None:
-    """height == timeout_height is still valid: the chain only rejects once the
-    height has passed, so the last window block must still be broadcast."""
+async def test_expired_guard_refuses_when_tip_equals_timeout_height() -> None:
+    """tip == timeout_height: the earliest landing (tip + 1) is past the
+    boundary, so the guard refuses before building (CheckTx would admit it)."""
     builds: list = []
     manager = _ready_manager(_tendermint(100), builds)
+
+    pending = _pending(manager, timeout_height=100)
+    await manager._attempt_submissions(pending, gas_limit=200_000)
+
+    with pytest.raises(TxExpiredError) as exc_info:
+        await pending.wait()
+
+    assert exc_info.value.codespace == "sdk"
+    assert exc_info.value.code == 30
+    assert builds == []
+    manager._pre_flight_checks.assert_not_awaited()
+    manager.tx_client.broadcast_tx.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expired_guard_allows_the_inclusive_last_block() -> None:
+    """tip == timeout_height - 1: the next block is the inclusive last one, so
+    the tx must still be broadcast."""
+    builds: list = []
+    manager = _ready_manager(_tendermint(99), builds)
     manager.wait_for_tx = AsyncMock(return_value=_accepted())
 
     pending = _pending(manager, timeout_height=100)
@@ -387,6 +407,28 @@ async def test_retry_expiry_without_landed_original_fails_with_expiry() -> None:
         await pending.wait()
     assert builds == [1]
     assert tm.get_latest_block.await_count == 2  # one check per attempt
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_once_tip_reaches_timeout_height() -> None:
+    """Attempt 0 goes out at tip 99; by the retry the tip is at the boundary,
+    so the rebuild can only land past it and must be refused."""
+    tm = Mock()
+    tm.get_latest_block = AsyncMock(
+        side_effect=[_latest_block(99), _latest_block(100)]
+    )
+    builds: list = []
+    manager = _ready_manager(tm, builds)
+    manager.wait_for_tx = AsyncMock(side_effect=TxTimeoutError())
+    manager._get_tx = AsyncMock(side_effect=TxNotFoundError())
+
+    pending = _pending(manager, timeout_height=100)
+    await manager._attempt_submissions(pending, gas_limit=200_000)
+
+    with pytest.raises(TxExpiredError):
+        await pending.wait()
+    assert builds == [1]
+    assert tm.get_latest_block.await_count == 2
 
 
 @pytest.mark.asyncio
