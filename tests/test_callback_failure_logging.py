@@ -212,4 +212,7 @@ async def test_block_not_ready_from_predict_fn_logs_one_warning_end_to_end(monke
 
     assert 7 not in worker.submitted_nonces
     assert _error_records(caplog) == []
-    assert "Block for nonce 7 is not produced yet" in caplog.text
+    warnings = [r for r in caplog.records if "is not produced yet" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].exc_info is None
