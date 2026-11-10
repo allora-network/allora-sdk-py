@@ -100,8 +100,11 @@ class TestWorkerSubmitLock:
         assert max_concurrent == 1
 
     @pytest.mark.asyncio
-    async def test_maybe_submit_uses_base_sequence_with_increment(self):
-        """Nonce submissions should use base sequence + index in one cycle."""
+    async def test_maybe_submit_defers_sequence_resolution_to_tx_manager(self):
+        """The worker must not precompute base_sequence + i: a submission that
+        ends without consuming a sequence (expired payload, CheckTx rejection)
+        would leave every later nonce in the cycle one sequence ahead. TxManager
+        resolves the account sequence at build time instead."""
         mock_use_case = MagicMock()
         mock_use_case.name.return_value = "inferer"
         mock_use_case.worker_is_whitelisted = AsyncMock(return_value=True)
@@ -141,8 +144,8 @@ class TestWorkerSubmitLock:
 
         await worker._maybe_submit_impl(worker._ctx)
 
-        mock_client.auth.query.account_info.assert_awaited_once()
-        assert mock_use_case.submit.await_args_list == [call(101, 10), call(202, 11)]
+        mock_client.auth.query.account_info.assert_not_awaited()
+        assert mock_use_case.submit.await_args_list == [call(101, None), call(202, None)]
 
 
 # ---------------------------------------------------------------------------

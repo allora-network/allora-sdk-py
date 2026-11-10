@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from allora_sdk import AlloraNetworkConfig, AlloraWalletConfig, AlloraWorker, RunContext, get_block_time
+from allora_sdk.rpc_client.tx_manager import TxExpiredError
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,13 @@ async def main():
     )
 
     async for result in worker.run():
+        if isinstance(result, TxExpiredError):
+            # Expected terminal outcome: the submission window closed before the
+            # payload landed. The worker already recorded the nonce and moved on.
+            logger.warning(f"Submission window closed before the payload landed: {result}")
+            continue
         if isinstance(result, Exception):
-            logger.error("Inference worker error", exc_info=result)
+            logger.error(f"Inference worker error: {result}", exc_info=result)
             continue
         logger.info(f"Prediction submitted to Allora: {result.submission}")
 

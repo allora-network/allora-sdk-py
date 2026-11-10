@@ -2,7 +2,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Union
+from typing import Any, Optional, Union
 
 from cosmpy.aerial.wallet import Wallet
 
@@ -20,7 +20,7 @@ from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
 from allora_sdk.worker.types import AlreadySubmittedError, StopQueue, TRunFn, UseCase, WorkerResult
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import is_block_not_ready, resolve_maybe_awaitable, resolve_topic, worker_submission_timeout_height
 from allora_sdk.worker.autostake import AutoStakeConfig, AutoStakeRole, process_autostake_rewards_settled, validate_autostake_config
 
 logger = logging.getLogger("allora_sdk")
@@ -93,6 +93,10 @@ class Inferer:
 
         # Throttle cache: (fetch_timestamp, inferer_values)
         self._sanity_cache: tuple[float, list[float]] | None = None
+
+        # Topic metadata cache; resolved lazily so a failed lookup is retried
+        # on the next submission instead of disabling expiry for the process.
+        self._topic_cache: Any = None
 
 
     def name(self) -> str:
@@ -173,7 +177,13 @@ class Inferer:
             self._last_autostake_key = new_key
 
 
-    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
+    async def _cached_topic(self) -> Any:
+        """Return the topic metadata, fetching it once and retrying on failure."""
+        if self._topic_cache is None:
+            self._topic_cache = await resolve_topic(self.client, self.topic_id)
+        return self._topic_cache
+
+    async def submit(self, nonce: int, account_seq: Optional[int]) -> WorkerResult[TInfererRunFnResult] | TxError | Exception:
         try:
             if self.predict_fn is None:
                 return Exception("no predict fn configured")
@@ -186,7 +196,11 @@ class Inferer:
 
             prediction = await resolve_maybe_awaitable(self.predict_fn, run_context)
         except Exception as err:
-            logger.error("Prediction function failed", exc_info=True)
+            # Transient: the worker logs the retry and keeps the nonce open.
+            if is_block_not_ready(err):
+                return err
+            # A bug in the user's predict_fn: keep the traceback.
+            logger.error(f"Prediction function failed for nonce {nonce}: {err}", exc_info=True)
             return err
 
         # Sanity check prediction against network consensus (throttled; see SanityCheckConfig)
@@ -202,6 +216,14 @@ class Inferer:
         else:
             prediction_dict = [InputLabeledValue(label='y', value=canonicalize_dec(prediction))]
 
+        topic = await self._cached_topic()
+        timeout_height = (
+            worker_submission_timeout_height(
+                nonce, int(getattr(topic, "worker_submission_window", 0) or 0)
+            )
+            if topic is not None else None
+        )
+
         try:
             pending = await self.client.emissions.tx.insert_worker_payload(
                 topic_id=self.topic_id,
@@ -209,6 +231,7 @@ class Inferer:
                 nonce=nonce,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
+                timeout_height=timeout_height,
             )
             resp = await pending.wait()
 

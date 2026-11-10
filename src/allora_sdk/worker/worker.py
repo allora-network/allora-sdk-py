@@ -15,7 +15,6 @@ import requests
 import logging
 from typing import Any, Generic, Optional, AsyncIterator, TypeVar
 
-from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 import async_timeout
 
@@ -31,7 +30,7 @@ from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
 from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxTimeoutError
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxExpiredError, TxTimeoutError
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
 from allora_sdk.worker.forecaster import Forecaster, TForecasterRunFn, TForecasterRunFnResult
@@ -48,7 +47,7 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet
+from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready
 
 logger = logging.getLogger("allora_sdk")
 
@@ -595,7 +594,9 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 f"Polling every {self.polling_interval}s for topic {self.topic_id} "
                 f"(explicitly configured; not derived from the submission window)"
             )
-            self._polling_interval_derived = True
+            # Only mark the step done once the topic actually loaded; otherwise
+            # _ensure_initialized returns early and never retries the fetch.
+            self._polling_interval_derived = topic is not None
             return topic
 
         window_blocks = int(getattr(topic, "worker_submission_window", 0) or 0) if topic else 0
@@ -1028,12 +1029,21 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         logger.info(f"   Topic {self.topic_id}: unfulfilled nonces: {nonces_str}")
         logger.info(f"   Our unfulfilled nonces: {new_nonces_str}")
 
-        async def submit(nonce: int, account_seq: int):
+        async def submit(nonce: int, account_seq: Optional[int]):
             result = None
             try:
+                # Each use case resolves its own topic and sizes its payload
+                # timeout from it, so the worker no longer carries the topic.
                 result = await self.use_case.submit(nonce, account_seq)
                 if isinstance(result, AlreadySubmittedError):
                     logger.info(f"⚠️ Already submitted for this epoch: topic_id={self.topic_id} nonce={nonce} code={result.code}")
+                    self.submitted_nonces.add(nonce)
+
+                elif isinstance(result, TxExpiredError):
+                    # Expected terminal outcome: the window closed before the
+                    # payload landed, and the chain rejects expired txs. The
+                    # nonce is dead, so record it and stop re-processing it.
+                    logger.warning(f"⚠️ Submission window closed before the payload landed: topic_id={self.topic_id} nonce={nonce} {str(result)}")
                     self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, TxError):
@@ -1043,9 +1053,20 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                 elif isinstance(result, TxTimeoutError):
                     logger.error(f"⚠️ Transaction timed out: topic_id={self.topic_id} nonce={nonce}")
 
+                elif isinstance(result, BaseException) and is_block_not_ready(result):
+                    # Transient: the node answering queries has not produced
+                    # this nonce's block yet. Deliberately do not record the
+                    # nonce -- the existing polling / window-event cycle
+                    # retries it, exactly like TxTimeoutError.
+                    logger.warning(
+                        f"⚠️ Block for nonce {nonce} is not produced yet; retrying: {result}"
+                    )
+
                 elif isinstance(result, Exception):
+                    # Errors are returned, not raised: pass the traceback
+                    # explicitly (the only trace for custom use cases).
                     logger.error(
-                        f"❌ Unknown error submitting for nonce {nonce}: {str(result)} {type(result)}",
+                        f"❌ Error submitting for nonce {nonce}: {type(result).__name__}: {result}",
                         exc_info=(type(result), result, result.__traceback__),
                     )
                     self.submitted_nonces.add(nonce)
@@ -1094,20 +1115,18 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             )
             new_nonces = new_nonces[-self.max_unfulfilled_nonces:]
 
-        account_seq = await self.client.auth.query.account_info(QueryAccountInfoRequest(address=self.address))
-        if not account_seq or not account_seq.info:
-            logger.error(f"❌ Could not check account sequence for {self.address}")
-            return
-        base_sequence = account_seq.info.sequence
-
-        for i, nonce in enumerate(new_nonces):
+        for nonce in new_nonces:
             if not self._ctx or self._ctx.is_cancelled():
                 break
 
-            next_sequence = base_sequence + i
-            logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting... account_seq={next_sequence}")
-            # Cosmos account sequence values are strictly ordered; submit serially to avoid races.
-            await submit(nonce, next_sequence)
+            # TxManager resolves the account sequence at build time (and
+            # re-resolves it on its retries). Precomputing base_sequence + i
+            # goes stale whenever an earlier submission ends without consuming
+            # a sequence (expired payload, CheckTx rejection), so every later
+            # nonce in the cycle would start with a mismatch. Serial awaits
+            # still guarantee ordering.
+            logger.info(f"👉 Found new nonce {nonce} for topic {self.topic_id}, submitting...")
+            await submit(nonce, None)
 
 
     def _select_sequential_nonce(self, open_nonces: set[int], event_nonce: Optional[int]) -> set[int]:

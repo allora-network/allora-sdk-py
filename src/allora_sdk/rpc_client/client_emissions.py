@@ -87,6 +87,7 @@ class EmissionsTxs:
         proof: Optional[str] = None,
         fee_tier: FeeTier = FeeTier.STANDARD,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> PendingTx:
         """
         Submit a worker payload (inference/forecast) to the Allora network.
@@ -101,6 +102,8 @@ class EmissionsTxs:
             proof: Optional proof string
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
             account_seq: Optional account sequence override
+            timeout_height: Optional block height at which the tx expires; the chain
+                rejects it once passed (0/None = no expiry)
 
         Returns:
             PendingTx object that can be awaited for the result
@@ -175,6 +178,7 @@ class EmissionsTxs:
             msgs=[payload_request],
             fee_tier=fee_tier,
             account_seq=account_seq,
+            timeout_height=timeout_height,
         )
 
 
@@ -255,6 +259,7 @@ class EmissionsTxs:
         value_bundle: InputValueBundle,
         fee_tier: FeeTier = FeeTier.STANDARD,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> PendingTx:
         """
         Submit a reputer payload (loss bundle) to the Allora network.
@@ -267,6 +272,8 @@ class EmissionsTxs:
             value_bundle: The computed loss bundle (will be mutated)
             fee_tier: Fee tier (ECO/STANDARD/PRIORITY) - defaults to STANDARD
             account_seq: Optional account sequence override
+            timeout_height: Optional block height at which the tx expires; the chain
+                rejects it once passed (0/None = no expiry)
 
         Returns:
             PendingTx object that can be awaited for the result
@@ -301,6 +308,7 @@ class EmissionsTxs:
             msgs=[payload_request],
             fee_tier=fee_tier,
             account_seq=account_seq,
+            timeout_height=timeout_height,
         )
 
     async def create_topic(

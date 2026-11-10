@@ -23,11 +23,13 @@ from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
 from allora_sdk.rpc_client.protos.cosmos.base.abci.v1beta1 import TxResponse
+from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetLatestBlockRequest
 from allora_sdk.rpc_client.protos.cosmos.tx.v1beta1 import BroadcastMode, BroadcastTxRequest, GetTxRequest, SimulateRequest
 from allora_sdk.rpc_client.protos.feemarket.feemarket.v1 import GasPriceRequest, StateRequest, ParamsRequest
 from allora_sdk.rpc_client.interfaces import (
     CosmosAuthV1Beta1QueryLike,
     CosmosBankV1Beta1QueryLike,
+    CosmosBaseTendermintV1Beta1ServiceLike,
     CosmosTxV1Beta1ServiceLike,
     FeemarketFeemarketV1QueryLike,
 )
@@ -45,6 +47,7 @@ class PendingTx:
         fee_tier: "FeeTier",
         max_retries: int,
         timeout: Optional[timedelta],
+        timeout_height: Optional[int] = None,
     ):
         self.manager = manager
         self.parent_tx_id = parent_tx_id
@@ -66,6 +69,9 @@ class PendingTx:
         self.last_landed_error: Optional[Exception] = None
         self.start = datetime.now()
         self.timeout = timeout
+        # Block height after which the chain rejects the tx (0/None = no expiry);
+        # Cosmos' TxTimeoutHeightDecorator drops it at CheckTx once passed.
+        self.timeout_height = timeout_height
         self.attempt: int = 0
 
         # Final outcome future: resolves to TxResponse or raises
@@ -150,6 +156,16 @@ class TxTimeoutError(Exception):
     pass
 
 
+class TxExpiredError(TxError):
+    """Raised when a tx's timeout_height has passed (chain codespace ``sdk``, code 30).
+
+    The chain's TxTimeoutHeightDecorator rejects such a tx at CheckTx before
+    sequence verification and fee deduction, so it can never land and no retry
+    can change that. Subclasses TxError so role-level ``except TxError``
+    handling keeps working unchanged.
+    """
+
+
 # Errors the submission loop recovers from by re-attempting (fresh sequence /
 # higher gas / refreshed fee). A tx that *landed* with one of these should be
 # retried, not finalized — see TxManager._bail_if_landed.
@@ -211,6 +227,7 @@ class TxManager:
         gas_adjustment: Optional[float] = None,
         base_gas: Optional[int] = None,
         simulate_gas_from_start: Optional[bool] = None,
+        tendermint_client: Optional[CosmosBaseTendermintV1Beta1ServiceLike] = None,
     ):
         if max_fees is not None and max_fees <= 0:
             raise ValueError(f"max_fees must be a positive integer, got {max_fees}")
@@ -251,6 +268,9 @@ class TxManager:
         self.auth_client = auth_client
         self.bank_client = bank_client
         self.feemarket_client = feemarket_client
+        # Used to read the chain tip for the pre-broadcast expiry check; when
+        # absent, expiry is left to the chain's own CheckTx rejection.
+        self.tendermint_client = tendermint_client
         self.config = config
         self.query_interval_secs = query_interval_secs
         self.query_timeout_secs = query_timeout_secs
@@ -296,6 +316,7 @@ class TxManager:
         max_retries: int = 2,
         timeout: Optional[timedelta] = None,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> "PendingTx":
         if self.wallet is None:
             raise Exception('No wallet configured. Initialize client with private key or mnemonic.')
@@ -328,6 +349,7 @@ class TxManager:
             fee_tier=fee_tier,
             max_retries=max_retries,
             timeout=timeout,
+            timeout_height=timeout_height,
         )
 
         # Kick off processing as a background task; caller can await the PendingTx.
@@ -490,6 +512,37 @@ class TxManager:
             return True
         return False
 
+    async def _raise_if_expired(self, pending: "PendingTx") -> None:
+        """Raise TxExpiredError when the tx can no longer land within its timeout_height.
+
+        The chain accepts blocks up to and including timeout_height; the latest
+        height is the last committed block, so a tx broadcast now lands at
+        latest + 1 at the earliest. Hence latest >= timeout_height means it can
+        never land. (At equality, CheckTx still admits it -- it checks the
+        committed height -- and the tx dies in the next block's ante.) Refusing
+        here avoids signing and broadcasting a doomed tx.
+
+        Only checked when the tx carries an expiry; a failed height query
+        degrades to the chain's own CheckTx rejection.
+        """
+        if not pending.timeout_height or self.tendermint_client is None:
+            return
+
+        try:
+            resp = await self.tendermint_client.get_latest_block(GetLatestBlockRequest())
+            block = resp.sdk_block or resp.block
+            height = int(block.header.height) if block is not None and block.header is not None else None
+        except Exception as exc:
+            logger.debug("Could not read the latest height before broadcast; relying on CheckTx: %r", exc)
+            return
+
+        if height is not None and height >= pending.timeout_height:
+            raise TxExpiredError(
+                codespace="sdk",
+                code=30,
+                message=f"timeout height {pending.timeout_height} unreachable: latest committed height is {height}",
+            )
+
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
         start = datetime.now()
 
@@ -499,9 +552,13 @@ class TxManager:
 
         for attempt in range(pending.max_retries + 1):
             try:
-                await self._pre_flight_checks()
-
                 pending.attempt = attempt
+
+                # A tx that can no longer land is doomed: fail fast instead of
+                # spending a build/sign/broadcast on the remaining attempts.
+                await self._raise_if_expired(pending)
+
+                await self._pre_flight_checks()
 
                 gas_multiplier = 1.0 + (attempt * 0.3)
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
@@ -511,6 +568,7 @@ class TxManager:
                     fee_multiplier,
                     gas_multiplier,
                     next_account_seq,
+                    timeout_height=pending.timeout_height,
                 )
 
                 # Update known properties
@@ -679,6 +737,30 @@ class TxManager:
                 logger.debug(f"Transaction timed out, retrying (attempt {attempt + 2})...")
                 continue
 
+            except TxExpiredError as err:
+                # The submission window closed: no rebuild can land, so this is
+                # terminal — never retry and never renew the height. The
+                # previous broadcast may still have landed just before the
+                # boundary while the indexer lagged (TxTimeoutHeightDecorator
+                # runs before the sequence check, so a same-sequence rebroadcast
+                # surfaces as expiry instead of a sequence mismatch). Confirm
+                # the original, and give the indexer the same grace the
+                # sequence-mismatch path uses, before reporting failure.
+                if not pending.last_tx_hash:
+                    pending._set_exception(err)
+                    return
+                outcome = await self._bail_if_landed(pending)
+                if outcome is _LandedOutcome.NOT_LANDED:
+                    outcome = await self._confirm_landed_with_grace(pending)
+                if outcome is _LandedOutcome.FINALIZED:
+                    return
+                if outcome is _LandedOutcome.RETRY_NEW_SEQUENCE:
+                    # The window is closed. Surface the landed error and stop.
+                    pending._set_exception(pending.last_landed_error or err)
+                    return
+                pending._set_exception(err)
+                return
+
             except MaxFeesExceededError as err:
                 # A hard cap, so retrying is pointless: the ladder only raises
                 # the gas limit, and therefore the fee, from here. Fail fast,
@@ -720,6 +802,7 @@ class TxManager:
         fee_multiplier: float,
         gas_multiplier: float,
         account_seq: Optional[int] = None,
+        timeout_height: Optional[int] = None,
     ) -> tuple[str, int, Coin, int]:
         """Build, sign, and SYNC-broadcast the tx; return (hash, gas, fee, seq).
 
@@ -754,6 +837,7 @@ class TxManager:
         tx.seal(
             signing_cfgs=[ SigningCfg.direct(self.wallet.public_key(), sequence_num=resolved_seq) ],
             fee=TxFee(amount=[ fee ], gas_limit=gas_limit, granter=self.fee_granter),
+            timeout_height=timeout_height,
         )
 
         tx.sign(
@@ -999,6 +1083,17 @@ class TxManager:
     def _exception_from_tx_response(self, resp: TxResponse):
         if resp.code == 0:
             return None
+
+        # sdk:30 is ErrTxTimeoutHeight — the chain rejected the tx because its
+        # timeout_height passed. Classified by codespace+code (not raw_log) as
+        # it is a terminal, expected outcome handled without retry.
+        if resp.codespace == "sdk" and resp.code == 30:
+            return TxExpiredError(
+                codespace=resp.codespace,
+                code=resp.code,
+                message=resp.raw_log,
+                tx_hash=resp.txhash,
+            )
 
         error_class = self._classify_error_from_message(resp.raw_log)
 

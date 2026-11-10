@@ -4,13 +4,19 @@ import os
 import math
 from datetime import datetime
 from getpass import getpass
-from typing import Awaitable, Callable, ParamSpec, TypeVar, Union, cast
+from typing import Any, Awaitable, Callable, ParamSpec, TypeVar, Union, cast
 from cosmpy.aerial.wallet import LocalWallet, Wallet
 from cosmpy.mnemonic import PrivateKey, generate_mnemonic
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from allora_sdk.rpc_client.client import AlloraRPCClient
 from allora_sdk.rpc_client.config import AlloraWalletConfig
 from allora_sdk.rpc_client.protos.cosmos.base.tendermint.v1beta1 import GetBlockByHeightRequest
-from allora_sdk.rpc_client.protos.emissions.v10 import GetNetworkInferencesAtBlockRequest, NetworkInferenceBundle
+from allora_sdk.rpc_client.protos.emissions.v10 import (
+    GetNetworkInferencesAtBlockRequest,
+    GetTopicRequest,
+    NetworkInferenceBundle,
+)
 from .context import RunContext
 
 logger = logging.getLogger("allora_sdk")
@@ -68,8 +74,30 @@ async def resolve_maybe_awaitable(
     return cast(R, out)
 
 
+# The chain's wording (typo included) for a height it has not produced yet.
+# cosmos-sdk raises it as codes.InvalidArgument with this message and no error
+# details, so the message -- not the generic status code, which other query
+# errors share -- is the discriminator. Only the distinctive core is matched,
+# so a rephrased prefix still classifies.
+_BLOCK_NOT_READY_MESSAGE = "bigger then the chain length"
+
+
+def is_block_not_ready(err: BaseException) -> bool:
+    """Return True when the chain reports the requested height as not yet produced."""
+    return (
+        isinstance(err, GRPCError)
+        and err.status == Status.INVALID_ARGUMENT
+        and _BLOCK_NOT_READY_MESSAGE in (err.message or "")
+    )
+
+
 async def get_block_time(client: AlloraRPCClient, height: int) -> datetime:
     """Fetch the timestamp of a block at the given height.
+
+    A nonce's block may be delivered by the event stream before the node
+    answering queries has produced it; the chain rejects the request until it
+    does. The worker retries that specific failure at the nonce level (see
+    ``is_block_not_ready``) instead of losing the epoch.
 
     Args:
         client: The RPC client to query.
@@ -100,6 +128,23 @@ async def get_network_inference(client: AlloraRPCClient, topic_id: int, nonce: i
     )
     network_inferences_resp = await client.emissions.query.get_network_inferences_at_block(request)
     return network_inferences_resp.network_inferences
+
+async def resolve_topic(client: AlloraRPCClient, topic_id: int) -> Any | None:
+    """Fetch a topic's metadata, returning None when the query fails.
+
+    Actors cache a successful lookup and retry on the next submission when this
+    returns None, so a transient chain blip does not disable payload expiry for
+    the process lifetime.
+    """
+    try:
+        resp = await client.emissions.query.get_topic(
+            GetTopicRequest(topic_id=int(topic_id))
+        )
+        return resp.topic
+    except Exception as e:
+        logger.warning(f"Could not read topic {topic_id}: {e}")
+        return None
+
 
 Truth = TypeVar('Truth')
 Inference = float | dict[str, float]
@@ -153,3 +198,30 @@ def make_reputer_function(gt_fn: Callable[[RunContext], Awaitable[Truth]], loss_
         return loss
 
     return rep_func
+
+
+def worker_submission_timeout_height(nonce: int, worker_submission_window: int) -> int | None:
+    """Inclusive end block of the worker submission window for ``nonce``.
+
+    Matches the chain's worker window, ``[nonce, nonce + worker_submission_window]``
+    (x/emissions keeper `BlockWithinWorkerSubmissionWindowOfNonce`). A tx built with
+    this timeout_height stops being accepted once the window closes. Returns None
+    when the window is unknown, so callers leave the tx without an expiry.
+    """
+    if worker_submission_window <= 0:
+        return None
+    return nonce + worker_submission_window
+
+
+def reputer_submission_timeout_height(nonce: int, ground_truth_lag: int, epoch_length: int) -> int | None:
+    """Inclusive end block of the reputer submission window for a reputer nonce.
+
+    Matches the chain's reputer bounds (x/emissions keeper `ReputerSubmissionWindowBounds`):
+    ``start = nonce + ground_truth_lag + extra_lag`` and ``end = start + epoch_length``,
+    where ``extra_lag = (-ground_truth_lag) mod epoch_length`` (zero when the lag is a
+    whole multiple of the epoch). Returns None when the topic values are unknown.
+    """
+    if epoch_length <= 0 or ground_truth_lag <= 0:
+        return None
+    extra_lag = (epoch_length - (ground_truth_lag % epoch_length)) % epoch_length
+    return nonce + ground_truth_lag + extra_lag + epoch_length

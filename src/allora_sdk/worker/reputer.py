@@ -1,7 +1,7 @@
 from decimal import Decimal
 import logging
 import math
-from typing import List, Optional, Union, Callable, Awaitable
+from typing import Any, List, Optional, Union, Callable, Awaitable
 from cosmpy.aerial.wallet import Wallet
 
 from allora_sdk.rpc_client.client import AlloraRPCClient
@@ -23,11 +23,11 @@ from allora_sdk.rpc_client.protos.emissions.v9 import (
     InputWithheldWorkerAttributedValue,
     InputWorkerAttributedValue,
 )
-from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
+from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxExpiredError
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.utils.format import uallo_to_allo
 from allora_sdk.worker.types import AlreadySubmittedError, TRunFn, UseCase, WorkerResult, RunContext
-from allora_sdk.worker.utils import resolve_maybe_awaitable
+from allora_sdk.worker.utils import resolve_maybe_awaitable, resolve_topic, reputer_submission_timeout_height
 
 logger = logging.getLogger("allora_sdk")
 
@@ -69,6 +69,10 @@ class Reputer:
         self.reputer_fn = reputer_fn
         self.min_stake_uallo = min_stake_uallo
         self.fee_tier = fee_tier
+
+        # Topic metadata cache; resolved lazily so a failed lookup is retried
+        # on the next submission instead of disabling expiry for the process.
+        self._topic_cache: Any = None
 
 
     def name(self) -> str:
@@ -141,7 +145,13 @@ class Reputer:
         return {x.reputer_nonce.block_height for x in resp.nonces.nonces}
 
 
-    async def submit(self, nonce: int, account_seq: int) -> WorkerResult[InputValueBundle] | TxError | Exception:
+    async def _cached_topic(self) -> Any:
+        """Return the topic metadata, fetching it once and retrying on failure."""
+        if self._topic_cache is None:
+            self._topic_cache = await resolve_topic(self.client, self.topic_id)
+        return self._topic_cache
+
+    async def submit(self, nonce: int, account_seq: Optional[int]) -> WorkerResult[InputValueBundle] | TxError | Exception:
         """Submit a reputer payload for the given nonce.
 
         Sequence-critical: payload is submitted first. Optional stake top-up runs
@@ -179,6 +189,16 @@ class Reputer:
         )
         loss_bundle.reputer = sender
 
+        topic = await self._cached_topic()
+        timeout_height = (
+            reputer_submission_timeout_height(
+                nonce,
+                int(getattr(topic, "ground_truth_lag", 0) or 0),
+                int(getattr(topic, "epoch_length", 0) or 0),
+            )
+            if topic is not None else None
+        )
+
         try:
             pending = await self.client.emissions.tx.insert_reputer_payload(
                 topic_id=self.topic_id,
@@ -186,12 +206,15 @@ class Reputer:
                 value_bundle=loss_bundle,
                 fee_tier=self.fee_tier,
                 account_seq=account_seq,
+                timeout_height=timeout_height,
             )
             tx_resp = await pending.wait()
             result = WorkerResult(submission=loss_bundle, tx_result=tx_resp)
 
         except TxError as err:
-            logger.error(f"❌ TX ERROR: {err}")
+            # Expiry is an expected terminal outcome. The worker logs it.
+            if not isinstance(err, TxExpiredError):
+                logger.error(f"❌ TX ERROR: {err}")
             already_submitted = False
             if err.code in (68, 75, 78):
                 already_submitted = True

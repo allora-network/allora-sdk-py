@@ -67,7 +67,7 @@ async def test_timeout_reconfirms_by_hash_and_does_not_rebroadcast() -> None:
 
     broadcasts: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         broadcasts.append(seq)
         return ("HASH1", 200_000, Mock(), 7)
 
@@ -99,7 +99,7 @@ async def test_timeout_retry_preserves_account_sequence() -> None:
 
     seqs: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         return ("HASH1", 200_000, Mock(), 7)
 
@@ -131,7 +131,7 @@ async def test_timeout_reconfirm_landed_but_failed_raises_not_hangs() -> None:
     manager._log_tx_response = Mock()
     # _raise_for_status is intentionally left real.
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         return ("HASH1", 200_000, Mock(), 7)
 
     manager._build_and_broadcast = fake_build
@@ -166,7 +166,7 @@ async def test_timeout_transient_query_error_degrades_to_retry() -> None:
 
     seqs: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         return ("HASH1", 200_000, Mock(), 7)
 
@@ -305,7 +305,7 @@ async def test_timeout_landed_retryable_failure_retries_with_fresh_sequence() ->
     seqs: list = []
     gas_limits: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         gas_limits.append(gas_limit)
         return ("HASH1", 200_000, Mock(), 7)
@@ -351,7 +351,7 @@ async def test_unqueryable_landed_tx_resets_to_fresh_sequence_after_same_seq_rej
 
     seqs: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         if len(seqs) == 2:
             # Same-sequence re-broadcast rejected at CheckTx — the original
@@ -391,7 +391,7 @@ async def test_same_seq_rebroadcast_asm_confirms_original_during_grace_window() 
 
     seqs: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         if len(seqs) == 2:
             raise AccountSequenceMismatchError("Sequence mismatch: account sequence mismatch")
@@ -427,7 +427,7 @@ async def test_same_seq_asm_landed_retryable_respects_caller_timeout() -> None:
 
     seqs: list = []
 
-    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def fake_build(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         seqs.append(seq)
         if len(seqs) == 2:
             raise AccountSequenceMismatchError("Sequence mismatch: account sequence mismatch")
@@ -504,7 +504,7 @@ async def test_close_resolves_inflight_future_instead_of_hanging() -> None:
 
     started = asyncio.Event()
 
-    async def never_finishes(type_url, msgs, gas_limit, fee_mult, gas_mult, seq):
+    async def never_finishes(type_url, msgs, gas_limit, fee_mult, gas_mult, seq, **kwargs):
         started.set()
         await asyncio.sleep(3600)  # simulate a long broadcast; cancelled by close()
 
