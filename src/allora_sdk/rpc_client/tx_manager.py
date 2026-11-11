@@ -555,13 +555,20 @@ class TxManager:
         start = datetime.now()
 
         fee_multiplier = self._fee_multipliers[pending.fee_tier]
-        # Fixed base for the retry ladder. It is only replaced when the chain
-        # (out-of-gas) or a landed-tx seed supplies a concrete higher limit; the
-        # ladder never feeds its own escalated value back in.
-        base_gas_limit = gas_limit if gas_limit is not None else await self._estimate_gas(pending.type_url)
+        # Fixed base for the retry ladder. Chain-derived OOG / landed-seed
+        # limits are kept as a floor, never fed back into the ladder itself.
+        base_gas_limit = gas_limit
+        if base_gas_limit is None:
+            try:
+                base_gas_limit = await self._estimate_gas(pending.type_url)
+            except Exception as err:
+                pending._set_exception(err)
+                return
         # Exact limit for the next attempt, set by the OOG / landed-seed paths.
-        # When absent, the attempt limit is derived from base_gas_limit.
+        # The separate floor survives later non-OOG failures so those retries
+        # cannot fall back to a limit already rejected for insufficient gas.
         override_gas_limit: Optional[int] = None
+        retry_gas_floor = 0
         next_account_seq = account_seq
 
         for attempt in range(pending.max_retries + 1):
@@ -572,7 +579,8 @@ class TxManager:
                 attempt_gas_limit = override_gas_limit
                 override_gas_limit = None
             else:
-                attempt_gas_limit = int(round(base_gas_limit * (1.0 + attempt * GAS_RETRY_STEP)))
+                ladder_limit = int(round(base_gas_limit * (1.0 + attempt * GAS_RETRY_STEP)))
+                attempt_gas_limit = max(ladder_limit, retry_gas_floor)
             try:
                 pending.attempt = attempt
 
@@ -628,8 +636,10 @@ class TxManager:
                     suggested_limit = int(attempt_gas_limit * 1.3)
 
                 # Use the chain's suggestion verbatim on the next attempt rather
-                # than compounding the ladder on top of it.
-                override_gas_limit = suggested_limit
+                # than compounding the ladder on top of it. Retain it as a floor
+                # for subsequent retries even if this override is consumed.
+                retry_gas_floor = max(retry_gas_floor, suggested_limit)
+                override_gas_limit = retry_gas_floor
                 logger.debug(
                     f"Gas estimation too low, retrying with higher gas limit {suggested_limit} "
                     f"(attempt {attempt + 2})"
@@ -676,7 +686,8 @@ class TxManager:
                         next_account_seq = None
                         seeded = self._consume_landed_gas_seed(pending)
                         if seeded is not None:
-                            override_gas_limit = seeded
+                            retry_gas_floor = max(retry_gas_floor, seeded)
+                            override_gas_limit = retry_gas_floor
                         # Same retry-or-stop policy as the sibling paths —
                         # _bail_if_landed only returns RETRY_NEW_SEQUENCE with
                         # attempts remaining, but the caller's timeout may have
@@ -727,7 +738,8 @@ class TxManager:
                     next_account_seq = None
                     seeded = self._consume_landed_gas_seed(pending)
                     if seeded is not None:
-                        override_gas_limit = seeded
+                        retry_gas_floor = max(retry_gas_floor, seeded)
+                        override_gas_limit = retry_gas_floor
                 else:
                     # NOT_LANDED — the retry below keeps the same sequence (a
                     # deliberate same-sequence idempotency re-broadcast). Flag
