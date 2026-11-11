@@ -36,6 +36,13 @@ from allora_sdk.rpc_client.interfaces import (
 
 logger = logging.getLogger("allora_sdk")
 
+# Per-attempt gas escalation step for the submission retry ladder. Each attempt
+# scales the *original* estimate, never the previous attempt's (already
+# escalated) limit, so the ladder is 1.0x / 1.15x / 1.30x instead of
+# compounding to 1.0x / 1.3x / 2.08x.
+GAS_RETRY_STEP = 0.15
+
+
 class PendingTx:
     def __init__(
         self,
@@ -257,8 +264,9 @@ class TxManager:
         self.account_sequence_retry_delay = account_sequence_retry_delay
         # The single gas multiplier in the SDK. It sizes the gas estimate, and
         # nothing else multiplies on top of it: the retry ladder in
-        # _attempt_submissions is 1.0 + attempt*0.3, so attempt 0 broadcasts
-        # exactly this estimate and later attempts only add escalation.
+        # _attempt_submissions is 1.0 + attempt*GAS_RETRY_STEP (non-compounding),
+        # so attempt 0 broadcasts exactly this estimate and later attempts only
+        # add the modest per-attempt escalation.
         self.gas_adjustment: float = gas_adjustment if gas_adjustment is not None else 1.2
         # gas_adjustment is applied on top of this too, so BASE_GAS=500000
         # with the default 1.2 adjustment yields gasWanted 600000.
@@ -278,7 +286,7 @@ class TxManager:
         self._parent_tx_id_lock = asyncio.Lock()
 
         self._default_gas_limits = {
-            "/emissions.v10.InsertWorkerPayloadRequest": 250000,
+            "/emissions.v10.InsertWorkerPayloadRequest": 220000,
             "/emissions.v10.CreateNewTopicRequest": 300000,
             "/emissions.v10.FundTopicRequest": 150000,
             "/emissions.v10.BulkAddToTopicWorkerWhitelistRequest": 200000,
@@ -547,7 +555,13 @@ class TxManager:
         start = datetime.now()
 
         fee_multiplier = self._fee_multipliers[pending.fee_tier]
-        current_gas_limit = gas_limit
+        # Fixed base for the retry ladder. It is only replaced when the chain
+        # (out-of-gas) or a landed-tx seed supplies a concrete higher limit; the
+        # ladder never feeds its own escalated value back in.
+        base_gas_limit = gas_limit if gas_limit is not None else await self._estimate_gas(pending.type_url)
+        # Exact limit for the next attempt, set by the OOG / landed-seed paths.
+        # When absent, the attempt limit is derived from base_gas_limit.
+        override_gas_limit: Optional[int] = None
         next_account_seq = account_seq
 
         for attempt in range(pending.max_retries + 1):
@@ -560,13 +574,17 @@ class TxManager:
 
                 await self._pre_flight_checks()
 
-                gas_multiplier = 1.0 + (attempt * 0.3)
+                if override_gas_limit is not None:
+                    attempt_gas_limit = override_gas_limit
+                    override_gas_limit = None
+                else:
+                    attempt_gas_limit = int(round(base_gas_limit * (1.0 + attempt * GAS_RETRY_STEP)))
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
-                    current_gas_limit,
+                    attempt_gas_limit,
                     fee_multiplier,
-                    gas_multiplier,
+                    1.0,
                     next_account_seq,
                     timeout_height=pending.timeout_height,
                 )
@@ -575,7 +593,6 @@ class TxManager:
                 pending.last_tx_hash = tx_hash
                 pending.last_gas_limit = used_gas_limit
                 pending.last_fee = used_fee
-                current_gas_limit = used_gas_limit
                 next_account_seq = used_sequence
 
                 # Await current attempt
@@ -591,8 +608,6 @@ class TxManager:
                 return
 
             except OutOfGasError as oog_err:
-                gas_multiplier = 1.0 + (attempt * 0.3)
-
                 if attempt == pending.max_retries or (pending.timeout and start + pending.timeout < datetime.now()):
                     pending._set_exception(oog_err)
                     return
@@ -604,16 +619,18 @@ class TxManager:
                 if suggested_limit is None and pending.last_gas_limit is not None:
                     suggested_limit = int(pending.last_gas_limit * 1.3)
 
-                if suggested_limit is None and current_gas_limit is not None:
-                    suggested_limit = int(current_gas_limit * 1.3)
+                if suggested_limit is None and base_gas_limit is not None:
+                    suggested_limit = int(base_gas_limit * 1.3)
 
                 if suggested_limit is None:
                     estimated = await self._estimate_gas(pending.type_url)
                     suggested_limit = int(estimated * 1.5)
 
-                current_gas_limit = suggested_limit
+                # Use the chain's suggestion verbatim on the next attempt rather
+                # than compounding the ladder on top of it.
+                override_gas_limit = suggested_limit
                 logger.debug(
-                    f"Gas estimation too low, retrying with higher gas limit {current_gas_limit} "
+                    f"Gas estimation too low, retrying with higher gas limit {suggested_limit} "
                     f"(attempt {attempt + 2})"
                 )
                 continue
@@ -658,7 +675,7 @@ class TxManager:
                         next_account_seq = None
                         seeded = self._consume_landed_gas_seed(pending)
                         if seeded is not None:
-                            current_gas_limit = seeded
+                            override_gas_limit = seeded
                         # Same retry-or-stop policy as the sibling paths —
                         # _bail_if_landed only returns RETRY_NEW_SEQUENCE with
                         # attempts remaining, but the caller's timeout may have
@@ -709,7 +726,7 @@ class TxManager:
                     next_account_seq = None
                     seeded = self._consume_landed_gas_seed(pending)
                     if seeded is not None:
-                        current_gas_limit = seeded
+                        override_gas_limit = seeded
                 else:
                     # NOT_LANDED — the retry below keeps the same sequence (a
                     # deliberate same-sequence idempotency re-broadcast). Flag

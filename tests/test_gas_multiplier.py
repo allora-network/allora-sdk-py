@@ -106,3 +106,59 @@ def test_sub_unit_gas_adjustment_warns(caplog):
             feemarket_client=Mock(), config=config, gas_adjustment=0.5,
         )
     assert any("below 1.0" in r.message for r in caplog.records)
+
+
+def test_worker_default_gas_is_220k():
+    from unittest.mock import Mock
+
+    from allora_sdk.rpc_client.tx_manager import TxManager
+
+    manager = TxManager(
+        wallet=Mock(), tx_client=Mock(), auth_client=Mock(), bank_client=Mock(),
+        feemarket_client=Mock(), config=AlloraNetworkConfig.testnet(),
+    )
+    assert manager._default_gas_limits["/emissions.v10.InsertWorkerPayloadRequest"] == 220000
+
+
+@pytest.mark.asyncio
+async def test_retry_ladder_is_non_compounding():
+    """Each attempt scales the original estimate: 1.0/1.15/1.30, never compounding."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, Mock
+
+    from allora_sdk.rpc_client.tx_manager import (
+        FeeTier, InsufficientFeesError, PendingTx, TxManager,
+    )
+
+    config = AlloraNetworkConfig.testnet()
+    config.use_dynamic_gas_price = False
+    config.congestion_aware_fees = False
+
+    manager = TxManager(
+        wallet=Mock(), tx_client=Mock(), auth_client=Mock(), bank_client=Mock(),
+        feemarket_client=Mock(), config=config, gas_adjustment=1.2,
+    )
+    manager._pre_flight_checks = AsyncMock(return_value=None)
+    manager._raise_if_expired = AsyncMock(return_value=None)
+
+    captured: list[int] = []
+
+    async def _broadcast(type_url, msgs, gas_limit, fee_multiplier, gas_multiplier, *a, **kw):
+        captured.append(gas_limit)
+        # Insufficient fees retries without changing the gas ladder.
+        raise InsufficientFeesError("fees")
+
+    manager._build_and_broadcast = _broadcast
+
+    pending = PendingTx(
+        manager=manager, parent_tx_id=0, type_url="/emissions.v10.InsertWorkerPayloadRequest",
+        msgs=[Mock()], fee_tier=FeeTier.ECO, max_retries=2, timeout=timedelta(seconds=30),
+    )
+    await manager._attempt_submissions(pending, gas_limit=220000)
+    with pytest.raises(InsufficientFeesError):
+        await pending
+
+    assert captured == [220000, 253000, 286000], captured
+    # Non-compounding: equal increments of base*0.15, and nowhere near the old 624k.
+    assert captured[1] - captured[0] == captured[2] - captured[1]
+    assert max(captured) < 624000
