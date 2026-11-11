@@ -565,6 +565,14 @@ class TxManager:
         next_account_seq = account_seq
 
         for attempt in range(pending.max_retries + 1):
+            # Bind the attempt's limit before the guarded region so the
+            # out-of-gas handler can anchor its fallback to the limit that was
+            # actually sent (see below).
+            if override_gas_limit is not None:
+                attempt_gas_limit = override_gas_limit
+                override_gas_limit = None
+            else:
+                attempt_gas_limit = int(round(base_gas_limit * (1.0 + attempt * GAS_RETRY_STEP)))
             try:
                 pending.attempt = attempt
 
@@ -574,11 +582,6 @@ class TxManager:
 
                 await self._pre_flight_checks()
 
-                if override_gas_limit is not None:
-                    attempt_gas_limit = override_gas_limit
-                    override_gas_limit = None
-                else:
-                    attempt_gas_limit = int(round(base_gas_limit * (1.0 + attempt * GAS_RETRY_STEP)))
                 tx_hash, used_gas_limit, used_fee, used_sequence = await self._build_and_broadcast(
                     pending.type_url,
                     pending.msgs,
@@ -616,15 +619,13 @@ class TxManager:
                     int(oog_err.gas_wanted * 1.2) if getattr(oog_err, "gas_wanted", None) else None
                 )
 
-                if suggested_limit is None and pending.last_gas_limit is not None:
-                    suggested_limit = int(pending.last_gas_limit * 1.3)
-
-                if suggested_limit is None and base_gas_limit is not None:
-                    suggested_limit = int(base_gas_limit * 1.3)
-
                 if suggested_limit is None:
-                    estimated = await self._estimate_gas(pending.type_url)
-                    suggested_limit = int(estimated * 1.5)
+                    # No gas figures on the error: escalate from the limit this
+                    # attempt actually sent. Anchoring this to base_gas_limit
+                    # would resend the same limit on every retry, because a
+                    # broadcast that raised before returning never sets
+                    # pending.last_gas_limit.
+                    suggested_limit = int(attempt_gas_limit * 1.3)
 
                 # Use the chain's suggestion verbatim on the next attempt rather
                 # than compounding the ladder on top of it.

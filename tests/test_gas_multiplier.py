@@ -162,3 +162,50 @@ async def test_retry_ladder_is_non_compounding():
     # Non-compounding: equal increments of base*0.15, and nowhere near the old 624k.
     assert captured[1] - captured[0] == captured[2] - captured[1]
     assert max(captured) < 624000
+
+
+@pytest.mark.asyncio
+async def test_metadata_less_oog_escalates_every_attempt():
+    """A CheckTx OOG with no gas figures must escalate from the sent limit.
+
+    Regression for the fallback that anchored to base_gas_limit: with no
+    gas_wanted on the error and no broadcast ever returning, that resent the
+    same limit on every retry (200000 -> 260000 -> 260000).
+    """
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, Mock
+
+    from allora_sdk.rpc_client.tx_manager import (
+        FeeTier, OutOfGasError, PendingTx, TxManager,
+    )
+
+    config = AlloraNetworkConfig.testnet()
+    config.use_dynamic_gas_price = False
+    config.congestion_aware_fees = False
+
+    manager = TxManager(
+        wallet=Mock(), tx_client=Mock(), auth_client=Mock(), bank_client=Mock(),
+        feemarket_client=Mock(), config=config, gas_adjustment=1.2,
+    )
+    manager._pre_flight_checks = AsyncMock(return_value=None)
+    manager._raise_if_expired = AsyncMock(return_value=None)
+
+    captured: list[int] = []
+
+    async def _broadcast(type_url, msgs, gas_limit, fee_multiplier, gas_multiplier, *a, **kw):
+        captured.append(gas_limit)
+        # No gas_wanted / gas_used, as on a SYNC CheckTx rejection.
+        raise OutOfGasError("out of gas")
+
+    manager._build_and_broadcast = _broadcast
+
+    pending = PendingTx(
+        manager=manager, parent_tx_id=0, type_url="/emissions.v10.InsertWorkerPayloadRequest",
+        msgs=[Mock()], fee_tier=FeeTier.ECO, max_retries=2, timeout=timedelta(seconds=30),
+    )
+    await manager._attempt_submissions(pending, gas_limit=200000)
+    with pytest.raises(OutOfGasError):
+        await pending
+
+    assert captured == [200000, 260000, 338000], captured
+    assert all(b > a for a, b in zip(captured, captured[1:])), captured
