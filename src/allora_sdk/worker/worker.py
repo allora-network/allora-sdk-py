@@ -29,6 +29,7 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
 from allora_sdk.rpc_client.protos.emissions.v9 import InputValueBundle
 from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_from_env
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
+from allora_sdk.rpc_client.compat import epoch_nonce
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxExpiredError, TxTimeoutError
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
@@ -889,7 +890,12 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             except asyncio.TimeoutError:
                 pass
             except WorkerNotWhitelistedError:
-                logger.error(f"The wallet {self.address} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+                logger.error(
+                    f"The wallet {self.address} is not permitted to submit on topic "
+                    f"{self.topic_id}. Permission is a three-gate check (topic list, "
+                    f"global role list, global actor list); a gate that is off allows "
+                    f"everyone. Topic worker membership does not grant forecast permission."
+                )
                 self.stop()
                 break
             except Exception as e:
@@ -939,25 +945,45 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
         id = await self.client.events.subscribe_new_block_events_typed(
             EventWorkerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Worker submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
+            lambda evt, height: logger.info(
+                f"✨ Worker submission window closed "
+                f"(topic={self.topic_id} nonce={epoch_nonce(evt, 'nonce_block_height')} height={height})"
+            ),
         )
         self._subscription_ids.append(id)
         id = await self.client.events.subscribe_new_block_events_typed(
             EventReputerSubmissionWindowClosed,
             [ EventAttributeCondition("topic_id", "=", f'"{str(self.topic_id)}"') ],
-            lambda evt, height: logger.info(f"✨ Reputer submission window closed (topic={self.topic_id} nonce={evt.nonce_block_height} height={height})"),
+            lambda evt, height: logger.info(
+                f"✨ Reputer submission window closed "
+                f"(topic={self.topic_id} nonce={epoch_nonce(evt, 'nonce_block_height')} height={height})"
+            ),
         )
         self._subscription_ids.append(id)
 
 
     async def _handle_submission_window_opened_event(self, event: SubmissionWindowOpenEventType, height: int):
+        nonce = epoch_nonce(event, "nonce_block_height")
         if isinstance(event, EventWorkerSubmissionWindowOpened):
-            logger.info(f"🚀 Worker submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
+            logger.info(
+                f"🚀 Worker submission window opened "
+                f"(topic={self.topic_id} nonce={nonce} height={height})"
+            )
         elif isinstance(event, EventReputerSubmissionWindowOpened):
-            logger.info(f"🚀 Reputer submission window opened (topic={self.topic_id} nonce={event.nonce_block_height} height={height})")
+            logger.info(
+                f"🚀 Reputer submission window opened "
+                f"(topic={self.topic_id} nonce={nonce} height={height})"
+            )
 
         if not isinstance(event, self.use_case.submission_window_event_type()):
             # wrong type of window (worker/reputer)
+            return
+
+        if nonce <= 0:
+            logger.error(
+                f"Refusing submission for topic {self.topic_id}: window event nonce "
+                f"resolved to {nonce}"
+            )
             return
 
         await self._ensure_initialized()
@@ -967,7 +993,7 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
             return
 
         try:
-            await self._maybe_submit(ctx, event.nonce_block_height)
+            await self._maybe_submit(ctx, nonce)
         except Exception as e:
             logger.error(f"Error handling event: {e}")
 
@@ -998,7 +1024,13 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
 
         can_submit = await self.use_case.worker_is_whitelisted()
         if not can_submit:
-            logger.error(f"❌ The wallet {self.address} is not whitelisted on topic {self.topic_id}.  Contact the topic creator.")
+            logger.error(
+                f"❌ The wallet {self.address} is not permitted to submit as "
+                f"{self.use_case.name()} on topic {self.topic_id}. Permission is a "
+                f"three-gate check (topic list, global role list, global actor list); "
+                f"a gate that is off allows everyone. Topic worker membership does not "
+                f"grant forecast permission."
+            )
             self.stop()
             return
 
@@ -1047,7 +1079,16 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, TxError):
-                    logger.error(f"❌ Error submitting for this epoch: topic_id={self.topic_id} nonce={nonce} {str(result)}")
+                    if result.code in (83, 104):
+                        logger.error(
+                            f"❌ Permission denied submitting for this epoch: "
+                            f"topic_id={self.topic_id} nonce={nonce} code={result.code} {str(result)}"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ Error submitting for this epoch: "
+                            f"topic_id={self.topic_id} nonce={nonce} {str(result)}"
+                        )
                     self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, TxTimeoutError):

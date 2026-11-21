@@ -25,7 +25,7 @@ class StopQueue:
     pass
 
 class TSubmissionWindowOpenEventType(Protocol):
-    nonce_block_height: int
+    nonce: int
 
 TQueueItem = Union["WorkerResult[RunFnReturnType]", Exception, StopQueue]
 TRunFn = Union[Callable[[RunContext], RunFnReturnType], Callable[[RunContext], Awaitable[RunFnReturnType]]]

@@ -68,37 +68,22 @@ def _make_manager() -> TxManager:
 
 
 @pytest.mark.asyncio
-async def test_submit_transaction_falls_back_when_simulation_raises_tx_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_submit_transaction_raises_when_simulation_raises_tx_error() -> None:
     manager = _make_manager()
     manager.simulate_transaction = AsyncMock(
         side_effect=TxError(codespace="emissions", code=13, message="unauthorized")
     )
     manager._attempt_submissions = AsyncMock(return_value=None)
 
-    scheduled: list[asyncio.Task] = []
+    with pytest.raises(TxError) as exc:
+        await manager.submit_transaction(
+            type_url="/emissions.v10.InsertWorkerPayloadRequest",
+            msgs=[Mock()],
+            fee_tier=FeeTier.STANDARD,
+        )
 
-    def _capture_task(coro):
-        task = asyncio.get_running_loop().create_task(coro)
-        scheduled.append(task)
-        return task
-
-    monkeypatch.setattr(asyncio, "create_task", _capture_task)
-
-    pending = await manager.submit_transaction(
-        type_url="/emissions.v10.InsertWorkerPayloadRequest",
-        msgs=[Mock()],
-        fee_tier=FeeTier.STANDARD,
-    )
-
-    # Current behavior: simulation errors are swallowed and gas falls back to defaults.
-    assert pending.type_url == "/emissions.v10.InsertWorkerPayloadRequest"
-    manager._attempt_submissions.assert_called_once()
-    args, kwargs = manager._attempt_submissions.call_args
-    assert args[1] is None  # gas_limit
-    assert kwargs["account_seq"] is None
-
-    for task in scheduled:
-        await task
+    assert exc.value.code == 13
+    manager._attempt_submissions.assert_not_called()
 
 
 @pytest.mark.asyncio

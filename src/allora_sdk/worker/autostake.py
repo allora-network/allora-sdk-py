@@ -12,6 +12,7 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     IsReputerRegisteredInTopicIdRequest,
 )
 from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.compat import epoch_nonce
 from allora_sdk.rpc_client.tx_manager import FeeTier
 
 logger = logging.getLogger("allora_sdk")
@@ -278,7 +279,7 @@ async def process_autostake_rewards_settled(
         )
         return None
 
-    block_height = int(getattr(event, "block_height", 0) or 0)
+    block_height = epoch_nonce(event, "block_height")
     block_height_tx = getattr(event, "block_height_tx", None)
     autostake_key = make_autostake_key(
         role=role,
@@ -326,7 +327,7 @@ async def process_autostake_rewards_settled(
         "[AUTO-STAKE] %s rewards settled: topic=%s nonce=%s payout_height_tx=%s reward_uallo=%s stake_amount_uallo=%s target=%s:%s",
         role.value,
         topic_id,
-        getattr(event, "block_height", None),
+        block_height,
         getattr(event, "block_height_tx", None),
         reward_uallo,
         stake_amount_uallo,

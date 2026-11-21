@@ -291,6 +291,8 @@ class TxManager:
             "/emissions.v10.FundTopicRequest": 150000,
             "/emissions.v10.BulkAddToTopicWorkerWhitelistRequest": 200000,
             "/emissions.v10.BulkAddToTopicReputerWhitelistRequest": 200000,
+            "/emissions.v10.BulkAddToTopicForecasterWhitelistRequest": 200000,
+            "/emissions.v10.BulkRemoveFromTopicForecasterWhitelistRequest": 200000,
             "/cosmos.bank.v1beta1.MsgSend": 250000,
             "/cosmos.staking.v1beta1.MsgDelegate": 100000,
             "/cosmos.staking.v1beta1.MsgUndelegate": 100000,
@@ -341,8 +343,23 @@ class TxManager:
                 logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
             except MaxFeesExceededError:
                 raise
+            except TxError:
+                # The message handler rejected the tx in simulation. Broadcasting
+                # would only spend fees on the same rejection; surface it instead.
+                raise
+            except (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError) as e:
+                # Simulation uses a dummy fee and may OOG; these are not proof the
+                # message is invalid. Fall back to the static gas table.
+                logger.debug(
+                    f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}"
+                )
+                estimated_gas_limit = None
             except Exception as e:
-                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+                # Transport / deadline / unexpected errors: keep the previous
+                # fallback so a flaky simulate path does not block submission.
+                logger.debug(
+                    f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}"
+                )
                 estimated_gas_limit = None
 
         async with self._parent_tx_id_lock:

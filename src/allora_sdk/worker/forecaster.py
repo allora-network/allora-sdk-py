@@ -2,8 +2,8 @@ import logging
 from typing import Any, Dict, Optional
 from cosmpy.aerial.wallet import Wallet
 from allora_sdk.rpc_client.client import AlloraRPCClient
+from allora_sdk.rpc_client.compat import can_submit_forecast
 from allora_sdk.rpc_client.protos.emissions.v10 import (
-    CanSubmitWorkerPayloadRequest,
     EventWorkerSubmissionWindowOpened,
     EventRewardsSettled,
     GetUnfulfilledWorkerNoncesRequest,
@@ -96,13 +96,11 @@ class Forecaster:
         return True
 
     async def worker_is_whitelisted(self) -> bool:
-        can_submit_resp = await self.client.emissions.query.can_submit_worker_payload(
-            CanSubmitWorkerPayloadRequest(
-                address=str(self.wallet.address()),
-                topic_id=self.topic_id,
-            )
+        return await can_submit_forecast(
+            self.client.emissions.query,
+            str(self.wallet.address()),
+            self.topic_id,
         )
-        return can_submit_resp.can_submit_worker_payload
 
     async def get_unfulfilled_nonces(self) -> set[int]:
         resp = await self.client.emissions.query.get_unfulfilled_worker_nonces(

@@ -2,7 +2,17 @@
 
 # CHANGELOG
 
-## Unreleased
+## v1.6.0
+
+- Adapted to Allora chain v0.18.0 (protos from `allora-chain` `dev` until the tag is cut). Inferer and forecaster permissions are split; `InsertWorkerPayload` still carries both parts and is rejected as a whole unless the signer holds both. Forecast permission starts open after migration and is independent of the worker whitelist.
+- **Breaking:** `create_topic` requires keyword-only `max_top_inferers_to_reward` and accepts `enable_forecaster_whitelist` (default `False`). Generated `CreateNewTopicRequest` / `UpdateTopicRequest` gain a zero default for the cap; callers that build those messages by hand must set a cap in the live params range when the floor is positive. On v0.17 gRPC the extra fields are ignored; `update_topic` therefore does not set a cap there. Forecaster-whitelist messages fail on v0.17.
+- **Breaking:** `TSubmissionWindowOpenEventType` and worker window handling read `nonce` (falling back to `nonce_block_height` / `block_height` only when `nonce` is missing or zero). Autostake uses the same rule for `EventRewardsSettled`.
+- Added `update_topic` (full replacement of the mutable field set) and topic forecaster whitelist helpers (`bulk_add` / `bulk_remove` / `enable` / `disable`). New queries: `CanSubmitInferencePayload`, `CanSubmitForecasterPayload`, and the other forecaster-whitelist queries via codegen.
+- Local guards refuse to broadcast an empty worker payload, a non-positive nonce, a forecast with a duplicate inferer, a reputer bundle with a duplicate actor, a denied permission for a present part, an out-of-range topic cap when the floor is positive, or a create/update the caller is not allowed to send. A simulation `TxError` is no longer broadcast with the static gas table (out-of-gas / sequence / fee / transport simulation errors still fall back).
+- Event contract notes for subscribers: prefer `nonce`; `EventActiveForecastersSet.addresses` is stored forecasters only (`discarded_addresses` holds the rest); `EventActiveReputersSet.addresses` is reputers whose loss bundle was kept; insert-payload events carry `admission_outcome` and are emitted for inferences that were not admitted and forecasts with no accepted element; stake-driven weight changes are `EventTopicWeightUpdatedAfterStakeChange`. Simulation gas is about 46,000 higher before `gas_adjustment` (default 1.2).
+
+
+## v1.5.0
 
 - Gas: the submission retry ladder is now **non-compounding** — each attempt scales the *original* estimate (`1.0 / 1.15 / 1.30`) instead of multiplying the previous, already-escalated limit. The worker `InsertWorkerPayloadRequest` default is lowered `250000 -> 220000`. Together this removes the `300k -> 390k -> 624k` worker ladder: worst-case reservation −45%, first attempt −12%. Out-of-gas and landed-seed suggestions are applied on the next attempt and retained as floors against lower later ladder values.
 - Payload submissions expire at the end of their submission window. Workers and forecasters set `timeout_height = nonce + topic.worker_submission_window`; reputers set `nonce + topic.ground_truth_lag + extra_lag + topic.epoch_length`, with `extra_lag = (-ground_truth_lag) mod epoch_length`. The height is omitted when the topic read fails or those fields are missing, and the next submission retries the read. `AlloraWorker` calls `submit(nonce, None)` and `TxManager` reads the account sequence. A closed window surfaces as `TxExpiredError` (`sdk` code 30) and the nonce is recorded.
@@ -14,7 +24,7 @@
 - Added `get_topic(topic_id)` (catalog scan + best-effort `latest_network_inference`); `TopicNotFoundError` when the id is missing.
 - Documented wire contract in `docs/FORGE_API_RESPONSE_SHAPES.md`.
 
-## v1.5.0
+## v1.4.0-rc.4
 
 - **Breaking:** `AlloraAPIClient` retargets from Upshot `/v2` to the Forge API Gateway (`https://api.developer.allora.network`). Constructor requires a `forge_sk_…` key (no embedded default; legacy `UP-…` keys rejected). Default network path is `mainnet`.
 - **Breaking:** Removed public exports `ChainID`, `TopicsResponse`, `APIResponse`, and methods `fetch_api_response()` / `get_request_url()`. `Fetcher` now takes `(method, url, headers)` and requires `aclose()`.

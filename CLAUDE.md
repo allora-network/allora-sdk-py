@@ -48,6 +48,10 @@ Some of this is derivable from a chain indexer, which is not a reason to publish
 
 Motivate changes by the **class** of defect, not by the internal incident that exposed it. "A missing fee-granter field means migrated workloads pay their own fees and can drain" justifies the change completely, with nothing operational attached. Incident specifics belong in internal reports and private repos.
 
+## Reports
+
+Write local investigation, long-run, and ad-hoc test reports under `.reports/` (gitignored). Do not commit report artifacts or put them in a tracked `reports/` directory.
+
 ## Common Development Commands
 
 ### Testing
