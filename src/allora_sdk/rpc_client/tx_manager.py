@@ -1224,8 +1224,9 @@ class TxManager:
 
         Transport / deadline statuses become ``SimulationUnavailableError`` so
         the caller falls back to the static gas table. Message-level rejects
-        become ``TxError`` with the parsed ABCI codespace and code (not the
-        gRPC status number), matching ``_exception_from_tx_response``.
+        become ``TxError`` with the parsed ABCI codespace and code when the
+        log has them; otherwise ``TxError`` still, with the gRPC status as
+        ``code`` (handler/ante rejects such as ``unauthorized``).
         """
         if error.status in _SIMULATION_TRANSPORT_STATUSES:
             return SimulationUnavailableError(
@@ -1263,11 +1264,17 @@ class TxManager:
                 tx_hash=None,
             )
 
-        # No ABCI pair in the message: treat as non-terminal so a weird
-        # Simulate response does not permanently block broadcast.
-        return SimulationUnavailableError(
-            f"Simulation failed without ABCI codespace/code "
-            f"(grpc={error.status.name}): {error_msg}"
+        # No ABCI pair, but this is not a transport failure (UNKNOWN /
+        # INVALID_ARGUMENT / PERMISSION_DENIED, …). Cosmos often reports a
+        # handler/ante reject as Status.UNKNOWN plus a short string like
+        # "unauthorized". Treat it as a terminal TxError so we do not
+        # broadcast. code falls back to the gRPC status only when the log
+        # has no codespace/code pair.
+        return TxError(
+            codespace="simulation",
+            code=error.status.value,
+            message=error_msg,
+            tx_hash=None,
         )
 
     async def _estimate_gas(self, type_url: str) -> int:
