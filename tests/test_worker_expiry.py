@@ -178,3 +178,34 @@ async def test_other_invalid_argument_errors_record_the_nonce(monkeypatch, caplo
     assert 7 in worker.submitted_nonces
     assert "Error submitting for nonce 7" in caplog.text
     assert "is not produced yet" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transient_permission_query_keeps_nonce_open_and_retries(monkeypatch, caplog) -> None:
+    use_case = _use_case_returning(TimeoutError("deadline exceeded"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    caplog.set_level(logging.DEBUG, logger="allora_sdk")
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert use_case.submit.await_count == 1
+    assert 7 not in worker.submitted_nonces
+    assert "Chain query failed transiently" in caplog.text
+    assert "Error submitting for nonce 7" not in caplog.text
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+    assert use_case.submit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_value_error_still_records_nonce(monkeypatch) -> None:
+    denied = ValueError("Not permitted to submit the present parts of this worker payload")
+    use_case = _use_case_returning(denied)
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 in worker.submitted_nonces
+    assert use_case.submit.await_count == 1

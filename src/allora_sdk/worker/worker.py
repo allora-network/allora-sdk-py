@@ -49,7 +49,7 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready
+from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready, is_transient_query_error
 
 logger = logging.getLogger("allora_sdk")
 
@@ -1103,6 +1103,14 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     # retries it, exactly like TxTimeoutError.
                     logger.warning(
                         f"⚠️ Block for nonce {nonce} is not produced yet; retrying: {result}"
+                    )
+
+                elif isinstance(result, BaseException) and is_transient_query_error(result):
+                    # Transient: pre-broadcast permission (or similar) query
+                    # failed on the wire. Do not treat as a finished nonce.
+                    logger.warning(
+                        f"⚠️ Chain query failed transiently for topic {self.topic_id} "
+                        f"nonce {nonce}; retrying: {result}"
                     )
 
                 elif isinstance(result, Exception):
