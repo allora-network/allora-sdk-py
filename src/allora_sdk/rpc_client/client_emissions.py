@@ -134,10 +134,14 @@ class EmissionsTxs:
         )
 
     async def _reject_cap_outside_live_range(self, cap: int, *, action: str) -> None:
-        """Raise when the live floor is positive and ``cap`` is outside [min, max]."""
+        """Raise when ``cap`` is outside the live params range [min, max].
+
+        Mirrors chain ``validateMaxTopInferersToReward``. A zero floor still
+        enforces the ceiling; skip only when both bounds are unset (no query
+        client or empty params).
+        """
         floor, ceiling = await self._params_floor_ceiling()
-        if floor <= 0:
-            # v0.17 (no floor field) or a v0.18 network with no floor: send as-is.
+        if floor <= 0 and ceiling <= 0:
             return
         if cap < floor or (ceiling > 0 and cap > ceiling):
             raise ValueError(

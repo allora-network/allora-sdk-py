@@ -322,6 +322,34 @@ async def test_create_topic_rejects_out_of_range_cap_when_floor_positive():
 
 
 @pytest.mark.asyncio
+async def test_create_topic_rejects_cap_above_ceiling_when_floor_zero():
+    """Zero floor still enforces the ceiling (chain validateMaxTopInferersToReward)."""
+    query = Mock()
+    query.can_create_topic = AsyncMock(
+        return_value=SimpleNamespace(can_create_topic=True)
+    )
+    query.get_params = AsyncMock(
+        return_value=SimpleNamespace(
+            params=SimpleNamespace(
+                min_top_inferers_to_reward=0,
+                max_top_inferers_to_reward=32,
+            )
+        )
+    )
+    txs = _make_txs(query=query)
+    with pytest.raises(ValueError, match="outside the live range"):
+        await txs.create_topic(
+            metadata="{}",
+            loss_method="mse",
+            epoch_length=100,
+            ground_truth_lag=10,
+            worker_submission_window=20,
+            max_top_inferers_to_reward=33,
+        )
+    txs._txs.submit_transaction.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_topic_rejects_when_cannot_create():
     query = Mock()
     query.can_create_topic = AsyncMock(

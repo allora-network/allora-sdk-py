@@ -31,6 +31,7 @@ from allora_sdk.rpc_client.client import AlloraRPCClient, resolve_tx_settings_fr
 from allora_sdk.rpc_client.client_websocket_events import EventAttributeCondition
 from allora_sdk.rpc_client.compat import epoch_nonce
 from allora_sdk.rpc_client.config import AlloraNetworkConfig, AlloraWalletConfig
+from allora_sdk.rpc_client.chain_errors import is_permission_denied_code
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError, TxExpiredError, TxTimeoutError
 from allora_sdk.utils import Context, TimestampOrderedSet, format_allo_from_uallo
 from allora_sdk.logging_config import setup_sdk_logging
@@ -1079,10 +1080,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                     self.submitted_nonces.add(nonce)
 
                 elif isinstance(result, TxError):
-                    if result.code in (83, 104):
+                    if is_permission_denied_code(result.code):
                         logger.error(
                             f"❌ Permission denied submitting for this epoch: "
-                            f"topic_id={self.topic_id} nonce={nonce} code={result.code} {str(result)}"
+                            f"topic_id={self.topic_id} nonce={nonce} "
+                            f"codespace={result.codespace} code={result.code} {str(result)}"
                         )
                     else:
                         logger.error(

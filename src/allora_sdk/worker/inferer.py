@@ -16,6 +16,7 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
     IsWorkerRegisteredInTopicIdRequest,
     InputLabeledValue,
 )
+from allora_sdk.rpc_client.chain_errors import is_already_submitted_code
 from allora_sdk.rpc_client.dec_canonical import canonicalize_dec
 from allora_sdk.rpc_client.tx_manager import FeeTier, TxError
 from allora_sdk.worker.context import RunContext
@@ -237,7 +238,7 @@ class Inferer:
 
         except TxError as err:
             already_submitted = False
-            if err.code in (68, 75, 78):
+            if is_already_submitted_code(err.code):
                 already_submitted = True
             elif "already submitted" in (err.message or "").lower():
                 already_submitted = True
