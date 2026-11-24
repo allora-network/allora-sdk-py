@@ -225,7 +225,9 @@ async def test_payload_permission_timeout_is_unavailable():
     query = Mock()
     query.can_submit_inference_payload = AsyncMock(side_effect=TimeoutError("deadline"))
     with pytest.raises(PermissionQueryUnavailable):
-        await payload_permission(query, "allo1a", 1, has_inference=True, has_forecast=False)
+        await payload_permission(
+            query, "allo1a", 1, has_inference=True, has_forecast=False
+        )
 
 
 @pytest.mark.asyncio
@@ -299,6 +301,44 @@ async def test_insert_worker_payload_rejects_duplicate_inferer():
                 {"inferer": "allo1a", "value": "1.0"},
                 {"inferer": "allo1a", "value": "2.0"},
             ],
+        )
+    txs._txs.submit_transaction.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_insert_reputer_payload_rejects_duplicate_ooif_forecaster():
+    from allora_sdk.rpc_client.protos.emissions.v3 import Nonce, ReputerRequestNonce
+    from allora_sdk.rpc_client.protos.emissions.v9 import (
+        InputOneOutInfererForecasterValues,
+        InputValueBundle,
+        InputWithheldWorkerAttributedValue,
+    )
+
+    txs = _make_txs()
+    bundle = InputValueBundle(
+        topic_id=1,
+        one_out_inferer_forecaster_values=[
+            InputOneOutInfererForecasterValues(
+                forecaster="allo1same",
+                one_out_inferer_values=[
+                    InputWithheldWorkerAttributedValue(worker="allo1a", value="1")
+                ],
+            ),
+            InputOneOutInfererForecasterValues(
+                forecaster="allo1same",
+                one_out_inferer_values=[
+                    InputWithheldWorkerAttributedValue(worker="allo1b", value="1")
+                ],
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="duplicate actor"):
+        await txs.insert_reputer_payload(
+            topic_id=1,
+            reputer_request_nonce=ReputerRequestNonce(
+                reputer_nonce=Nonce(block_height=10)
+            ),
+            value_bundle=bundle,
         )
     txs._txs.submit_transaction.assert_not_called()
 
@@ -576,9 +616,7 @@ async def test_submit_transaction_falls_back_on_simulation_out_of_gas(
     import asyncio
 
     manager = _make_manager()
-    manager.simulate_transaction = AsyncMock(
-        side_effect=OutOfGasError("sim OOG")
-    )
+    manager.simulate_transaction = AsyncMock(side_effect=OutOfGasError("sim OOG"))
     manager._attempt_submissions = AsyncMock(return_value=None)
 
     scheduled: list[asyncio.Task] = []

@@ -77,7 +77,12 @@ def _has_duplicate_actors(addresses: list[str]) -> bool:
 
 
 def _reputer_bundle_has_duplicate_actors(value_bundle: InputValueBundle) -> bool:
-    """True when any actor-keyed slice on the reputer bundle repeats an address."""
+    """True when any actor-keyed slice on the reputer bundle repeats an address.
+
+    Matches ``InputValueBundle.Validate``: each flat slice is keyed by
+    ``.worker``, and ``one_out_inferer_forecaster_values`` is keyed by the
+    outer ``.forecaster`` as well as the nested withheld workers.
+    """
     slices = (
         getattr(value_bundle, "inferer_values", None),
         getattr(value_bundle, "forecaster_values", None),
@@ -90,11 +95,15 @@ def _reputer_bundle_has_duplicate_actors(value_bundle: InputValueBundle) -> bool
             return True
 
     nested = getattr(value_bundle, "one_out_inferer_forecaster_values", None) or []
+    forecasters: list[str] = []
     for entry in nested:
+        forecaster = getattr(entry, "forecaster", None)
+        if forecaster:
+            forecasters.append(str(forecaster))
         nested_values = getattr(entry, "one_out_inferer_values", None)
         if _has_duplicate_actors(_actor_addresses_from_values(nested_values)):
             return True
-    return False
+    return _has_duplicate_actors(forecasters)
 
 
 class EmissionsClient:
@@ -109,7 +118,9 @@ class EmissionsClient:
 
 
 class EmissionsTxs:
-    def __init__(self, txs: TxManager, query: EmissionsV10QueryServiceLike | None = None):
+    def __init__(
+        self, txs: TxManager, query: EmissionsV10QueryServiceLike | None = None
+    ):
         self._txs = txs
         self._query = query
 
@@ -243,7 +254,9 @@ class EmissionsTxs:
                 topic_id,
                 nonce,
             )
-            raise ValueError(f"Worker payload nonce must be greater than 0, got {nonce}")
+            raise ValueError(
+                f"Worker payload nonce must be greater than 0, got {nonce}"
+            )
 
         if has_forecast and forecast_elements is not None:
             if _forecast_has_duplicate_inferers(forecast_elements):
@@ -340,9 +353,7 @@ class EmissionsTxs:
             topic_id,
             inference_value,
         )
-        logger.debug(
-            "   Payload details: nonce=%s, worker=%s", nonce, worker_address
-        )
+        logger.debug("   Payload details: nonce=%s, worker=%s", nonce, worker_address)
 
         return await self._txs.submit_transaction(
             type_url="/emissions.v10.InsertWorkerPayloadRequest",
@@ -706,7 +717,9 @@ class EmissionsTxs:
             topic_id=topic_id,
             metadata=metadata if metadata is not None else topic.metadata,
             loss_method=loss_method if loss_method is not None else topic.loss_method,
-            alpha_regret=alpha_regret if alpha_regret is not None else topic.alpha_regret,
+            alpha_regret=(
+                alpha_regret if alpha_regret is not None else topic.alpha_regret
+            ),
             merit_sortition_alpha=(
                 merit_sortition_alpha
                 if merit_sortition_alpha is not None
