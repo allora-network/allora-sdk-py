@@ -16,6 +16,10 @@ def test_timeout_is_transient() -> None:
     assert is_transient_query_error(asyncio.TimeoutError())
 
 
+def test_connection_error_is_transient() -> None:
+    assert is_transient_query_error(ConnectionError("reset"))
+
+
 def test_grpc_transport_statuses_are_transient() -> None:
     assert is_transient_query_error(GRPCError(Status.UNAVAILABLE, "down", None))
     assert is_transient_query_error(GRPCError(Status.DEADLINE_EXCEEDED, "late", None))

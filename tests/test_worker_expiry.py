@@ -200,6 +200,25 @@ async def test_transient_permission_query_keeps_nonce_open_and_retries(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_whitelist_query_timeout_escapes_and_leaves_nonce_open(monkeypatch) -> None:
+    """A timeout in worker_is_whitelisted is not the submit-result branch.
+
+    It leaves _maybe_submit_impl before submit(), so the nonce is not recorded
+    and the next cycle can try again. It is not PermissionQueryUnavailable.
+    """
+    use_case = _use_case_returning(None)
+    use_case.worker_is_whitelisted = AsyncMock(side_effect=TimeoutError("whitelist deadline"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    with pytest.raises(TimeoutError, match="whitelist deadline"):
+        await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 not in worker.submitted_nonces
+    use_case.submit.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_callback_timeout_still_records_nonce(monkeypatch) -> None:
     use_case = _use_case_returning(TimeoutError("predict_fn deadline"))
     worker = _worker(use_case)
