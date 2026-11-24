@@ -95,6 +95,9 @@ async def test_permission_falls_back_on_grpc_unimplemented():
     query.can_submit_forecaster_payload = AsyncMock(
         side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
     )
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
     query.can_submit_worker_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_worker_payload=True)
     )
@@ -120,15 +123,56 @@ async def test_permission_remembers_legacy_after_unimplemented():
     query.can_submit_forecaster_payload = AsyncMock(
         side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
     )
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
     query.can_submit_worker_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_worker_payload=True)
     )
     assert await can_submit_forecast(query, "allo1a", 1) is True
     # Second call must not probe the missing method again.
     query.can_submit_forecaster_payload.reset_mock()
+    query.can_submit_inference_payload.reset_mock()
     assert await can_submit_forecast(query, "allo1a", 1) is True
     query.can_submit_forecaster_payload.assert_not_called()
+    query.can_submit_inference_payload.assert_not_called()
     assert query.can_submit_worker_payload.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_forecast_does_not_use_worker_query_when_split_rpc_exists():
+    unimplemented = GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    query = Mock()
+    query.can_submit_forecaster_payload = AsyncMock(side_effect=unimplemented)
+    query.can_submit_inference_payload = AsyncMock(
+        return_value=SimpleNamespace(can_submit_inference_payload=True)
+    )
+    query.can_submit_worker_payload = AsyncMock()
+    with pytest.raises(GRPCError):
+        await can_submit_forecast(query, "allo1a", 1)
+    query.can_submit_worker_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_latch_is_per_query_client():
+    unimplemented = GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    query_v017 = Mock()
+    query_v017.can_submit_forecaster_payload = AsyncMock(side_effect=unimplemented)
+    query_v017.can_submit_inference_payload = AsyncMock(side_effect=unimplemented)
+    query_v017.can_submit_worker_payload = AsyncMock(
+        return_value=SimpleNamespace(can_submit_worker_payload=True)
+    )
+
+    query_v018 = Mock()
+    query_v018.can_submit_forecaster_payload = AsyncMock(
+        return_value=SimpleNamespace(can_submit_forecaster_payload=False)
+    )
+    query_v018.can_submit_worker_payload = AsyncMock()
+
+    assert await can_submit_forecast(query_v017, "allo1a", 1) is True
+    assert await can_submit_forecast(query_v018, "allo1a", 1) is False
+    query_v018.can_submit_forecaster_payload.assert_awaited_once()
+    query_v018.can_submit_worker_payload.assert_not_called()
 
 
 @pytest.mark.asyncio
