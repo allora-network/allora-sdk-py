@@ -103,16 +103,25 @@ def epoch_nonce(event: Any, legacy_attr: str) -> int:
         return 0
 
 
+def _http_status(err: BaseException) -> int | None:
+    """Status from a requests-style error, when one is attached."""
+    for source in (getattr(err, "response", None), err):
+        code = getattr(source, "status_code", None)
+        if isinstance(code, int):
+            return code
+    return None
+
+
 def _is_unimplemented_query_error(err: BaseException) -> bool:
-    """True when the node does not serve the requested query method."""
+    """True when the node does not serve the requested query method.
+
+    gRPC ``UNIMPLEMENTED`` and HTTP 501 are missing-method signals. A bare 404
+    is not: a gateway can return NOT_FOUND for a live v0.18 route, and latching
+    that client onto ``CanSubmitWorkerPayload`` would misroute later checks.
+    """
     if isinstance(err, GRPCError) and err.status == Status.UNIMPLEMENTED:
         return True
-    status_code = getattr(getattr(err, "response", None), "status_code", None)
-    if status_code in (404, 501):
-        return True
-    if getattr(err, "status_code", None) in (404, 501):
-        return True
-    return False
+    return _http_status(err) == 501
 
 
 async def _legacy_worker_permission(

@@ -107,15 +107,34 @@ async def test_permission_falls_back_on_grpc_unimplemented():
 
 
 @pytest.mark.asyncio
-async def test_permission_falls_back_on_http_404():
-    err = Exception("not found")
-    err.response = SimpleNamespace(status_code=404)  # type: ignore[attr-defined]
+async def test_permission_falls_back_on_http_501():
+    err = Exception("not implemented")
+    err.status_code = 501  # type: ignore[attr-defined]
     query = Mock()
     query.can_submit_inference_payload = AsyncMock(side_effect=err)
     query.can_submit_worker_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_worker_payload=False)
     )
     assert await can_submit_inference(query, "allo1a", 1) is False
+    query.can_submit_worker_payload.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_permission_http_404_does_not_latch_legacy():
+    err = Exception("not found")
+    err.response = SimpleNamespace(status_code=404)  # type: ignore[attr-defined]
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(side_effect=err)
+    query.can_submit_worker_payload = AsyncMock()
+    with pytest.raises(Exception, match="not found"):
+        await can_submit_inference(query, "allo1a", 1)
+    query.can_submit_worker_payload.assert_not_called()
+    # A later call still probes the v0.18 method instead of the worker query.
+    query.can_submit_inference_payload = AsyncMock(
+        return_value=SimpleNamespace(can_submit_inference_payload=True)
+    )
+    assert await can_submit_inference(query, "allo1a", 1) is True
+    query.can_submit_worker_payload.assert_not_called()
 
 
 @pytest.mark.asyncio
