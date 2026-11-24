@@ -15,6 +15,7 @@ import pytest
 from grpclib.const import Status
 from grpclib.exceptions import GRPCError
 
+from allora_sdk.rpc_client.compat import PermissionQueryUnavailable
 from allora_sdk.rpc_client.tx_manager import TxError, TxExpiredError
 from allora_sdk.utils import Context
 from allora_sdk.worker.types import WorkerResult
@@ -182,7 +183,7 @@ async def test_other_invalid_argument_errors_record_the_nonce(monkeypatch, caplo
 
 @pytest.mark.asyncio
 async def test_transient_permission_query_keeps_nonce_open_and_retries(monkeypatch, caplog) -> None:
-    use_case = _use_case_returning(TimeoutError("deadline exceeded"))
+    use_case = _use_case_returning(PermissionQueryUnavailable("deadline exceeded"))
     worker = _worker(use_case)
     _neutralize(worker, monkeypatch)
 
@@ -191,11 +192,23 @@ async def test_transient_permission_query_keeps_nonce_open_and_retries(monkeypat
 
     assert use_case.submit.await_count == 1
     assert 7 not in worker.submitted_nonces
-    assert "Chain query failed transiently" in caplog.text
+    assert "Permission query unavailable" in caplog.text
     assert "Error submitting for nonce 7" not in caplog.text
 
     await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
     assert use_case.submit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_callback_timeout_still_records_nonce(monkeypatch) -> None:
+    use_case = _use_case_returning(TimeoutError("predict_fn deadline"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 in worker.submitted_nonces
+    assert use_case.submit.await_count == 1
 
 
 @pytest.mark.asyncio

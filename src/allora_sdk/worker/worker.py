@@ -49,7 +49,8 @@ from allora_sdk.worker.types import (
     WorkerNotWhitelistedError,
     WorkerResult,
 )
-from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready, is_transient_query_error
+from allora_sdk.rpc_client.compat import PermissionQueryUnavailable
+from allora_sdk.worker.utils import init_worker_wallet, is_block_not_ready
 
 logger = logging.getLogger("allora_sdk")
 
@@ -1105,11 +1106,11 @@ class AlloraWorker(Generic[SubmissionWindowOpenEventType, WorkerFnReturnType]):
                         f"⚠️ Block for nonce {nonce} is not produced yet; retrying: {result}"
                     )
 
-                elif isinstance(result, BaseException) and is_transient_query_error(result):
-                    # Transient: pre-broadcast permission (or similar) query
-                    # failed on the wire. Do not treat as a finished nonce.
+                elif isinstance(result, PermissionQueryUnavailable):
+                    # Only the pre-broadcast permission query. A callback
+                    # TimeoutError is a normal Exception and records the nonce.
                     logger.warning(
-                        f"⚠️ Chain query failed transiently for topic {self.topic_id} "
+                        f"⚠️ Permission query unavailable for topic {self.topic_id} "
                         f"nonce {nonce}; retrying: {result}"
                     )
 

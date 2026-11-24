@@ -10,6 +10,7 @@ from grpclib.const import Status
 from grpclib.exceptions import GRPCError
 
 from allora_sdk.rpc_client.compat import (
+    PermissionQueryUnavailable,
     can_submit_forecast,
     can_submit_inference,
     epoch_nonce,
@@ -198,6 +199,14 @@ async def test_payload_permission_requires_both_parts():
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_payload_permission_timeout_is_unavailable():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(side_effect=TimeoutError("deadline"))
+    with pytest.raises(PermissionQueryUnavailable):
+        await payload_permission(query, "allo1a", 1, has_inference=True, has_forecast=False)
 
 
 @pytest.mark.asyncio

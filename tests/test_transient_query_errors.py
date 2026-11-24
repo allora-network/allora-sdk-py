@@ -8,7 +8,7 @@ import pytest
 from grpclib.const import Status
 from grpclib.exceptions import GRPCError
 
-from allora_sdk.worker.utils import is_transient_query_error
+from allora_sdk.rpc_client.compat import is_transient_query_error
 
 
 def test_timeout_is_transient() -> None:

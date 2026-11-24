@@ -6,9 +6,10 @@ and fall back to the v0.17 names only when the new surface is absent.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Awaitable
+from typing import Any, Awaitable, Callable, Literal
 from weakref import WeakKeyDictionary
 
 from grpclib.const import Status
@@ -21,6 +22,29 @@ from allora_sdk.rpc_client.protos.emissions.v10 import (
 )
 
 logger = logging.getLogger("allora_sdk")
+
+_QUERY_TRANSPORT_GRPC_STATUSES = frozenset(
+    {
+        Status.CANCELLED,
+        Status.DEADLINE_EXCEEDED,
+        Status.RESOURCE_EXHAUSTED,
+        Status.ABORTED,
+        Status.UNAVAILABLE,
+    }
+)
+
+
+class PermissionQueryUnavailable(Exception):
+    """The permission query did not answer. Not a denial; the nonce stays open."""
+
+
+def is_transient_query_error(err: BaseException) -> bool:
+    """True when a chain query failed for transport, not a definitive answer."""
+    if isinstance(err, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
+        return True
+    if isinstance(err, GRPCError) and err.status in _QUERY_TRANSPORT_GRPC_STATUSES:
+        return True
+    return False
 
 PermissionPath = Literal["unknown", "split", "legacy_worker"]
 
@@ -229,10 +253,17 @@ async def payload_permission(
     both permissions. On v0.17 both checks fall back to the single worker query
     when that node does not serve the split queries.
     """
-    if not has_inference and not has_forecast:
-        return False
-    if has_inference and not await can_submit_inference(query_client, address, topic_id):
-        return False
-    if has_forecast and not await can_submit_forecast(query_client, address, topic_id):
-        return False
-    return True
+    try:
+        if not has_inference and not has_forecast:
+            return False
+        if has_inference and not await can_submit_inference(query_client, address, topic_id):
+            return False
+        if has_forecast and not await can_submit_forecast(query_client, address, topic_id):
+            return False
+        return True
+    except PermissionQueryUnavailable:
+        raise
+    except Exception as err:
+        if not is_transient_query_error(err):
+            raise
+        raise PermissionQueryUnavailable(str(err)) from err

@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import logging
 import os
@@ -81,29 +80,6 @@ async def resolve_maybe_awaitable(
 # errors share -- is the discriminator. Only the distinctive core is matched,
 # so a rephrased prefix still classifies.
 _BLOCK_NOT_READY_MESSAGE = "bigger then the chain length"
-
-_QUERY_TRANSPORT_GRPC_STATUSES = frozenset(
-    {
-        Status.CANCELLED,
-        Status.DEADLINE_EXCEEDED,
-        Status.RESOURCE_EXHAUSTED,
-        Status.ABORTED,
-        Status.UNAVAILABLE,
-    }
-)
-
-
-def is_transient_query_error(err: BaseException) -> bool:
-    """True when a chain query failed for transport, not a definitive answer.
-
-    Used for pre-broadcast permission checks: a timeout must not mark the epoch
-    done; a real denial is handled separately (ValueError / TxError).
-    """
-    if isinstance(err, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
-        return True
-    if isinstance(err, GRPCError) and err.status in _QUERY_TRANSPORT_GRPC_STATUSES:
-        return True
-    return False
 
 
 def is_block_not_ready(err: BaseException) -> bool:
