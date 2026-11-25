@@ -69,16 +69,26 @@ def test_epoch_nonce_returns_zero_when_nothing_usable():
 # ---------------------------------------------------------------------------
 
 
+def _http_error(status_code: int) -> Exception:
+    err = Exception(f"http {status_code}")
+    err.response = SimpleNamespace(status_code=status_code)  # type: ignore[attr-defined]
+    return err
+
+
 @pytest.mark.asyncio
 async def test_can_submit_inference_uses_new_query():
     query = Mock()
     query.can_submit_inference_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_inference_payload=True)
     )
-    assert await can_submit_inference(query, "allo1a", 1) is True
-    query.can_submit_inference_payload.assert_awaited_once()
     query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission", new_callable=AsyncMock
+    ) as v9:
+        assert await can_submit_inference(query, "allo1a", 1) is True
+    query.can_submit_inference_payload.assert_awaited_once()
     query.can_submit_worker_payload.assert_not_called()
+    v9.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -87,7 +97,9 @@ async def test_can_submit_forecast_uses_new_query():
     query.can_submit_forecaster_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_forecaster_payload=False)
     )
+    query.can_submit_worker_payload = AsyncMock()
     assert await can_submit_forecast(query, "allo1a", 1) is False
+    query.can_submit_worker_payload.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -99,42 +111,116 @@ async def test_permission_falls_back_on_grpc_unimplemented():
     query.can_submit_inference_payload = AsyncMock(
         side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
     )
-    query.can_submit_worker_payload = AsyncMock(
-        return_value=SimpleNamespace(can_submit_worker_payload=True)
-    )
-    assert await can_submit_forecast(query, "allo1a", 1) is True
-    query.can_submit_worker_payload.assert_awaited_once()
+    query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=True),
+    ) as v9:
+        assert await can_submit_forecast(query, "allo1a", 1) is True
+    v9.assert_awaited_once()
+    query.can_submit_worker_payload.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_permission_falls_back_on_http_501():
-    err = Exception("not implemented")
-    err.status_code = 501  # type: ignore[attr-defined]
     query = Mock()
-    query.can_submit_inference_payload = AsyncMock(side_effect=err)
-    query.can_submit_worker_payload = AsyncMock(
-        return_value=SimpleNamespace(can_submit_worker_payload=False)
-    )
-    assert await can_submit_inference(query, "allo1a", 1) is False
-    query.can_submit_worker_payload.assert_awaited_once()
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(501))
+    query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=False),
+    ) as v9:
+        assert await can_submit_inference(query, "allo1a", 1) is False
+    v9.assert_awaited_once()
+    query.can_submit_worker_payload.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_permission_http_404_does_not_latch_legacy():
-    err = Exception("not found")
-    err.response = SimpleNamespace(status_code=404)  # type: ignore[attr-defined]
+async def test_permission_http_404_uses_v9_and_latches():
     query = Mock()
-    query.can_submit_inference_payload = AsyncMock(side_effect=err)
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(404))
     query.can_submit_worker_payload = AsyncMock()
-    with pytest.raises(Exception, match="not found"):
-        await can_submit_inference(query, "allo1a", 1)
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=True),
+    ) as v9:
+        assert await can_submit_inference(query, "allo1a", 1) is True
+        query.can_submit_inference_payload.reset_mock()
+        assert await can_submit_inference(query, "allo1a", 1) is True
+    query.can_submit_inference_payload.assert_not_called()
     query.can_submit_worker_payload.assert_not_called()
-    # A later call still probes the v0.18 method instead of the worker query.
+    assert v9.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_permission_http_404_on_v9_does_not_latch():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(404))
+    query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(side_effect=_http_error(404)),
+    ) as v9:
+        with pytest.raises(PermissionQueryUnavailable):
+            await can_submit_inference(query, "allo1a", 1)
+    query.can_submit_worker_payload.assert_not_called()
+    v9.assert_awaited_once()
+    # The split route is tried again; a later v0.18 answer is still used.
     query.can_submit_inference_payload = AsyncMock(
         return_value=SimpleNamespace(can_submit_inference_payload=True)
     )
     assert await can_submit_inference(query, "allo1a", 1) is True
     query.can_submit_worker_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_permission_v9_transport_error_does_not_latch():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
+    query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(side_effect=TimeoutError("deadline")),
+    ):
+        with pytest.raises(PermissionQueryUnavailable):
+            await can_submit_inference(query, "allo1a", 1)
+    assert query.can_submit_inference_payload.await_count == 1
+    query.can_submit_inference_payload.reset_mock()
+    query.can_submit_inference_payload.side_effect = None
+    query.can_submit_inference_payload.return_value = SimpleNamespace(
+        can_submit_inference_payload=True
+    )
+    assert await can_submit_inference(query, "allo1a", 1) is True
+    query.can_submit_inference_payload.assert_awaited_once()
+    query.can_submit_worker_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_v9_missing_after_latch_clears_it():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
+    query.can_submit_worker_payload = AsyncMock()
+    v9 = AsyncMock(
+        side_effect=[
+            True,
+            GRPCError(Status.UNIMPLEMENTED, "unknown method", None),
+        ]
+    )
+    with patch("allora_sdk.rpc_client.compat._v9_worker_permission", new=v9):
+        assert await can_submit_inference(query, "allo1a", 1) is True
+        query.can_submit_inference_payload = AsyncMock(
+            return_value=SimpleNamespace(can_submit_inference_payload=True)
+        )
+        with pytest.raises(PermissionQueryUnavailable):
+            await can_submit_inference(query, "allo1a", 1)
+        assert await can_submit_inference(query, "allo1a", 1) is True
+    query.can_submit_inference_payload.assert_awaited_once()
+    query.can_submit_worker_payload.assert_not_called()
+    assert v9.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -146,17 +232,19 @@ async def test_permission_remembers_legacy_after_unimplemented():
     query.can_submit_inference_payload = AsyncMock(
         side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
     )
-    query.can_submit_worker_payload = AsyncMock(
-        return_value=SimpleNamespace(can_submit_worker_payload=True)
-    )
-    assert await can_submit_forecast(query, "allo1a", 1) is True
-    # Second call must not probe the missing method again.
-    query.can_submit_forecaster_payload.reset_mock()
-    query.can_submit_inference_payload.reset_mock()
-    assert await can_submit_forecast(query, "allo1a", 1) is True
+    query.can_submit_worker_payload = AsyncMock()
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=True),
+    ) as v9:
+        assert await can_submit_forecast(query, "allo1a", 1) is True
+        query.can_submit_forecaster_payload.reset_mock()
+        query.can_submit_inference_payload.reset_mock()
+        assert await can_submit_forecast(query, "allo1a", 1) is True
     query.can_submit_forecaster_payload.assert_not_called()
     query.can_submit_inference_payload.assert_not_called()
-    assert query.can_submit_worker_payload.await_count == 2
+    query.can_submit_worker_payload.assert_not_called()
+    assert v9.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -168,8 +256,12 @@ async def test_forecast_does_not_use_worker_query_when_split_rpc_exists():
         return_value=SimpleNamespace(can_submit_inference_payload=True)
     )
     query.can_submit_worker_payload = AsyncMock()
-    with pytest.raises(GRPCError):
-        await can_submit_forecast(query, "allo1a", 1)
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission", new_callable=AsyncMock
+    ) as v9:
+        with pytest.raises(GRPCError):
+            await can_submit_forecast(query, "allo1a", 1)
+    v9.assert_not_called()
     query.can_submit_worker_payload.assert_not_called()
 
 
@@ -179,9 +271,7 @@ async def test_legacy_latch_is_per_query_client():
     query_v017 = Mock()
     query_v017.can_submit_forecaster_payload = AsyncMock(side_effect=unimplemented)
     query_v017.can_submit_inference_payload = AsyncMock(side_effect=unimplemented)
-    query_v017.can_submit_worker_payload = AsyncMock(
-        return_value=SimpleNamespace(can_submit_worker_payload=True)
-    )
+    query_v017.can_submit_worker_payload = AsyncMock()
 
     query_v018 = Mock()
     query_v018.can_submit_forecaster_payload = AsyncMock(
@@ -189,17 +279,94 @@ async def test_legacy_latch_is_per_query_client():
     )
     query_v018.can_submit_worker_payload = AsyncMock()
 
-    assert await can_submit_forecast(query_v017, "allo1a", 1) is True
-    assert await can_submit_forecast(query_v018, "allo1a", 1) is False
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=True),
+    ) as v9:
+        assert await can_submit_forecast(query_v017, "allo1a", 1) is True
+        assert await can_submit_forecast(query_v018, "allo1a", 1) is False
     query_v018.can_submit_forecaster_payload.assert_awaited_once()
     query_v018.can_submit_worker_payload.assert_not_called()
+    query_v017.can_submit_worker_payload.assert_not_called()
+    v9.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_permission_timeout_propagates():
+async def test_grpc_unimplemented_calls_v9_stub_not_v10_worker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from grpclib.client import Channel
+
+    from allora_sdk.rpc_client import compat as compat_mod
+
+    class _Channel(Channel):
+        def __init__(self) -> None:
+            self.marker = "v10-channel"
+
+    seen: dict[str, object] = {}
+
+    class _Stub:
+        def __init__(self, channel: object, **kwargs: object) -> None:
+            seen["channel"] = channel
+            seen["timeout"] = kwargs.get("timeout")
+
+        async def can_submit_worker_payload(self, message: object) -> SimpleNamespace:
+            seen["message"] = message
+            return SimpleNamespace(can_submit_worker_payload=True)
+
+    monkeypatch.setattr(compat_mod, "V9QueryServiceStub", _Stub)
+
+    channel = _Channel()
+    query = Mock()
+    query.channel = channel
+    query.timeout = 10
+    query.deadline = None
+    query.metadata = None
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
+    query.can_submit_worker_payload = AsyncMock()
+
+    assert await can_submit_inference(query, "allo1a", 7) is True
+    assert seen["channel"] is channel
+    assert seen["timeout"] == 10
+    message = seen["message"]
+    assert getattr(message, "topic_id") == 7
+    assert getattr(message, "address") == "allo1a"
+    query.can_submit_worker_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rest_404_probes_v9_path_not_v10_worker():
+    import httpx
+
+    request = httpx.Request("GET", "http://lcd.example/v9")
+    response = httpx.Response(
+        200,
+        request=request,
+        text='{"canSubmitWorkerPayload": false}',
+    )
+    session = Mock()
+    session.get = AsyncMock(return_value=response)
+
+    query = Mock()
+    query.base_url = "http://lcd.example"
+    query.session = session
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(404))
+    query.can_submit_worker_payload = AsyncMock()
+
+    assert await can_submit_inference(query, "allo1a", 7) is False
+    session.get.assert_awaited_once_with(
+        "http://lcd.example/emissions/v9/can_submit_worker_payload/7/allo1a"
+    )
+    query.can_submit_worker_payload.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_permission_timeout_is_unavailable():
     query = Mock()
     query.can_submit_inference_payload = AsyncMock(side_effect=TimeoutError("deadline"))
-    with pytest.raises(TimeoutError):
+    with pytest.raises(PermissionQueryUnavailable):
         await can_submit_inference(query, "allo1a", 1)
 
 
@@ -239,6 +406,44 @@ async def test_payload_permission_empty_is_false():
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_payload_permission_http_503_is_unavailable():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(503))
+    with pytest.raises(PermissionQueryUnavailable):
+        await payload_permission(
+            query, "allo1a", 1, has_inference=True, has_forecast=False
+        )
+
+
+@pytest.mark.asyncio
+async def test_payload_permission_http_400_propagates():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(side_effect=_http_error(400))
+    with pytest.raises(Exception, match="http 400"):
+        await payload_permission(
+            query, "allo1a", 1, has_inference=True, has_forecast=False
+        )
+
+
+@pytest.mark.asyncio
+async def test_payload_permission_v9_denial_is_false():
+    query = Mock()
+    query.can_submit_inference_payload = AsyncMock(
+        side_effect=GRPCError(Status.UNIMPLEMENTED, "unknown method", None)
+    )
+    with patch(
+        "allora_sdk.rpc_client.compat._v9_worker_permission",
+        new=AsyncMock(return_value=False),
+    ):
+        assert (
+            await payload_permission(
+                query, "allo1a", 1, has_inference=True, has_forecast=False
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------

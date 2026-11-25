@@ -1,28 +1,41 @@
 """Compatibility helpers for chain v0.17.x while speaking v0.18 protos.
 
-Generated types come from v0.18 only. These helpers prefer the v0.18 names
-and fall back to the v0.17 names only when the new surface is absent.
+Generated call sites use the v0.18 names. When a node does not serve the split
+permission queries, these helpers read ``emissions.v9.CanSubmitWorkerPayload``
+and remember that only after the v9 call returns a boolean.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Literal, NoReturn
 from weakref import WeakKeyDictionary
 
+import httpx
+from grpclib.client import Channel
 from grpclib.const import Status
-from grpclib.exceptions import GRPCError
+from grpclib.exceptions import GRPCError, StreamTerminatedError
 
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    CanSubmitWorkerPayloadRequest as V9CanSubmitWorkerPayloadRequest,
+)
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    CanSubmitWorkerPayloadResponse as V9CanSubmitWorkerPayloadResponse,
+)
+from allora_sdk.rpc_client.protos.emissions.v9 import (
+    QueryServiceStub as V9QueryServiceStub,
+)
 from allora_sdk.rpc_client.protos.emissions.v10 import (
     CanSubmitForecasterPayloadRequest,
     CanSubmitInferencePayloadRequest,
-    CanSubmitWorkerPayloadRequest,
 )
 
 logger = logging.getLogger("allora_sdk")
 
+# Statuses that mean the permission RPC itself failed. INTERNAL and UNKNOWN are
+# included because a denial from these handlers is a boolean, not an error:
+# those codes are store or server failures and must leave the nonce open.
 _QUERY_TRANSPORT_GRPC_STATUSES = frozenset(
     {
         Status.CANCELLED,
@@ -30,8 +43,18 @@ _QUERY_TRANSPORT_GRPC_STATUSES = frozenset(
         Status.RESOURCE_EXHAUSTED,
         Status.ABORTED,
         Status.UNAVAILABLE,
+        Status.INTERNAL,
+        Status.UNKNOWN,
     }
 )
+
+# Gateway and proxy failures. 501 is a missing method, not a transport blip.
+_TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+# Unregistered grpc-gateway routes are HTTP 404. A handler that returns
+# codes.Unimplemented is HTTP 501. gRPC NOT_FOUND is neither: these permission
+# handlers answer with a boolean.
+_MISSING_METHOD_HTTP_STATUSES = frozenset({404, 501})
 
 
 class PermissionQueryUnavailable(Exception):
@@ -39,42 +62,31 @@ class PermissionQueryUnavailable(Exception):
 
 
 def is_transient_query_error(err: BaseException) -> bool:
-    """True when a chain query failed for transport, not a definitive answer."""
+    """True when a chain query failed in transit and did not return an answer.
+
+    Builtin timeouts and connection errors cover gRPC sockets. httpx covers
+    the REST client. HTTP 408/429/500/502/503/504 are the same failures as
+    the gateway writes them.
+    """
     if isinstance(err, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
+        return True
+    if isinstance(err, StreamTerminatedError):
         return True
     if isinstance(err, GRPCError) and err.status in _QUERY_TRANSPORT_GRPC_STATUSES:
         return True
-    return False
-
-PermissionPath = Literal["unknown", "split", "legacy_worker"]
-
-
-@dataclass
-class _ClientPermissionState:
-    """Per query-client permission routing (v0.18 split vs v0.17 combined)."""
-
-    inference: PermissionPath = "unknown"
-    forecast: PermissionPath = "unknown"
+    if isinstance(err, httpx.TransportError):
+        return True
+    return _http_status(err) in _TRANSIENT_HTTP_STATUSES
 
 
-# Latch is per query client, not process-wide.
-_permission_client_cache: WeakKeyDictionary[Any, _ClientPermissionState] = (
-    WeakKeyDictionary()
-)
-
-
-def _state(query_client: Any) -> _ClientPermissionState:
-    cached = _permission_client_cache.get(query_client)
-    if cached is not None:
-        return cached
-    cached = _ClientPermissionState()
-    _permission_client_cache[query_client] = cached
-    return cached
+# Query clients whose v10 permission method was missing and whose v9
+# CanSubmitWorkerPayload returned a boolean. One flag covers both roles.
+_v9_clients: WeakKeyDictionary[Any, bool] = WeakKeyDictionary()
 
 
 def reset_permission_query_fallback() -> None:
-    """Clear remembered legacy permission routing (for tests)."""
-    _permission_client_cache.clear()
+    """Clear remembered v0.17 permission routing (for tests)."""
+    _v9_clients.clear()
 
 
 def epoch_nonce(event: Any, legacy_attr: str) -> int:
@@ -104,7 +116,7 @@ def epoch_nonce(event: Any, legacy_attr: str) -> int:
 
 
 def _http_status(err: BaseException) -> int | None:
-    """Status from a requests-style error, when one is attached."""
+    """Status from a requests- or httpx-style error, when one is attached."""
     for source in (getattr(err, "response", None), err):
         code = getattr(source, "status_code", None)
         if isinstance(code, int):
@@ -112,59 +124,128 @@ def _http_status(err: BaseException) -> int | None:
     return None
 
 
-def _is_unimplemented_query_error(err: BaseException) -> bool:
+def _is_missing_method_error(err: BaseException) -> bool:
     """True when the node does not serve the requested query method.
 
-    gRPC ``UNIMPLEMENTED`` and HTTP 501 are missing-method signals. A bare 404
-    is not: a gateway can return NOT_FOUND for a live v0.18 route, and latching
-    that client onto ``CanSubmitWorkerPayload`` would misroute later checks.
+    gRPC ``UNIMPLEMENTED`` is an unknown service or method. HTTP 501 is that
+    same status from grpc-gateway. HTTP 404 is an unregistered gateway route,
+    which is how a v0.17 node answers a v10 path. A gRPC ``NOT_FOUND`` is not
+    this signal.
     """
     if isinstance(err, GRPCError) and err.status == Status.UNIMPLEMENTED:
         return True
-    return _http_status(err) == 501
+    return _http_status(err) in _MISSING_METHOD_HTTP_STATUSES
 
 
-async def _legacy_worker_permission(
+def _raise_unavailable(err: Exception) -> NoReturn:
+    """No permission bit came back. A denial is a boolean, not an exception."""
+    if isinstance(err, PermissionQueryUnavailable):
+        raise err
+    if _is_missing_method_error(err) or is_transient_query_error(err):
+        raise PermissionQueryUnavailable(str(err)) from err
+    raise err
+
+
+async def _v9_worker_permission_grpc(
     query_client: Any,
     address: str,
     topic_id: int,
 ) -> bool:
-    resp = await query_client.can_submit_worker_payload(
-        CanSubmitWorkerPayloadRequest(address=address, topic_id=topic_id)
+    """``emissions.v9.QueryService/CanSubmitWorkerPayload`` on the v10 channel."""
+    stub = V9QueryServiceStub(
+        query_client.channel,
+        timeout=getattr(query_client, "timeout", None),
+        deadline=getattr(query_client, "deadline", None),
+        metadata=getattr(query_client, "metadata", None),
+    )
+    resp = await stub.can_submit_worker_payload(
+        V9CanSubmitWorkerPayloadRequest(topic_id=topic_id, address=address)
     )
     return bool(resp.can_submit_worker_payload)
 
 
-async def _probe_inference_split(query_client: Any, address: str, topic_id: int) -> PermissionPath:
-    """Whether this client serves ``CanSubmitInferencePayload`` (v0.18 split)."""
-    state = _state(query_client)
-    if state.inference != "unknown":
-        return state.inference
-    try:
-        resp = await query_client.can_submit_inference_payload(
-            CanSubmitInferencePayloadRequest(address=address, topic_id=topic_id)
-        )
-        _ = resp
-        state.inference = "split"
-        return "split"
-    except Exception as err:
-        if not _is_unimplemented_query_error(err):
-            raise
-        state.inference = "legacy_worker"
-        return "legacy_worker"
-
-
-async def _may_use_worker_for_forecast(
+async def _v9_worker_permission_rest(
     query_client: Any,
     address: str,
     topic_id: int,
 ) -> bool:
-    """True only on v0.17-style nodes where both split queries are absent."""
-    state = _state(query_client)
-    if state.forecast == "legacy_worker":
-        return True
-    inference_path = await _probe_inference_split(query_client, address, topic_id)
-    return inference_path == "legacy_worker"
+    """v0.17 combined permission. The v10 worker route is a different RPC."""
+    url = (
+        f"{query_client.base_url.rstrip('/')}"
+        f"/emissions/v9/can_submit_worker_payload/{topic_id}/{address}"
+    )
+    response = await query_client.session.get(url)
+    response.raise_for_status()
+    parsed = V9CanSubmitWorkerPayloadResponse().from_json(
+        response.text, ignore_unknown_fields=True
+    )
+    return bool(parsed.can_submit_worker_payload)
+
+
+async def _v9_worker_permission(
+    query_client: Any,
+    address: str,
+    topic_id: int,
+) -> bool:
+    """Combined v0.17 worker permission for ``address`` on ``topic_id``."""
+    if isinstance(getattr(query_client, "channel", None), Channel):
+        return await _v9_worker_permission_grpc(query_client, address, topic_id)
+    if isinstance(getattr(query_client, "base_url", None), str):
+        return await _v9_worker_permission_rest(query_client, address, topic_id)
+    raise PermissionQueryUnavailable(
+        "query client has no v0.17 CanSubmitWorkerPayload surface"
+    )
+
+
+async def _inference_method_is_served(
+    query_client: Any,
+    address: str,
+    topic_id: int,
+) -> bool:
+    """Whether ``CanSubmitInferencePayload`` exists on this client.
+
+    A forecast may use the v9 worker query only when this method is missing.
+    On v0.18 the v10 worker alias is inferer permission, so it is the wrong
+    answer for a forecast.
+    """
+    try:
+        await query_client.can_submit_inference_payload(
+            CanSubmitInferencePayloadRequest(address=address, topic_id=topic_id)
+        )
+    except Exception as err:
+        if _is_missing_method_error(err):
+            return False
+        _raise_unavailable(err)
+    return True
+
+
+async def _remembered_v9_permission(
+    query_client: Any,
+    address: str,
+    topic_id: int,
+) -> bool:
+    """Read v9. If the node no longer serves it, forget it for the next call."""
+    try:
+        return await _v9_worker_permission(query_client, address, topic_id)
+    except Exception as err:
+        if _is_missing_method_error(err):
+            _v9_clients.pop(query_client, None)
+        _raise_unavailable(err)
+
+
+async def _v9_permission_and_remember(
+    query_client: Any,
+    address: str,
+    topic_id: int,
+) -> bool:
+    """Read v9 and remember the client only when that call returns a boolean."""
+    try:
+        allowed = await _v9_worker_permission(query_client, address, topic_id)
+    except Exception as err:
+        _raise_unavailable(err)
+    _v9_clients[query_client] = True
+    logger.info("Using emissions.v9 CanSubmitWorkerPayload (v0.17 compatibility)")
+    return allowed
 
 
 async def _query_with_legacy_fallback(
@@ -175,41 +256,24 @@ async def _query_with_legacy_fallback(
     role: Literal["inference", "forecast"],
     new_call: Callable[[], Awaitable[bool]],
 ) -> bool:
-    """Call a v0.18 permission query, falling back only on v0.17 combined nodes."""
-    state = _state(query_client)
-    path = state.inference if role == "inference" else state.forecast
+    """Call a v0.18 permission query, falling back only on v0.17 nodes.
 
-    if path == "legacy_worker":
-        return await _legacy_worker_permission(query_client, address, topic_id)
+    A transport failure or a v9 miss raises ``PermissionQueryUnavailable``.
+    The next call tries v10 again when v9 has been forgotten.
+    """
+    if query_client in _v9_clients:
+        return await _remembered_v9_permission(query_client, address, topic_id)
 
     try:
-        allowed = await new_call()
-        if role == "inference":
-            state.inference = "split"
-        else:
-            state.forecast = "split"
-        return allowed
+        return await new_call()
     except Exception as err:
-        if not _is_unimplemented_query_error(err):
+        if not _is_missing_method_error(err):
+            _raise_unavailable(err)
+        if role == "forecast" and await _inference_method_is_served(
+            query_client, address, topic_id
+        ):
             raise
-
-        if role == "inference":
-            logger.info(
-                "Inference permission query not served by this node; falling back to "
-                "CanSubmitWorkerPayload (v0.17 compatibility)"
-            )
-            state.inference = "legacy_worker"
-            return await _legacy_worker_permission(query_client, address, topic_id)
-
-        if not await _may_use_worker_for_forecast(query_client, address, topic_id):
-            raise
-
-        logger.info(
-            "Forecast permission query not served on a v0.17-style node; falling back to "
-            "CanSubmitWorkerPayload (combined worker permission)"
-        )
-        state.forecast = "legacy_worker"
-        return await _legacy_worker_permission(query_client, address, topic_id)
+        return await _v9_permission_and_remember(query_client, address, topic_id)
 
 
 async def can_submit_inference(
@@ -259,20 +323,17 @@ async def payload_permission(
     """True when every present part of a worker payload is permitted.
 
     An empty payload (neither part) is not permitted. A combined payload needs
-    both permissions. On v0.17 both checks fall back to the single worker query
-    when that node does not serve the split queries.
+    both permissions. On v0.17 both checks use ``emissions.v9``
+    ``CanSubmitWorkerPayload`` once that route has returned a boolean.
+    ``can_submit_inference`` and ``can_submit_forecast`` raise
+    ``PermissionQueryUnavailable`` when the query does not answer.
     """
-    try:
-        if not has_inference and not has_forecast:
-            return False
-        if has_inference and not await can_submit_inference(query_client, address, topic_id):
-            return False
-        if has_forecast and not await can_submit_forecast(query_client, address, topic_id):
-            return False
-        return True
-    except PermissionQueryUnavailable:
-        raise
-    except Exception as err:
-        if not is_transient_query_error(err):
-            raise
-        raise PermissionQueryUnavailable(str(err)) from err
+    if not has_inference and not has_forecast:
+        return False
+    if has_inference and not await can_submit_inference(
+        query_client, address, topic_id
+    ):
+        return False
+    if has_forecast and not await can_submit_forecast(query_client, address, topic_id):
+        return False
+    return True
