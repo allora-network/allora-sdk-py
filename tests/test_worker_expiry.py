@@ -15,6 +15,7 @@ import pytest
 from grpclib.const import Status
 from grpclib.exceptions import GRPCError
 
+from allora_sdk.rpc_client.compat import PermissionQueryUnavailable
 from allora_sdk.rpc_client.tx_manager import TxError, TxExpiredError
 from allora_sdk.utils import Context
 from allora_sdk.worker.types import WorkerResult
@@ -178,3 +179,65 @@ async def test_other_invalid_argument_errors_record_the_nonce(monkeypatch, caplo
     assert 7 in worker.submitted_nonces
     assert "Error submitting for nonce 7" in caplog.text
     assert "is not produced yet" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transient_permission_query_keeps_nonce_open_and_retries(monkeypatch, caplog) -> None:
+    use_case = _use_case_returning(PermissionQueryUnavailable("deadline exceeded"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    caplog.set_level(logging.DEBUG, logger="allora_sdk")
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert use_case.submit.await_count == 1
+    assert 7 not in worker.submitted_nonces
+    assert "Permission query unavailable" in caplog.text
+    assert "Error submitting for nonce 7" not in caplog.text
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+    assert use_case.submit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_whitelist_query_timeout_escapes_and_leaves_nonce_open(monkeypatch) -> None:
+    """A timeout in worker_is_whitelisted is not the submit-result branch.
+
+    It leaves _maybe_submit_impl before submit(), so the nonce is not recorded
+    and the next cycle can try again. It is not PermissionQueryUnavailable.
+    """
+    use_case = _use_case_returning(None)
+    use_case.worker_is_whitelisted = AsyncMock(side_effect=TimeoutError("whitelist deadline"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    with pytest.raises(TimeoutError, match="whitelist deadline"):
+        await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 not in worker.submitted_nonces
+    use_case.submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_callback_timeout_still_records_nonce(monkeypatch) -> None:
+    use_case = _use_case_returning(TimeoutError("predict_fn deadline"))
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 in worker.submitted_nonces
+    assert use_case.submit.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_permission_denied_value_error_still_records_nonce(monkeypatch) -> None:
+    denied = ValueError("Not permitted to submit the present parts of this worker payload")
+    use_case = _use_case_returning(denied)
+    worker = _worker(use_case)
+    _neutralize(worker, monkeypatch)
+
+    await asyncio.wait_for(worker._maybe_submit(worker._ctx), timeout=5)
+
+    assert 7 in worker.submitted_nonces
+    assert use_case.submit.await_count == 1

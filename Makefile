@@ -13,6 +13,9 @@ FEEMARKET_DIR := $(PROTO_DEPS)/feemarket
 GOGOPROTO_DIR := $(PROTO_DEPS)/gogoproto
 GOOGLEAPIS_DIR := $(PROTO_DEPS)/googleapis
 ALLORA_CHAIN_DIR := $(PROTO_DEPS)/allora-chain
+# Pin to allora-chain origin/dev until v0.18.0 is tagged. Move to the tag before PyPI.
+ALLORA_CHAIN_REF := ff8d6ad6053a15dcebf2389f761fb7290aaf1cfe
+ALLORA_CHAIN_REF_STAMP := $(ALLORA_CHAIN_DIR)/.ref.$(ALLORA_CHAIN_REF)
 
 ALLORA_PROTOS_DIR := ./src/allora_sdk/rpc_client/protos
 INTERFACE_OUT_DIR := ./src/allora_sdk/rpc_client/interfaces
@@ -67,10 +70,22 @@ $(GOOGLEAPIS_DIR)/.git:
 	git clone --depth 1 --single-branch --branch master \
 	  https://github.com/googleapis/googleapis "$(GOOGLEAPIS_DIR)"
 
-$(ALLORA_CHAIN_DIR)/.git:
+# Fetch a specific commit (or tag) and stamp it. Changing ALLORA_CHAIN_REF
+# invalidates the stamp path, so an existing checkout is re-fetched.
+$(ALLORA_CHAIN_REF_STAMP):
 	rm -rf "$(ALLORA_CHAIN_DIR)"
-	git clone --depth 1 --single-branch --branch v0.17.0 \
-	  https://github.com/allora-network/allora-chain "$(ALLORA_CHAIN_DIR)"
+	mkdir -p "$(ALLORA_CHAIN_DIR)"
+	git -C "$(ALLORA_CHAIN_DIR)" init
+	git -C "$(ALLORA_CHAIN_DIR)" remote add origin https://github.com/allora-network/allora-chain
+	git -C "$(ALLORA_CHAIN_DIR)" fetch --depth 1 origin "$(ALLORA_CHAIN_REF)"
+	git -C "$(ALLORA_CHAIN_DIR)" checkout --detach FETCH_HEAD
+	rm -f "$(ALLORA_CHAIN_DIR)"/.ref.*
+	touch "$@"
+
+# Keep a .git marker so older recipes that listed $(ALLORA_CHAIN_DIR)/.git still
+# resolve; the real pin is the ref stamp above.
+$(ALLORA_CHAIN_DIR)/.git: $(ALLORA_CHAIN_REF_STAMP)
+	@test -d "$(ALLORA_CHAIN_DIR)/.git"
 
 .PHONY: proto-deps
 proto-deps: \
@@ -79,7 +94,7 @@ proto-deps: \
   $(COSMOS_SDK_DIR)/.git \
   $(FEEMARKET_DIR)/.git \
   $(GOOGLEAPIS_DIR)/.git \
-  $(ALLORA_CHAIN_DIR)/.git
+  $(ALLORA_CHAIN_REF_STAMP)
 
 .PHONY: proto-deps-update
 proto-deps-update:
@@ -88,7 +103,8 @@ proto-deps-update:
 	git -C "$(COSMOS_SDK_DIR)" fetch --depth 1 origin v0.50.13 && git -C "$(COSMOS_SDK_DIR)" reset --hard FETCH_HEAD
 	git -C "$(FEEMARKET_DIR)" fetch --depth 1 origin v1.1.1 && git -C "$(FEEMARKET_DIR)" reset --hard FETCH_HEAD
 	git -C "$(GOOGLEAPIS_DIR)" fetch --depth 1 origin master && git -C "$(GOOGLEAPIS_DIR)" reset --hard FETCH_HEAD
-	git -C "$(ALLORA_CHAIN_DIR)" fetch --depth 1 origin v0.17.0 && git -C "$(ALLORA_CHAIN_DIR)" reset --hard FETCH_HEAD
+	rm -f "$(ALLORA_CHAIN_DIR)"/.ref.*
+	$(MAKE) "$(ALLORA_CHAIN_REF_STAMP)"
 
 # --- Ensure output dirs exist (order-only)
 $(ALLORA_PROTOS_DIR):
@@ -105,7 +121,7 @@ $(GRPC_WRAPPER_OUT_DIR):
 
 # --- Protobuf generation (stamp depends on repos + generator + Makefile)
 $(PROTO_STAMP): \
-  $(ALLORA_CHAIN_DIR)/.git \
+  $(ALLORA_CHAIN_REF_STAMP) \
   $(COSMOS_SDK_DIR)/.git \
   $(COSMOS_PROTO_DIR)/.git \
   $(FEEMARKET_DIR)/.git \

@@ -231,11 +231,14 @@ def _make_rewards_settled_event(
     actor_type: str = "ACTOR_TYPE_INFERER_UNSPECIFIED",
     addresses: list[str] | None = None,
     rewards: list[str] | None = None,
+    nonce: int | None = None,
 ) -> Mock:
     event = Mock()
     event.topic_id = topic_id
     event.block_height = block_height
     event.block_height_tx = block_height_tx
+    # Prefer the v0.18 field when set; leave at 0 so epoch_nonce falls back.
+    event.nonce = block_height if nonce is None else nonce
     event.actor_type = actor_type
     event.addresses = addresses or ["allo1wallet"]
     event.rewards = rewards or ["500"]

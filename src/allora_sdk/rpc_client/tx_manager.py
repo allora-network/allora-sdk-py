@@ -19,6 +19,12 @@ from cosmpy.aerial.coins import Coin
 from cosmpy.aerial.client.utils import ensure_timedelta
 from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import TxRaw as CosmpyTxRaw
 
+from allora_sdk.rpc_client.chain_errors import (
+    SDK_CODESPACE,
+    SDK_ERR_TX_TIMEOUT_HEIGHT,
+    is_tx_timeout_height,
+    parse_abci_codespace_code,
+)
 from allora_sdk.rpc_client.config import AlloraNetworkConfig
 from allora_sdk.rpc_client.protos.cosmos.auth.v1beta1 import QueryAccountInfoRequest, QueryAccountRequest
 from allora_sdk.rpc_client.protos.cosmos.bank.v1beta1 import QueryBalanceRequest
@@ -32,6 +38,19 @@ from allora_sdk.rpc_client.interfaces import (
     CosmosBaseTendermintV1Beta1ServiceLike,
     CosmosTxV1Beta1ServiceLike,
     FeemarketFeemarketV1QueryLike,
+)
+
+# gRPC statuses that mean the Simulate RPC itself failed (deadline, peer down,
+# cancelled). These are not message-handler rejects and must fall back to the
+# static gas table rather than surface as TxError.
+_SIMULATION_TRANSPORT_STATUSES = frozenset(
+    {
+        Status.CANCELLED,
+        Status.DEADLINE_EXCEEDED,
+        Status.RESOURCE_EXHAUSTED,
+        Status.ABORTED,
+        Status.UNAVAILABLE,
+    }
 )
 
 logger = logging.getLogger("allora_sdk")
@@ -173,10 +192,27 @@ class TxExpiredError(TxError):
     """
 
 
+class SimulationUnavailableError(Exception):
+    """Simulate RPC failed for a transport / deadline reason.
+
+    Not a message-handler rejection. ``submit_transaction`` falls back to the
+    static gas table when this is raised, same as out-of-gas simulation.
+    """
+
+
 # Errors the submission loop recovers from by re-attempting (fresh sequence /
 # higher gas / refreshed fee). A tx that *landed* with one of these should be
 # retried, not finalized — see TxManager._bail_if_landed.
 _RETRYABLE_TX_ERRORS = (OutOfGasError, AccountSequenceMismatchError, InsufficientFeesError)
+
+# Simulation outcomes that are not proof the message is invalid: fall back to
+# the static gas table instead of refusing to broadcast.
+_SIMULATION_FALLBACK_ERRORS = (
+    OutOfGasError,
+    AccountSequenceMismatchError,
+    InsufficientFeesError,
+    SimulationUnavailableError,
+)
 
 
 class LandedOutcome(Enum):
@@ -291,6 +327,8 @@ class TxManager:
             "/emissions.v10.FundTopicRequest": 150000,
             "/emissions.v10.BulkAddToTopicWorkerWhitelistRequest": 200000,
             "/emissions.v10.BulkAddToTopicReputerWhitelistRequest": 200000,
+            "/emissions.v10.BulkAddToTopicForecasterWhitelistRequest": 200000,
+            "/emissions.v10.BulkRemoveFromTopicForecasterWhitelistRequest": 200000,
             "/cosmos.bank.v1beta1.MsgSend": 250000,
             "/cosmos.staking.v1beta1.MsgDelegate": 100000,
             "/cosmos.staking.v1beta1.MsgUndelegate": 100000,
@@ -341,8 +379,23 @@ class TxManager:
                 logger.debug(f"Estimated fee for {type_url}: {fee_preview.amount} {fee_preview.denom}")
             except MaxFeesExceededError:
                 raise
+            except TxError:
+                # The message handler rejected the tx in simulation. Broadcasting
+                # would only spend fees on the same rejection; surface it instead.
+                raise
+            except _SIMULATION_FALLBACK_ERRORS as e:
+                # OOG / sequence / fee / transport: not proof the message is
+                # invalid. Fall back to the static gas table.
+                logger.debug(
+                    f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}"
+                )
+                estimated_gas_limit = None
             except Exception as e:
-                logger.debug(f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}")
+                # Unexpected errors: keep the previous fallback so a flaky
+                # simulate path does not block submission.
+                logger.debug(
+                    f"Unable to simulate transaction for gas estimate, falling back to defaults: {e}"
+                )
                 estimated_gas_limit = None
 
         async with self._parent_tx_id_lock:
@@ -546,9 +599,12 @@ class TxManager:
 
         if height is not None and height >= pending.timeout_height:
             raise TxExpiredError(
-                codespace="sdk",
-                code=30,
-                message=f"timeout height {pending.timeout_height} unreachable: latest committed height is {height}",
+                codespace=SDK_CODESPACE,
+                code=SDK_ERR_TX_TIMEOUT_HEIGHT,
+                message=(
+                    f"timeout height {pending.timeout_height} unreachable: "
+                    f"latest committed height is {height}"
+                ),
             )
 
     async def _attempt_submissions(self, pending: PendingTx, gas_limit: Optional[int], account_seq: Optional[int] = None):
@@ -1114,10 +1170,10 @@ class TxManager:
         if resp.code == 0:
             return None
 
-        # sdk:30 is ErrTxTimeoutHeight — the chain rejected the tx because its
+        # sdk ErrTxTimeoutHeight — the chain rejected the tx because its
         # timeout_height passed. Classified by codespace+code (not raw_log) as
         # it is a terminal, expected outcome handled without retry.
-        if resp.codespace == "sdk" and resp.code == 30:
+        if is_tx_timeout_height(resp.codespace, resp.code):
             return TxExpiredError(
                 codespace=resp.codespace,
                 code=resp.code,
@@ -1164,34 +1220,62 @@ class TxManager:
         )
 
     def _exception_from_simulation_error(self, error: GRPCError) -> Exception:
+        """Map a Simulate gRPC failure to the exception ``submit_transaction`` expects.
+
+        Transport / deadline statuses become ``SimulationUnavailableError`` so
+        the caller falls back to the static gas table. Message-level rejects
+        become ``TxError`` with the parsed ABCI codespace and code when the
+        log has them; otherwise ``TxError`` still, with the gRPC status as
+        ``code`` (handler/ante rejects such as ``unauthorized``).
         """
-        Parse gRPC error from simulation and return appropriate exception.
+        if error.status in _SIMULATION_TRANSPORT_STATUSES:
+            return SimulationUnavailableError(
+                f"Simulation unavailable ({error.status.name}): {error.message or error}"
+            )
 
-        Applies same error classification as _exception_from_tx_response
-        for consistency between simulation and actual transaction errors.
-
-        Args:
-            error: gRPC error from simulation call
-
-        Returns:
-            Appropriate exception type based on error details
-        """
         error_msg = error.message or str(error)
         error_class = self._classify_error_from_message(error_msg)
 
         if error_class == OutOfGasError:
             return OutOfGasError(f"Simulation ran out of gas: {error_msg}")
-        elif error_class == AccountSequenceMismatchError:
-            return AccountSequenceMismatchError(f"Sequence mismatch during simulation: {error_msg}")
-        elif error_class == InsufficientFeesError:
-            return InsufficientFeesError(f"Insufficient fees during simulation{self._fee_granter_hint()}: {error_msg}")
-        else:
-            return TxError(
-                codespace="simulation",
-                code=error.status.value,
-                message=error_msg,
-                tx_hash=None
+        if error_class == AccountSequenceMismatchError:
+            return AccountSequenceMismatchError(
+                f"Sequence mismatch during simulation: {error_msg}"
             )
+        if error_class == InsufficientFeesError:
+            return InsufficientFeesError(
+                f"Insufficient fees during simulation{self._fee_granter_hint()}: {error_msg}"
+            )
+
+        parsed = parse_abci_codespace_code(error_msg)
+        if parsed is not None:
+            codespace, code = parsed
+            if is_tx_timeout_height(codespace, code):
+                return TxExpiredError(
+                    codespace=codespace,
+                    code=code,
+                    message=error_msg,
+                    tx_hash=None,
+                )
+            return TxError(
+                codespace=codespace,
+                code=code,
+                message=error_msg,
+                tx_hash=None,
+            )
+
+        # No ABCI pair, but this is not a transport failure (UNKNOWN /
+        # INVALID_ARGUMENT / PERMISSION_DENIED, …). Cosmos often reports a
+        # handler/ante reject as Status.UNKNOWN plus a short string like
+        # "unauthorized". Treat it as a terminal TxError so we do not
+        # broadcast. code falls back to the gRPC status only when the log
+        # has no codespace/code pair.
+        return TxError(
+            codespace="simulation",
+            code=error.status.value,
+            message=error_msg,
+            tx_hash=None,
+        )
 
     async def _estimate_gas(self, type_url: str) -> int:
         if self.base_gas is not None:

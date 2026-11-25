@@ -1,6 +1,7 @@
 .allora_key
 .tox/
 .claude/
+.reports/
 .venv/
 .mypy_cache/
 .pytest_cache/

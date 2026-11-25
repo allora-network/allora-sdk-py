@@ -118,6 +118,12 @@ def test_worker_default_gas_is_220k():
         feemarket_client=Mock(), config=AlloraNetworkConfig.testnet(),
     )
     assert manager._default_gas_limits["/emissions.v10.InsertWorkerPayloadRequest"] == 220000
+    assert manager._default_gas_limits[
+        "/emissions.v10.BulkAddToTopicForecasterWhitelistRequest"
+    ] == 200000
+    assert manager._default_gas_limits[
+        "/emissions.v10.BulkRemoveFromTopicForecasterWhitelistRequest"
+    ] == 200000
 
 
 @pytest.mark.asyncio
